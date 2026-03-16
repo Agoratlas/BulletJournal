@@ -28,12 +28,23 @@ type PendingBlockCreation = {
   y: number
 }
 
+const NEW_NODE_WIDTH = 360
+const NEW_NODE_HEIGHT = 220
+
 type ConstantValueType = 'int' | 'float' | 'bool' | 'str' | 'list' | 'dict' | 'object'
 type BlockCreateMode = 'notebook' | 'constant_value' | 'file'
 
 type AppNotice = NoticeRecord & {
   origin: 'snapshot' | 'client'
 }
+
+type OptimisticGraphState = {
+  snapshot: ProjectSnapshot
+  clearSelection?: boolean
+  clearArtifacts?: boolean
+}
+
+type SnapshotLike = Pick<ProjectSnapshot, 'project' | 'graph' | 'validation_issues' | 'notices' | 'artifacts' | 'runs' | 'checkpoints' | 'templates'>
 
 
 function blockCreateMode(entry: PaletteEntry): BlockCreateMode | null {
@@ -101,6 +112,152 @@ function runFailureMessage(response: Record<string, unknown>, fallback: string):
   return fallback
 }
 
+function cloneSnapshot(snapshot: ProjectSnapshot): ProjectSnapshot {
+  return {
+    ...snapshot,
+    project: { ...snapshot.project },
+    graph: {
+      meta: { ...snapshot.graph.meta },
+      nodes: snapshot.graph.nodes.map((node) => ({
+        ...node,
+        template: node.template ? { ...node.template } : node.template,
+        ui: node.ui ? { ...node.ui } : node.ui,
+        interface: node.interface
+          ? {
+              ...node.interface,
+              inputs: node.interface.inputs.map((port) => ({ ...port })),
+              outputs: node.interface.outputs.map((port) => ({ ...port })),
+              assets: node.interface.assets.map((port) => ({ ...port })),
+              issues: node.interface.issues.map((issue) => ({ ...issue })),
+            }
+          : node.interface,
+      })),
+      edges: snapshot.graph.edges.map((edge) => ({ ...edge })),
+      layout: snapshot.graph.layout.map((entry) => ({ ...entry })),
+    },
+    validation_issues: snapshot.validation_issues.map((issue) => ({ ...issue })),
+    notices: snapshot.notices.map((notice) => ({ ...notice })),
+    artifacts: snapshot.artifacts.map((artifact) => ({ ...artifact, warnings: artifact.warnings.map((warning) => ({ ...warning })) })),
+    runs: snapshot.runs.map((run) => ({ ...run, target_json: run.target_json, source_snapshot_json: run.source_snapshot_json })),
+    checkpoints: snapshot.checkpoints.map((checkpoint) => ({ ...checkpoint })),
+    templates: snapshot.templates.map((template) => ({ ...template })),
+  }
+}
+
+function mergeGraphIntoSnapshot(snapshot: SnapshotLike, graph: { meta: ProjectSnapshot['graph']['meta']; nodes: ProjectSnapshot['graph']['nodes']; edges: ProjectSnapshot['graph']['edges']; layout: ProjectSnapshot['graph']['layout'] }): ProjectSnapshot {
+  const merged = cloneSnapshot(snapshot as ProjectSnapshot)
+  merged.graph = {
+    meta: { ...graph.meta },
+    nodes: graph.nodes.map((node) => ({
+      ...node,
+      template: node.template ? { ...node.template } : node.template,
+      ui: node.ui ? { ...node.ui } : node.ui,
+      interface: node.interface
+        ? {
+            ...node.interface,
+            inputs: node.interface.inputs.map((port) => ({ ...port })),
+            outputs: node.interface.outputs.map((port) => ({ ...port })),
+            assets: node.interface.assets.map((port) => ({ ...port })),
+            issues: node.interface.issues.map((issue) => ({ ...issue })),
+          }
+        : node.interface,
+    })),
+    edges: graph.edges.map((edge) => ({ ...edge })),
+    layout: graph.layout.map((entry) => ({ ...entry })),
+  }
+  return merged
+}
+
+function applyOptimisticGraphOperations(snapshot: ProjectSnapshot, operations: Array<Record<string, unknown>>): OptimisticGraphState | null {
+  const next = cloneSnapshot(snapshot)
+  let changed = false
+  let clearSelection = false
+  let clearArtifacts = false
+
+  for (const operation of operations) {
+    const type = operation.type
+    if (type === 'update_node_layout') {
+      const nodeId = String(operation.node_id)
+      const layout = next.graph.layout.find((entry) => entry.node_id === nodeId)
+      if (layout) {
+        layout.x = Number(operation.x)
+        layout.y = Number(operation.y)
+        changed = true
+      }
+      continue
+    }
+    if (type === 'delete_node') {
+      const nodeId = String(operation.node_id)
+      next.graph.nodes = next.graph.nodes.filter((node) => node.id !== nodeId)
+      next.graph.layout = next.graph.layout.filter((entry) => entry.node_id !== nodeId)
+      next.graph.edges = next.graph.edges.filter((edge) => edge.source_node !== nodeId && edge.target_node !== nodeId)
+      next.artifacts = next.artifacts.filter((artifact) => artifact.node_id !== nodeId)
+      next.validation_issues = next.validation_issues.filter((issue) => issue.node_id !== nodeId)
+      next.notices = next.notices.filter((notice) => notice.node_id !== nodeId)
+      clearSelection = true
+      clearArtifacts = true
+      changed = true
+      continue
+    }
+    if (type === 'remove_edge') {
+      const edgeId = String(operation.edge_id)
+      next.graph.edges = next.graph.edges.filter((edge) => edge.id !== edgeId)
+      changed = true
+      continue
+    }
+    if (type === 'add_edge') {
+      const sourceNode = String(operation.source_node)
+      const sourcePort = String(operation.source_port)
+      const targetNode = String(operation.target_node)
+      const targetPort = String(operation.target_port)
+      const id = `${sourceNode}.${sourcePort}__${targetNode}.${targetPort}`
+      if (!next.graph.edges.some((edge) => edge.id === id)) {
+        next.graph.edges.push({ id, source_node: sourceNode, source_port: sourcePort, target_node: targetNode, target_port: targetPort })
+        changed = true
+      }
+      continue
+    }
+    if (type === 'update_node_hidden_inputs') {
+      const node = next.graph.nodes.find((entry) => entry.id === String(operation.node_id))
+      if (node) {
+        node.ui = { ...(node.ui ?? {}), hidden_inputs: Array.isArray(operation.hidden_inputs) ? operation.hidden_inputs.map(String) : [] }
+        changed = true
+      }
+    }
+  }
+
+  if (!changed) {
+    return null
+  }
+
+  next.graph.meta = {
+    ...next.graph.meta,
+    graph_version: next.graph.meta.graph_version + 1,
+    updated_at: new Date().toISOString(),
+  }
+
+  return {
+    snapshot: next,
+    clearSelection,
+    clearArtifacts,
+  }
+}
+
+function setSnapshotData(queryClient: ReturnType<typeof useQueryClient>, projectId: string, updater: (current: ProjectSnapshot) => ProjectSnapshot) {
+  queryClient.setQueryData(['snapshot', projectId], (current: ProjectSnapshot | undefined) => {
+    if (!current) {
+      return current
+    }
+    return updater(current)
+  })
+  queryClient.setQueryData(['project-current'], (current: ProjectSnapshot | undefined) => {
+    if (!current || current.project.project_id !== projectId) {
+      return current
+    }
+    return updater(current)
+  })
+}
+
 function App() {
   const queryClient = useQueryClient()
   const [projectPath, setProjectPath] = useState('')
@@ -113,11 +270,13 @@ function App() {
   const [templateRefView, setTemplateRefView] = useState<string | null>(null)
   const [showProjectInfo, setShowProjectInfo] = useState(false)
   const [showSettings, setShowSettings] = useState(false)
-  const [templatesCollapsed, setTemplatesCollapsed] = useState(false)
+  const [templatesCollapsed, setTemplatesCollapsed] = useState(true)
   const [paletteSearch, setPaletteSearch] = useState('')
   const [draggedPaletteEntry, setDraggedPaletteEntry] = useState<PaletteEntry | null>(null)
   const [dragPointer, setDragPointer] = useState<{ x: number; y: number } | null>(null)
   const [pendingBlockCreation, setPendingBlockCreation] = useState<PendingBlockCreation | null>(null)
+  const [optimisticGraph, setOptimisticGraph] = useState<OptimisticGraphState | null>(null)
+  const [inspectorOpen, setInspectorOpen] = useState(false)
   const [themeMode, setThemeMode] = useState<ThemeMode>(() => {
     const stored = window.localStorage.getItem('bulletjournal-theme')
     if (stored === 'light' || stored === 'dark' || stored === 'system') {
@@ -151,7 +310,8 @@ function App() {
     enabled: Boolean(projectId),
   })
 
-  const liveSnapshot = snapshotQuery.data ?? snapshot
+  const serverSnapshot = snapshotQuery.data ?? snapshot
+  const liveSnapshot = optimisticGraph?.snapshot ?? serverSnapshot
 
   function upsertClientNotice(notice: AppNotice) {
     setClientNotices((current) => {
@@ -200,6 +360,34 @@ function App() {
       return left.issue_id.localeCompare(right.issue_id)
     })
   }, [clientNotices, liveSnapshot])
+
+  useEffect(() => {
+    if (!serverSnapshot) {
+      setOptimisticGraph(null)
+      return
+    }
+    setOptimisticGraph((current) => {
+      if (!current) {
+        return null
+      }
+      if (current.snapshot.graph.meta.graph_version > serverSnapshot.graph.meta.graph_version) {
+        return current
+      }
+      if (current.clearSelection) {
+        setSelectedNodeId(null)
+      }
+      if (current.clearArtifacts) {
+        setArtifactNodeId(null)
+      }
+      return null
+    })
+  }, [serverSnapshot])
+
+  useEffect(() => {
+    if (selectedNodeId) {
+      setInspectorOpen(true)
+    }
+  }, [selectedNodeId])
 
   useEffect(() => {
     const root = document.documentElement
@@ -289,8 +477,8 @@ function App() {
       hadEventConnectionRef.current = true
     }
     source.onmessage = () => {
-      queryClient.invalidateQueries({ queryKey: ['snapshot', projectId] })
-      queryClient.invalidateQueries({ queryKey: ['project-current'] })
+      void queryClient.refetchQueries({ queryKey: ['snapshot', projectId], exact: true })
+      void queryClient.refetchQueries({ queryKey: ['project-current'], exact: true })
     }
     source.addEventListener('stream.reset', () => {
       reportClientWarning(
@@ -298,7 +486,7 @@ function App() {
         'event_stream_reset',
         'The live event stream fell behind and was resynced from the latest snapshot.',
       )
-      queryClient.invalidateQueries({ queryKey: ['snapshot', projectId] })
+      void queryClient.refetchQueries({ queryKey: ['snapshot', projectId], exact: true })
     })
     source.onerror = () => {
       reportClientError(
@@ -306,7 +494,7 @@ function App() {
         'server_connection_lost',
         'The server connection was interrupted. Reconnecting now.',
       )
-      queryClient.invalidateQueries({ queryKey: ['snapshot', projectId] })
+      void queryClient.refetchQueries({ queryKey: ['snapshot', projectId], exact: true })
     }
     return () => {
       source.close()
@@ -337,6 +525,17 @@ function App() {
     () => liveSnapshot?.graph.nodes.find((node) => node.id === selectedNodeId) ?? null,
     [liveSnapshot, selectedNodeId],
   )
+
+  useEffect(() => {
+    if (!liveSnapshot) {
+      return
+    }
+    if (liveSnapshot.graph.nodes.length === 0) {
+      setTemplatesCollapsed(false)
+      return
+    }
+    setTemplatesCollapsed(true)
+  }, [liveSnapshot?.graph.nodes.length])
 
   const artifactNode = useMemo(
     () => liveSnapshot?.graph.nodes.find((node) => node.id === artifactNodeId) ?? null,
@@ -443,16 +642,22 @@ function App() {
     if (!projectId) {
       return
     }
-    await queryClient.invalidateQueries({ queryKey: ['snapshot', projectId] })
-    await queryClient.invalidateQueries({ queryKey: ['project-current'] })
+    await queryClient.refetchQueries({ queryKey: ['snapshot', projectId], exact: true })
+    await queryClient.refetchQueries({ queryKey: ['project-current'], exact: true })
   }
 
   async function mutateGraph(operations: Array<Record<string, unknown>>) {
     if (!liveSnapshot || !projectId) {
       return
     }
+    const rollbackSnapshot = liveSnapshot
     try {
+      const optimistic = applyOptimisticGraphOperations(liveSnapshot, operations)
+      if (optimistic) {
+        setOptimisticGraph(optimistic)
+      }
       const response = await patchGraph(projectId, liveSnapshot.graph.meta.graph_version, operations as never)
+      setSnapshotData(queryClient, projectId, (current) => mergeGraphIntoSnapshot(current, response))
       dismissClientNotice('graph-update')
       if (response.interrupted_run) {
         reportClientWarning(
@@ -470,6 +675,8 @@ function App() {
       }
       await refreshSnapshot()
     } catch (err) {
+      setOptimisticGraph(null)
+      setSnapshotData(queryClient, projectId, () => rollbackSnapshot)
       const message = err instanceof Error ? err.message : 'Graph update failed.'
       reportClientError('graph-update', 'graph_update_failed', message)
       await refreshSnapshot()
@@ -482,11 +689,11 @@ function App() {
   ) {
     const baseX = 120 + ((liveSnapshot?.graph.nodes.length ?? 0) % 4) * 420
     const baseY = 120 + Math.floor((liveSnapshot?.graph.nodes.length ?? 0) / 4) * 280
-    const x = snapToGrid(placement?.x ?? baseX)
-    const y = snapToGrid(placement?.y ?? baseY)
+    const x = snapToGrid((placement?.x ?? baseX) - NEW_NODE_WIDTH / 2)
+    const y = snapToGrid((placement?.y ?? baseY) - NEW_NODE_HEIGHT / 2)
     if (payload.type === 'file_input') {
       await mutateGraph([
-        { type: 'add_file_input_node', node_id: payload.nodeId, title: payload.title, x, y },
+        { type: 'add_file_input_node', node_id: payload.nodeId, title: payload.title, x, y, w: NEW_NODE_WIDTH, h: NEW_NODE_HEIGHT },
       ])
       return
     }
@@ -501,12 +708,14 @@ function App() {
           ui: payload.origin ? { origin: payload.origin } : undefined,
           x,
           y,
+          w: NEW_NODE_WIDTH,
+          h: NEW_NODE_HEIGHT,
         },
       ])
       return
     }
     await mutateGraph([
-      { type: 'add_notebook_node', node_id: payload.nodeId, title: payload.title, x, y },
+      { type: 'add_notebook_node', node_id: payload.nodeId, title: payload.title, x, y, w: NEW_NODE_WIDTH, h: NEW_NODE_HEIGHT },
     ])
   }
 
@@ -578,6 +787,7 @@ function App() {
       return
     }
     const { x, y } = pendingBlockCreation
+    setPendingBlockCreation(null)
     const sourceText = buildConstantValueNotebookSource(payload.title, payload.outputs)
     await handleCreateNode(
       {
@@ -594,27 +804,30 @@ function App() {
       reportClientError(`run:${payload.nodeId}:run_stale`, 'run_failed', runFailureMessage(response, 'Run failed.'), { nodeId: payload.nodeId, details: response })
     }
     await refreshSnapshot()
-    setPendingBlockCreation(null)
   }
 
-  async function handleCreateFileBlock(payload: { nodeId: string; title: string; file: File; artifactName: string }) {
+  async function handleCreateFileBlock(payload: { nodeId: string; title: string; file: File | null; artifactName: string }) {
     if (!pendingBlockCreation || !projectId) {
       return
     }
     const { x, y } = pendingBlockCreation
+    setPendingBlockCreation(null)
     await mutateGraph([
       {
         type: 'add_file_input_node',
         node_id: payload.nodeId,
         title: payload.title,
         artifact_name: payload.artifactName.trim() || 'file',
-        x: snapToGrid(x),
-        y: snapToGrid(y),
+        x: snapToGrid(x - NEW_NODE_WIDTH / 2),
+        y: snapToGrid(y - NEW_NODE_HEIGHT / 2),
+        w: NEW_NODE_WIDTH,
+        h: NEW_NODE_HEIGHT,
       },
     ])
-    await uploadFile(projectId, payload.nodeId, payload.file)
-    await refreshSnapshot()
-    setPendingBlockCreation(null)
+    if (payload.file) {
+      await uploadFile(projectId, payload.nodeId, payload.file)
+      await refreshSnapshot()
+    }
   }
 
   function handlePaletteDragStart(entry: PaletteEntry, position?: { x: number; y: number }) {
@@ -775,6 +988,10 @@ function App() {
       return
     }
     await restoreCheckpoint(projectId, checkpointId)
+    setOptimisticGraph(null)
+    setSelectedNodeId(null)
+    setArtifactNodeId(null)
+    setInspectorOpen(false)
     await refreshSnapshot()
   }
 
@@ -908,9 +1125,12 @@ function App() {
                 setArtifactExplorerOpen(true)
               }}
               onCanvasInteract={() => setTemplatesCollapsed(true)}
+              onCanvasClear={() => {
+                setSelectedNodeId(null)
+                setInspectorOpen(false)
+              }}
               onNodeMove={handleNodeMove}
               onNodesDelete={handleNodesDelete}
-              selectedNodeId={selectedNodeId}
               draggedBlock={draggedPaletteEntry ? { title: draggedPaletteEntry.title, kind: draggedPaletteEntry.kind } : null}
               onBlockDrop={handleBlockDrop}
             />
@@ -922,11 +1142,14 @@ function App() {
           )}
         </main>
 
-        <aside className="sidebar right floating-panel">
-          <div className="panel">
+        <aside className={`sidebar right floating-panel ${inspectorOpen ? 'open' : 'closed'}`}>
+          <div className={`panel inspector-panel ${inspectorOpen ? 'open' : 'closed'}`}>
             <div className="panel-header-row">
               <h2>Inspector</h2>
-              {selectedNode ? <button className="secondary" onClick={() => setSelectedNodeId(null)}>Clear</button> : null}
+              {(selectedNode || inspectorOpen) ? <button className="secondary" onClick={() => {
+                setSelectedNodeId(null)
+                setInspectorOpen(false)
+              }}>Clear</button> : null}
             </div>
             {selectedNode ? (
               <NodeInspector
@@ -936,9 +1159,7 @@ function App() {
                 onUploadFile={handleUploadFile}
                 onOpenTemplate={setTemplateRefView}
               />
-            ) : (
-              <p className="muted-copy">Select a node to inspect its docs, ports, bindings, and actions.</p>
-            )}
+            ) : null}
           </div>
         </aside>
       </section>

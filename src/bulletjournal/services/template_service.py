@@ -2,9 +2,17 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
+from dataclasses import dataclass
 
 from bulletjournal.domain.models import TemplateRef
 from bulletjournal.parser.source_hash import normalized_source_hash_text
+
+
+@dataclass(slots=True)
+class TemplateSource:
+    ref: str
+    source_text: str
+    source_hash: str
 
 
 class TemplateService:
@@ -30,15 +38,16 @@ class TemplateService:
             )
         return templates
 
-    def resolve_template_source(self, ref: str) -> str:
+    def resolve_template_source(self, ref: str) -> TemplateSource:
         path = self._builtin_dir / ref
         if not path.exists():
             raise FileNotFoundError(f'Unknown template `{ref}`.')
-        return path.read_text(encoding='utf-8')
+        source_text = path.read_text(encoding='utf-8')
+        return TemplateSource(ref=ref, source_text=source_text, source_hash=normalized_source_hash_text(source_text))
 
     def empty_notebook_source(self, *, title: str, node_id: str) -> str:
         template = self.resolve_template_source('empty_notebook.py')
-        return template.replace('{{TITLE}}', title).replace('{{NODE_ID}}', node_id)
+        return template.source_text.replace('{{TITLE}}', title).replace('{{NODE_ID}}', node_id)
 
     def template_ref(self, ref: str) -> TemplateRef:
         return TemplateRef(kind='template', ref=ref, origin_revision='builtin')

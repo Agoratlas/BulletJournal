@@ -386,6 +386,28 @@ label span,
 .sidebar.left:not(.collapsed) .template-sidebar-inner {
   max-height: calc(100vh - 80px);
   overflow: auto;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(98, 108, 108, 0.4) transparent;
+}
+
+.sidebar.left:not(.collapsed) .template-sidebar-inner::-webkit-scrollbar {
+  width: 10px;
+}
+
+.sidebar.left:not(.collapsed) .template-sidebar-inner::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.sidebar.left:not(.collapsed) .template-sidebar-inner::-webkit-scrollbar-thumb {
+  background: rgba(98, 108, 108, 0.34);
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+
+.sidebar.left:not(.collapsed) .template-sidebar-inner::-webkit-scrollbar-thumb:hover {
+  background: rgba(98, 108, 108, 0.5);
+  background-clip: padding-box;
 }
 
 .sidebar.left.collapsed .block-rail-toggle {
@@ -456,6 +478,41 @@ label span,
   height: calc(100vh - 114px);
   grid-template-rows: minmax(0, 1fr) auto;
   overflow: hidden;
+  transition: opacity 220ms ease, transform 220ms ease;
+  transform-origin: top right;
+}
+
+.sidebar.right.closed {
+  opacity: 0;
+  transform: scale(0.94);
+  pointer-events: none;
+}
+
+.sidebar.right.open {
+  opacity: 1;
+  transform: scale(1);
+}
+
+.inspector-panel {
+  min-height: 0;
+  transition: transform 220ms ease, opacity 220ms ease, max-height 220ms ease, padding 220ms ease;
+  transform-origin: top right;
+}
+
+.inspector-panel.closed {
+  opacity: 0;
+  transform: scale(0.94);
+  pointer-events: none;
+  max-height: 0;
+  overflow: hidden;
+  padding-top: 0;
+  padding-bottom: 0;
+}
+
+.inspector-panel.open {
+  opacity: 1;
+  transform: scale(1);
+  max-height: 100%;
 }
 
 .panel {
@@ -765,6 +822,7 @@ label span,
   border-radius: 0;
   background: transparent;
   border: 0;
+  min-width: 0;
 }
 
 .rf-port-row.incompatible {
@@ -794,12 +852,12 @@ label span,
 
 .rf-port-row.input {
   margin-left: 0;
-  padding-left: var(--editor-grid);
+  padding-left: calc(var(--editor-grid) + 6px);
 }
 
 .rf-port-row.output {
   margin-right: 0;
-  padding-right: var(--editor-grid);
+  padding-right: calc(var(--editor-grid) + 6px);
   justify-content: flex-end;
   text-align: right;
 }
@@ -807,15 +865,23 @@ label span,
 .rf-port-copy {
   display: grid;
   gap: 2px;
+  min-width: 0;
+  flex: 1 1 auto;
 }
 
 .rf-port-copy strong {
   font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .rf-port-copy span {
   font-size: 11px;
   color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .rf-handle {
@@ -830,11 +896,11 @@ label span,
 }
 
 .rf-port-row.input .rf-handle {
-  left: -8px !important;
+  left: -10px !important;
 }
 
 .rf-port-row.output .rf-handle {
-  right: -8px !important;
+  right: -10px !important;
 }
 
 .rf-handle.connecting {

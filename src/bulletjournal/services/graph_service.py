@@ -95,11 +95,13 @@ class GraphService:
             self.project_service.reparse_all_notebooks()
         if stale_roots:
             self.mark_nodes_and_downstream_stale(sorted(stale_roots))
+        snapshot = self.project_service.snapshot()
+        graph_payload = snapshot['graph']
         return {
-            'meta': graph.meta,
-            'nodes': [node.to_dict() for node in graph.nodes],
-            'edges': [edge.to_dict() for edge in graph.edges],
-            'layout': [entry.to_dict() for entry in graph.layout],
+            'meta': graph_payload['meta'],
+            'nodes': graph_payload['nodes'],
+            'edges': graph_payload['edges'],
+            'layout': graph_payload['layout'],
             'interrupted_run': active_run_interruption,
         }
 
@@ -198,7 +200,7 @@ class GraphService:
         source = (
             str(source_text)
             if source_text is not None
-            else template
+            else template.source_text
             if template is not None
             else self.project_service.template_service.empty_notebook_source(title=title, node_id=node_id)
         )

@@ -32,9 +32,9 @@ type GraphCanvasProps = {
   onRunNode: (nodeId: string, mode: 'run_stale' | 'run_all' | 'edit_run') => void
   onOpenArtifacts: (nodeId: string) => void
   onCanvasInteract: () => void
+  onCanvasClear: () => void
   onNodeMove: (nodeId: string, x: number, y: number) => void
   onNodesDelete: (nodes: Node[]) => void
-  selectedNodeId: string | null
   draggedBlock: { title: string; kind: string } | null
   onBlockDrop: (x: number, y: number) => void
 }
@@ -61,7 +61,7 @@ type FlowConnectionState = {
   connectionHandleType: 'source' | 'target' | null
 }
 
-const PORT_TOP_OFFSET = 80
+const PORT_TOP_OFFSET = 82
 const PORT_STEP = 40
 
 const TYPE_COLORS: Record<string, string> = {
@@ -282,11 +282,13 @@ function isCompatibleWithIntent(snapshot: ProjectSnapshot, node: NodeRecord, por
   return targetPort?.data_type === port.data_type
 }
 
-export function GraphCanvas({ snapshot, onConnect, onEdgesChange, onNodeSelect, onRunNode, onOpenArtifacts, onCanvasInteract, onNodeMove, onNodesDelete, selectedNodeId, draggedBlock, onBlockDrop }: GraphCanvasProps) {
+export function GraphCanvas({ snapshot, onConnect, onEdgesChange, onNodeSelect, onRunNode, onOpenArtifacts, onCanvasInteract, onCanvasClear, onNodeMove, onNodesDelete, draggedBlock, onBlockDrop }: GraphCanvasProps) {
   const { fitView, screenToFlowPosition } = useReactFlow()
   const [selectedEdgeIds, setSelectedEdgeIds] = useState<string[]>([])
   const [nodes, setNodes] = useState<Node<BulletJournalNodeData>[]>([])
   const pendingPositionsRef = useRef<Record<string, { x: number; y: number }>>({})
+  const hasFitViewRef = useRef(false)
+  const shouldAutoFitOnMountRef = useRef(snapshot.graph.nodes.length > 0)
 
   const mappedNodes = useMemo<Node<BulletJournalNodeData>[]>(() => {
     const layoutByNode = Object.fromEntries(snapshot.graph.layout.map((entry) => [entry.node_id, entry]))
@@ -295,7 +297,6 @@ export function GraphCanvas({ snapshot, onConnect, onEdgesChange, onNodeSelect, 
       return {
         id: node.id,
         type: 'bulletJournalNode',
-        selected: node.id === selectedNodeId,
         data: {
           node,
           snapshot,
@@ -307,7 +308,7 @@ export function GraphCanvas({ snapshot, onConnect, onEdgesChange, onNodeSelect, 
         style: { width: layout?.w ?? 360 },
       }
     })
-  }, [snapshot, onNodeSelect, onRunNode, onOpenArtifacts, selectedNodeId])
+  }, [snapshot])
 
   useEffect(() => {
     setNodes((current) => {
@@ -342,6 +343,14 @@ export function GraphCanvas({ snapshot, onConnect, onEdgesChange, onNodeSelect, 
     })
   }, [mappedNodes])
 
+  useEffect(() => {
+    if (hasFitViewRef.current || !shouldAutoFitOnMountRef.current || snapshot.graph.nodes.length === 0) {
+      return
+    }
+    hasFitViewRef.current = true
+    fitView({ padding: 0.18 })
+  }, [fitView, snapshot.graph.nodes.length])
+
   const edges = useMemo<Edge[]>(() => {
     return snapshot.graph.edges.map((edge) => ({
       id: edge.id,
@@ -369,7 +378,6 @@ export function GraphCanvas({ snapshot, onConnect, onEdgesChange, onNodeSelect, 
         nodes={nodes}
         edges={edges}
         nodeTypes={nodeTypes}
-        fitView
         minZoom={0.18}
         maxZoom={1.35}
         connectionMode={ConnectionMode.Strict}
@@ -384,6 +392,16 @@ export function GraphCanvas({ snapshot, onConnect, onEdgesChange, onNodeSelect, 
         }}
         onEdgesChange={(changes) => {
           onEdgesChange(changes)
+        }}
+        onEdgeClick={(_event, edge) => {
+          onCanvasInteract()
+          onNodeSelect('')
+          setSelectedEdgeIds([edge.id])
+        }}
+        onNodeClick={(_event, node) => {
+          onCanvasInteract()
+          onNodeSelect(node.id)
+          setSelectedEdgeIds([])
         }}
         onNodesDelete={onNodesDelete}
         onConnect={onConnect}
@@ -411,24 +429,18 @@ export function GraphCanvas({ snapshot, onConnect, onEdgesChange, onNodeSelect, 
         onNodeDragStop={handleNodeDragStop}
         onPaneClick={() => {
           onCanvasInteract()
-          onNodeSelect('')
+          onCanvasClear()
           setSelectedEdgeIds([])
         }}
         onSelectionChange={({ nodes: selectedNodes, edges: selectedEdges }) => {
-          if (selectedNodes.length) {
-            onNodeSelect(selectedNodes[0].id)
-          }
           setSelectedEdgeIds(selectedEdges.map((edge) => edge.id))
         }}
         onMoveStart={onCanvasInteract}
         onNodeDragStart={onCanvasInteract}
-        onConnectStart={(_event, params: OnConnectStartParams) => {
-          if (params.nodeId) {
-            onNodeSelect(params.nodeId)
-          }
+        onConnectStart={(_event, _params: OnConnectStartParams) => {
+          onCanvasInteract()
         }}
         defaultEdgeOptions={{ markerEnd: { type: MarkerType.ArrowClosed } }}
-        onInit={() => fitView({ padding: 0.18 })}
         onDragOver={(event) => {
           if (!draggedBlock) {
             return

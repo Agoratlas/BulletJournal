@@ -60,9 +60,7 @@ export function badgeForNode(snapshot: ProjectSnapshot, node: NodeRecord): { lab
     return { label: 'V', title: 'Constant value node', tone: 'input' }
   }
   if (node.template?.ref) {
-    const template = templateByRef(snapshot, node.template.ref)
-    const actualHash = node.interface?.source_hash
-    const unchanged = Boolean(template?.source_hash && actualHash === template.source_hash)
+    const unchanged = node.template_status === 'template'
     return {
       label: unchanged ? 'T' : 'T*',
       title: unchanged ? 'Template notebook' : 'Template notebook edited after creation',

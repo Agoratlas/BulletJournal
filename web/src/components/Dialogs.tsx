@@ -284,7 +284,7 @@ type CreateFileDialogProps = {
   suggestedTitle: string
   existingIds: string[]
   onClose: () => void
-  onCreate: (payload: { nodeId: string; title: string; file: File; artifactName: string }) => Promise<void>
+  onCreate: (payload: { nodeId: string; title: string; file: File | null; artifactName: string }) => Promise<void>
 }
 
 export function CreateFileDialog({ suggestedTitle, existingIds, onClose, onCreate }: CreateFileDialogProps) {
@@ -313,7 +313,7 @@ export function CreateFileDialog({ suggestedTitle, existingIds, onClose, onCreat
   async function submit() {
     const resolvedTitle = title.trim()
     const resolvedArtifactName = normalizeFreeformSnakeCase(artifactName)
-    if (!resolvedTitle || !resolvedId || duplicateId || !file || !resolvedArtifactName) {
+    if (!resolvedTitle || !resolvedId || duplicateId || !resolvedArtifactName) {
       return
     }
     setBusy(true)
@@ -374,11 +374,11 @@ export function CreateFileDialog({ suggestedTitle, existingIds, onClose, onCreat
               setFile(nextFile)
             }}
           />
-          {!file ? <span className="field-note error">Choose a file to upload.</span> : <span className="field-note">The file node is created and uploaded immediately.</span>}
+          {!file ? <span className="field-note">Optional. Leave blank to create a pending file input.</span> : <span className="field-note">The file node is created, then the file is uploaded.</span>}
         </label>
         <div className="dialog-actions">
           <button className="secondary" onClick={onClose}>Cancel</button>
-          <button onClick={submit} disabled={busy || invalidTitle || invalidId || duplicateId || invalidArtifactName || !file}>{busy ? 'Creating...' : 'Create file'}</button>
+          <button onClick={submit} disabled={busy || invalidTitle || invalidId || duplicateId || invalidArtifactName}>{busy ? 'Creating...' : 'Create file'}</button>
         </div>
       </div>
     </Modal>

@@ -37,6 +37,7 @@ export type NodeRecord = {
   title: string
   path?: string | null
   template?: TemplateRef | null
+  template_status?: 'template' | 'modified' | null
   ui?: {
     hidden_inputs?: string[]
     artifact_name?: string

@@ -246,10 +246,16 @@ class ProjectService:
                 if run['status'] in {'queued', 'running'} and run.get('mode') != 'edit_run':
                     running_nodes.add(node_key)
         for node in graph.nodes:
+            interface = interfaces.get(node.id)
+            template_status = None
+            if node.template and interface is not None:
+                template_source = self.template_service.resolve_template_source(node.template.ref)
+                template_status = 'template' if interface.get('source_hash') == template_source.source_hash else 'modified'
             node_payload.append(
                 {
                     **node.to_dict(),
-                    'interface': interfaces.get(node.id),
+                    'interface': interface,
+                    'template_status': template_status,
                     'state': derive_node_state(
                         artifact_states_by_node.get(node.id, []),
                         run_failed=last_run_by_node.get(node.id, False),
