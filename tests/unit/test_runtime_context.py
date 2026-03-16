@@ -1,0 +1,220 @@
+import pandas as pd
+
+from bulletjournal.domain.enums import ArtifactRole, ArtifactState, LineageMode
+from bulletjournal.domain.hashing import combine_hashes, hash_json
+from bulletjournal.domain.models import Port
+from bulletjournal.runtime.context import Binding, RuntimeContext
+from bulletjournal.storage.project_fs import init_project_root
+
+
+def test_runtime_context_uses_defaults_without_recording_stale_warning(tmp_path) -> None:
+    project_root = init_project_root(tmp_path / 'project').root
+    context = RuntimeContext(
+        project_root=project_root,
+        node_id='consumer',
+        run_id='run-default',
+        source_hash='source-hash',
+        lineage_mode=LineageMode.MANAGED,
+        bindings={
+            'sample_count': Binding(
+                source_node='',
+                source_artifact='',
+                data_type='int',
+                default=10,
+                has_default=True,
+            )
+        },
+        outputs={},
+    )
+
+    metadata = context.resolve_pull('sample_count')
+
+    assert metadata['value'] == 10
+    assert metadata['artifact_hash'] == hash_json(10)
+    assert metadata['upstream_code_hash'] == 'default'
+    assert metadata['state'] == ArtifactState.READY.value
+    assert metadata['warnings'] == []
+
+
+def test_runtime_context_resolves_stale_upstream_with_warning_and_hashes(tmp_path) -> None:
+    project_root = init_project_root(tmp_path / 'project').root
+    context = RuntimeContext(
+        project_root=project_root,
+        node_id='consumer',
+        run_id='run-stale',
+        source_hash='consumer-source',
+        lineage_mode=LineageMode.MANAGED,
+        bindings={
+            'count': Binding(
+                source_node='producer',
+                source_artifact='value',
+                data_type='int',
+            )
+        },
+        outputs={
+            'result': Port(name='result', data_type='int', role=ArtifactRole.OUTPUT)
+        },
+    )
+
+    persisted = context.object_store.persist_value(42, 'int')
+    context.db.upsert_artifact_object(
+        persisted['artifact_hash'],
+        persisted['storage_kind'],
+        persisted['data_type'],
+        persisted['size_bytes'],
+        persisted.get('extension'),
+        persisted.get('mime_type'),
+        persisted.get('preview'),
+    )
+    context.db.create_artifact_version(
+        node_id='producer',
+        artifact_name='value',
+        role=ArtifactRole.OUTPUT,
+        artifact_hash=persisted['artifact_hash'],
+        source_hash='producer-source',
+        upstream_code_hash='producer-code',
+        upstream_data_hash='producer-data',
+        run_id='upstream-run',
+        lineage_mode=LineageMode.MANAGED,
+        warnings=[],
+    )
+    context.db.set_artifact_head_state('producer', 'value', ArtifactState.STALE)
+
+    metadata = context.resolve_pull('count')
+    context.record_pull('count', metadata)
+    pushed = context.finalize_value_push(name='result', value=84, data_type='int', role=ArtifactRole.OUTPUT)
+    head = context.db.get_artifact_head('consumer', 'result')
+
+    assert metadata['value'] == 42
+    assert metadata['artifact_hash'] == persisted['artifact_hash']
+    assert metadata['upstream_code_hash'] == 'producer-code'
+    assert metadata['state'] == ArtifactState.STALE.value
+    assert metadata['warnings'] == [
+        {
+            'code': 'stale_input',
+            'message': 'Loaded stale artifact `producer/value`.',
+            'artifact': 'producer/value',
+        }
+    ]
+    assert pushed['state'] == ArtifactState.STALE.value
+    assert head is not None
+    assert head['state'] == ArtifactState.STALE.value
+    assert head['warnings'] == metadata['warnings']
+    assert head['upstream_code_hash'] == combine_hashes(['consumer-source', 'consumer/result', 'producer-code'])
+    assert head['upstream_data_hash'] == combine_hashes(['consumer-source', 'consumer/result', persisted['artifact_hash']])
+
+
+def test_runtime_context_rejects_type_mismatch_for_bound_input(tmp_path) -> None:
+    project_root = init_project_root(tmp_path / 'project').root
+    context = RuntimeContext(
+        project_root=project_root,
+        node_id='consumer',
+        run_id='run-mismatch',
+        source_hash='consumer-source',
+        lineage_mode=LineageMode.MANAGED,
+        bindings={
+            'table': Binding(
+                source_node='producer',
+                source_artifact='value',
+                data_type='pandas.DataFrame',
+            )
+        },
+        outputs={},
+    )
+
+    persisted = context.object_store.persist_value(42, 'int')
+    context.db.upsert_artifact_object(
+        persisted['artifact_hash'],
+        persisted['storage_kind'],
+        persisted['data_type'],
+        persisted['size_bytes'],
+        persisted.get('extension'),
+        persisted.get('mime_type'),
+        persisted.get('preview'),
+    )
+    context.db.create_artifact_version(
+        node_id='producer',
+        artifact_name='value',
+        role=ArtifactRole.OUTPUT,
+        artifact_hash=persisted['artifact_hash'],
+        source_hash='producer-source',
+        upstream_code_hash='producer-code',
+        upstream_data_hash='producer-data',
+        run_id='upstream-run',
+        lineage_mode=LineageMode.MANAGED,
+        warnings=[],
+    )
+
+    try:
+        context.resolve_pull('table')
+    except TypeError as exc:
+        assert 'expected pandas.DataFrame, got int' in str(exc)
+    else:
+        raise AssertionError('Expected type mismatch to raise TypeError')
+
+
+def test_runtime_context_finalize_value_push_persists_dataframe_preview(tmp_path) -> None:
+    project_root = init_project_root(tmp_path / 'project').root
+    context = RuntimeContext(
+        project_root=project_root,
+        node_id='producer',
+        run_id='run-frame',
+        source_hash='producer-source',
+        lineage_mode=LineageMode.MANAGED,
+        bindings={},
+        outputs={
+            'sample_df': Port(name='sample_df', data_type='pandas.DataFrame', role=ArtifactRole.OUTPUT)
+        },
+    )
+    frame = pd.DataFrame({'value': [1, 2, 3]})
+
+    context.finalize_value_push(name='sample_df', value=frame, data_type='pandas.DataFrame', role=ArtifactRole.OUTPUT)
+    head = context.db.get_artifact_head('producer', 'sample_df')
+
+    assert head is not None
+    assert head['state'] == ArtifactState.READY.value
+    assert head['data_type'] == 'pandas.DataFrame'
+    assert head['preview']['rows'] == 3
+    assert head['preview']['columns'] == 1
+
+
+def test_runtime_context_rejects_output_not_declared_in_interface(tmp_path) -> None:
+    project_root = init_project_root(tmp_path / 'project').root
+    context = RuntimeContext(
+        project_root=project_root,
+        node_id='producer',
+        run_id='run-undeclared',
+        source_hash='producer-source',
+        lineage_mode=LineageMode.MANAGED,
+        bindings={},
+        outputs={},
+    )
+
+    try:
+        context.finalize_value_push(name='missing', value=1, data_type='int', role=ArtifactRole.OUTPUT)
+    except KeyError as exc:
+        assert 'missing' in str(exc)
+    else:
+        raise AssertionError('Expected undeclared output to raise KeyError')
+
+
+def test_runtime_context_rejects_output_type_mismatch(tmp_path) -> None:
+    project_root = init_project_root(tmp_path / 'project').root
+    context = RuntimeContext(
+        project_root=project_root,
+        node_id='producer',
+        run_id='run-type-mismatch',
+        source_hash='producer-source',
+        lineage_mode=LineageMode.MANAGED,
+        bindings={},
+        outputs={
+            'result': Port(name='result', data_type='int', role=ArtifactRole.OUTPUT)
+        },
+    )
+
+    try:
+        context.finalize_value_push(name='result', value='oops', data_type='str', role=ArtifactRole.OUTPUT)
+    except TypeError as exc:
+        assert 'expected int, got str' in str(exc)
+    else:
+        raise AssertionError('Expected output type mismatch to raise TypeError')

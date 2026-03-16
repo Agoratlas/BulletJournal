@@ -1,0 +1,45 @@
+line-length = 120
+target-version = "py311"
+extend-exclude = ["*.ipynb"]
+
+[lint]
+select = [
+    "E",   # pycodestyle errors - code style violations
+    "F",   # Pyflakes - logical errors, unused imports, undefined names
+    "I",   # isort - import sorting and organization
+    "B",   # flake8-bugbear - likely bugs and design problems
+    "UP",  # pyupgrade - automatic Python syntax modernization
+    "S",   # flake8-bandit - security issues (hardcoded secrets, SQL injection, etc.)
+    "T10", # flake8-debugger - detect debugger statements (breakpoint, pdb)
+    "PD",  # pandas-vet - pandas best practices
+    "SIM",  # flake8-simplify - code simplification suggestions
+    "PERF", # Perflint - performance anti-patterns
+    "PLE",  # Pylint errors - additional error detection
+    "RUF",  # Ruff-specific rules
+]
+
+ignore = [
+    # Security exceptions
+    "S311",  # Allow standard pseudo-random generators (not used for cryptographic purposes)
+    
+    # Pandas exceptions
+    "PD008",  # Allow using .loc[] for performance
+    "PD009",  # Allow using .iloc[] for performance
+    "PD011",  # Allow using .to_values()
+    
+    # Performance exceptions
+    "PERF203",  # Allow try-except in loops (sometimes necessary for error handling)
+    
+    # Simplification exceptions
+    "SIM102",  # Allow nested if statements (sometimes clearer than combined conditions)
+    "SIM108",  # Allow if-else blocks instead of ternary (sometimes more readable)
+]
+
+[lint.per-file-ignores]
+"tests/*" = ["S101"]  # Allow assert statements in tests (standard pytest practice)
+
+[format]
+quote-style = "single"
+indent-style = "space"
+skip-magic-trailing-comma = false
+line-ending = "auto"

@@ -1,0 +1,11 @@
+# Python and system files
+venv/
+*.pyc
+__pycache__/
+*.egg-info/
+.DS_Store
+
+# Frontend dependencies and caches
+web/node_modules/
+web/*.tsbuildinfo
+web/.vite/
