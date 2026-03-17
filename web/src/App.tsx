@@ -411,6 +411,9 @@ function App() {
     queryKey: ['project-current'],
     queryFn: currentProject,
     retry: false,
+    staleTime: Number.POSITIVE_INFINITY,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
   })
 
   const snapshot = projectQuery.data ?? null
@@ -599,7 +602,6 @@ function App() {
     }
     const refreshSnapshot = () => {
       void queryClient.refetchQueries({ queryKey: ['snapshot', projectId], exact: true })
-      void queryClient.refetchQueries({ queryKey: ['project-current'], exact: true })
     }
     source.onmessage = refreshSnapshot
     for (const eventType of SNAPSHOT_REFRESH_EVENTS) {
@@ -783,7 +785,6 @@ function App() {
       return
     }
     await queryClient.refetchQueries({ queryKey: ['snapshot', projectId], exact: true })
-    await queryClient.refetchQueries({ queryKey: ['project-current'], exact: true })
   }
 
   async function mutateGraph(operations: Array<Record<string, unknown>>) {
