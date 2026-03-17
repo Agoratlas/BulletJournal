@@ -156,6 +156,20 @@ export function formatTimestamp(value: string | null | undefined): string {
   return date.toLocaleString()
 }
 
+export function formatBytes(value: number | null | undefined): string {
+  const size = Math.max(0, value ?? 0)
+  if (size < 1000) {
+    return `${size} B`
+  }
+  if (size < 1_000_000) {
+    return `${(size / 1000).toFixed(size >= 10_000 ? 0 : 1)} kB`
+  }
+  if (size < 1_000_000_000) {
+    return `${(size / 1_000_000).toFixed(size >= 10_000_000 ? 0 : 1)} MB`
+  }
+  return `${(size / 1_000_000_000).toFixed(1)} GB`
+}
+
 export function formatDurationSeconds(value: number): string {
   const clampedValue = Math.max(0, value)
   if (clampedValue < 60) {

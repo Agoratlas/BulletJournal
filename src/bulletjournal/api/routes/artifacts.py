@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Request
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 
 router = APIRouter(prefix='/projects/{project_id}', tags=['artifacts'])
 
@@ -21,10 +21,16 @@ def get_artifact(project_id: str, node_id: str, artifact_name: str, request: Req
 
 
 @router.get('/artifacts/{node_id}/{artifact_name}/download')
-def download_artifact(project_id: str, node_id: str, artifact_name: str, request: Request):
+def download_artifact(project_id: str, node_id: str, artifact_name: str, request: Request, format: str | None = None):
     container = request.app.state.container
     container.project_service.require_project_id(project_id)
-    file_info = container.artifact_service.download_file(node_id, artifact_name)
+    file_info = container.artifact_service.download_file(node_id, artifact_name, download_format=format)
+    if file_info['kind'] == 'bytes':
+        return Response(
+            content=file_info['content'],
+            media_type=file_info['mime_type'],
+            headers={'Content-Disposition': f'attachment; filename="{file_info["filename"]}"'},
+        )
     return FileResponse(file_info['path'], media_type=file_info['mime_type'], filename=file_info['filename'])
 
 

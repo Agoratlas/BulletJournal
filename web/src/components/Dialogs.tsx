@@ -17,7 +17,7 @@ export function Modal({ title, onClose, children, contentClassName, showCloseBut
       <div className={`modal-card${contentClassName ? ` ${contentClassName}` : ''}`} onClick={(event) => event.stopPropagation()}>
         <div className="modal-header">
           <h3>{title}</h3>
-          {showCloseButton ? <button className="ghost-button" onClick={onClose}>Close</button> : null}
+          {showCloseButton ? <button className="ghost-button modal-close-button" onClick={onClose} aria-label="Close dialog"><X width={18} height={18} /></button> : null}
         </div>
         {children}
       </div>

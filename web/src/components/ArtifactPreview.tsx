@@ -1,4 +1,5 @@
 import type { ArtifactPreview } from '../lib/types'
+import { formatBytes } from '../lib/helpers'
 
 type ArtifactPreviewProps = {
   preview: ArtifactPreview | null
@@ -31,8 +32,7 @@ export function ArtifactPreviewPanel({ preview, imageSrc = null }: ArtifactPrevi
     return (
       <div className="artifact-preview">
         <div className="preview-stats">
-          <span>{preview.rows} rows</span>
-          <span>{preview.columns} cols</span>
+          <span>{preview.rows} rows x {preview.columns} cols</span>
         </div>
         <div className="table-wrap">
           <table className="preview-table">
@@ -69,7 +69,7 @@ export function ArtifactPreviewPanel({ preview, imageSrc = null }: ArtifactPrevi
         <div className="meta-preview artifact-file-meta">
           <div>{preview.original_filename ?? preview.filename ?? 'Image artifact'}</div>
           <div>{preview.mime_type}</div>
-          <div>{preview.size_bytes ?? 0} bytes</div>
+          <div>{formatBytes(preview.size_bytes)}</div>
         </div>
       </div>
     )
@@ -80,7 +80,7 @@ export function ArtifactPreviewPanel({ preview, imageSrc = null }: ArtifactPrevi
       <div>{preview.original_filename ?? preview.filename ?? 'File artifact'}</div>
       <div>{preview.mime_type ?? 'Unknown type'}</div>
       <div>{preview.extension ?? 'No extension'}</div>
-      <div>{preview.size_bytes ?? 0} bytes</div>
+      <div>{formatBytes(preview.size_bytes)}</div>
     </div>
   )
 }

@@ -22,7 +22,7 @@ import ReactFlow, {
 import { artifactCounts, artifactFor, assetsForNode, badgeForNode, formatDurationSeconds, formatType, hiddenInputs, inputState, outputsForNode, visibleInputs } from '../lib/helpers'
 import type { ArtifactState, NodeRecord, Port, ProjectSnapshot } from '../lib/types'
 import { ArtifactCounts } from './ArtifactCounts'
-import { ChevronDown } from './Icons'
+import { Pencil, Play } from './Icons'
 
 type GraphCanvasProps = {
   snapshot: ProjectSnapshot
@@ -31,11 +31,14 @@ type GraphCanvasProps = {
   activeRunNodeId?: string | null
   queuedRunNodeIds?: string[]
   completedRunNodeIds?: string[]
+  activeEditorNodeIds?: string[]
   onConnect: (connection: Connection) => void
   onEdgesChange: (changes: EdgeChange[]) => void
   onNodeSelect: (nodeId: string) => void
   onNodeContextMenu: (nodeId: string, position: { x: number; y: number }) => void
   onEditFileNode: (nodeId: string) => void
+  onOpenEditor: (nodeId: string) => void
+  onKillEditor: (nodeId: string) => void
   onRunNode: (nodeId: string, mode: 'run_stale' | 'run_all' | 'edit_run') => void
   onOpenArtifacts: (nodeId: string) => void
   onCanvasInteract: () => void
@@ -63,8 +66,11 @@ type BulletJournalNodeData = {
   onSelect: (nodeId: string) => void
   onNodeContextMenu: (nodeId: string, position: { x: number; y: number }) => void
   onEditFileNode: (nodeId: string) => void
+  onOpenEditor: (nodeId: string) => void
+  onKillEditor: (nodeId: string) => void
   onRunNode: (nodeId: string, mode: 'run_stale' | 'run_all' | 'edit_run') => void
   onOpenArtifacts: (nodeId: string) => void
+  activeEditorNodeIds: string[]
 }
 
 type ConnectionIntent = {
@@ -160,7 +166,7 @@ function PortRow({
 }
 
 const BulletJournalNodeCard = memo(({ data, selected }: NodeProps<BulletJournalNodeData>) => {
-  const { node, snapshot, onSelect, onNodeContextMenu, onEditFileNode, onRunNode, onOpenArtifacts } = data
+  const { node, snapshot, onSelect, onNodeContextMenu, onEditFileNode, onOpenEditor, onKillEditor, onRunNode, onOpenArtifacts } = data
   const visible = visibleInputs(node)
   const hidden = hiddenInputs(node)
   const outputs = outputsForNode(node)
@@ -171,6 +177,7 @@ const BulletJournalNodeCard = memo(({ data, selected }: NodeProps<BulletJournalN
   const blockingValidationIssues = validationIssues.filter((issue) => issue.severity === 'error')
   const hasBlockingValidationIssues = blockingValidationIssues.length > 0
   const validationSummary = blockingValidationIssues.map((issue) => issue.message).join('\n')
+  const hasActiveEditor = data.activeEditorNodeIds.includes(node.id)
   const isExecutionActive = data.activeRunNodeId === node.id
   const isExecutionQueued = data.queuedRunNodeIds.includes(node.id)
   const isExecutionComplete = data.completedRunNodeIds.includes(node.id)
@@ -295,32 +302,34 @@ const BulletJournalNodeCard = memo(({ data, selected }: NodeProps<BulletJournalN
       <div className="rf-node-footer">
         <div className="rf-actions">
           {!NON_RUNNABLE_NODE_KINDS.has(node.kind) ? (
-            <div className="split-button" ref={menuRef}>
-              <button onClick={(event) => {
+            <div className="round-action-group" ref={menuRef}>
+              <button className="round-node-action play" onClick={(event) => {
                 event.stopPropagation()
                 onRunNode(node.id, 'run_stale')
-              }}>Run</button>
-              <button className="split-toggle" onClick={(event) => {
-                event.stopPropagation()
-                setMenuOpen((current) => !current)
-              }} aria-label="More run options"><ChevronDown width={16} height={16} /></button>
-              {menuOpen ? (
-                <div className="split-menu" onClick={(event) => event.stopPropagation()}>
-                  <button className="secondary menu-item" onClick={() => {
-                    setMenuOpen(false)
-                    onRunNode(node.id, 'run_stale')
-                  }}>Run</button>
-                  <button className="secondary menu-item" onClick={() => {
-                    setMenuOpen(false)
-                    onRunNode(node.id, 'run_all')
-                  }}>Run all</button>
-                  {node.kind === 'notebook' ? (
-                    <button className="secondary menu-item" onClick={() => {
-                      setMenuOpen(false)
-                      onRunNode(node.id, 'edit_run')
-                    }}>Edit</button>
+              }} aria-label="Run notebook"><Play width={18} height={18} /></button>
+              {node.kind === 'notebook' ? (
+                <>
+                  <button className={`round-node-action editor ${hasActiveEditor ? 'active-editor' : ''}`} onClick={(event) => {
+                    event.stopPropagation()
+                    if (hasActiveEditor) {
+                      setMenuOpen((current) => !current)
+                      return
+                    }
+                    onOpenEditor(node.id)
+                  }} aria-label={hasActiveEditor ? 'Editor actions' : 'Open editor'}><Pencil width={18} height={18} /></button>
+                  {menuOpen ? (
+                    <div className="split-menu editor-menu" onClick={(event) => event.stopPropagation()}>
+                      <button className="secondary menu-item" onClick={() => {
+                        setMenuOpen(false)
+                        onOpenEditor(node.id)
+                      }}>Open editor</button>
+                      <button className="secondary menu-item" onClick={() => {
+                        setMenuOpen(false)
+                        onKillEditor(node.id)
+                      }}>Kill editor</button>
+                    </div>
                   ) : null}
-                </div>
+                </>
               ) : null}
             </div>
           ) : null}
@@ -362,7 +371,7 @@ function isCompatibleWithIntent(snapshot: ProjectSnapshot, node: NodeRecord, por
   return targetPort?.data_type === port.data_type
 }
 
-export function GraphCanvas({ snapshot, serverNowMs = Date.now(), serverNowClientAnchorMs = Date.now(), activeRunNodeId = null, queuedRunNodeIds = [], completedRunNodeIds = [], onConnect, onEdgesChange, onNodeSelect, onNodeContextMenu, onEditFileNode, onRunNode, onOpenArtifacts, onCanvasInteract, onCanvasClear, onNodeMove, onNodesDelete, draggedBlock, onBlockDrop }: GraphCanvasProps) {
+export function GraphCanvas({ snapshot, serverNowMs = Date.now(), serverNowClientAnchorMs = Date.now(), activeRunNodeId = null, queuedRunNodeIds = [], completedRunNodeIds = [], activeEditorNodeIds = [], onConnect, onEdgesChange, onNodeSelect, onNodeContextMenu, onEditFileNode, onOpenEditor, onKillEditor, onRunNode, onOpenArtifacts, onCanvasInteract, onCanvasClear, onNodeMove, onNodesDelete, draggedBlock, onBlockDrop }: GraphCanvasProps) {
   const { fitView, screenToFlowPosition } = useReactFlow()
   const [selectedEdgeIds, setSelectedEdgeIds] = useState<string[]>([])
   const pendingPositionsRef = useRef<Record<string, { x: number; y: number }>>({})
@@ -384,17 +393,20 @@ export function GraphCanvas({ snapshot, serverNowMs = Date.now(), serverNowClien
             activeRunNodeId: activeRunNodeId ?? null,
             queuedRunNodeIds: queuedRunNodeIds ?? [],
             completedRunNodeIds: completedRunNodeIds ?? [],
+            activeEditorNodeIds,
             onSelect: onNodeSelect,
             onNodeContextMenu,
             onEditFileNode,
-          onRunNode,
-          onOpenArtifacts,
+            onOpenEditor,
+            onKillEditor,
+            onRunNode,
+            onOpenArtifacts,
         },
         position: { x: layout?.x ?? 80, y: layout?.y ?? 80 },
         style: { width: layout?.w ?? 360 },
       }
     })
-  }, [snapshot, serverNowMs, serverNowClientAnchorMs, activeRunNodeId, queuedRunNodeIds, completedRunNodeIds, onNodeContextMenu, onEditFileNode, onNodeSelect, onOpenArtifacts, onRunNode])
+  }, [snapshot, serverNowMs, serverNowClientAnchorMs, activeRunNodeId, queuedRunNodeIds, completedRunNodeIds, activeEditorNodeIds, onNodeContextMenu, onEditFileNode, onKillEditor, onNodeSelect, onOpenArtifacts, onOpenEditor, onRunNode])
 
   const [nodes, setNodes] = useState<Node<BulletJournalNodeData>[]>(mappedNodes)
 
@@ -504,7 +516,7 @@ export function GraphCanvas({ snapshot, serverNowMs = Date.now(), serverNowClien
         onNodeDoubleClick={(_event, node) => {
           const current = snapshot.graph.nodes.find((item) => item.id === node.id)
           if (current?.kind === 'notebook') {
-            onRunNode(node.id, 'edit_run')
+            onOpenEditor(node.id)
           } else if (current?.kind === 'file_input') {
             onEditFileNode(node.id)
           }

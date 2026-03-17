@@ -641,6 +641,85 @@ def test_artifact_download_uses_artifact_name_and_extension(tmp_path) -> None:
     assert response.headers['content-type']
 
 
+def test_dataframe_csv_download_returns_attachment(tmp_path) -> None:
+    project_root = init_project_root(tmp_path / 'project').root
+    app = create_app(project_path=project_root)
+    client = TestClient(app)
+
+    opened = client.post('/api/v1/projects/open', json={'path': str(project_root)})
+    project_id = opened.json()['project']['project_id']
+    graph_version = opened.json()['graph']['meta']['graph_version']
+
+    created = client.patch(
+        f'/api/v1/projects/{project_id}/graph',
+        json={
+            'graph_version': graph_version,
+            'operations': [
+                {
+                    'type': 'add_notebook_node',
+                    'node_id': 'sample_node',
+                    'title': 'Sample Node',
+                }
+            ],
+        },
+    )
+    assert created.status_code == 200
+
+    run = client.post(
+        f'/api/v1/projects/{project_id}/nodes/sample_node/run',
+        json={'mode': 'run_stale', 'action': 'use_stale'},
+    )
+    assert run.status_code == 200
+    assert run.json()['status'] == 'succeeded'
+
+    response = client.get(f'/api/v1/projects/{project_id}/artifacts/sample_node/sample_df/download?format=csv')
+
+    assert response.status_code == 200
+    assert response.headers['content-type'].startswith('text/csv')
+    assert 'filename="sample_df.csv"' in response.headers['content-disposition']
+    assert b'value\n' in response.content
+
+
+def test_dataframe_csv_download_rejects_large_artifacts(tmp_path, monkeypatch) -> None:
+    project_root = init_project_root(tmp_path / 'project').root
+    app = create_app(project_path=project_root)
+    client = TestClient(app)
+    from bulletjournal.services import artifact_service as artifact_service_module
+
+    monkeypatch.setattr(artifact_service_module, 'DATAFRAME_CSV_DOWNLOAD_MAX_BYTES', 1)
+
+    opened = client.post('/api/v1/projects/open', json={'path': str(project_root)})
+    project_id = opened.json()['project']['project_id']
+    graph_version = opened.json()['graph']['meta']['graph_version']
+
+    created = client.patch(
+        f'/api/v1/projects/{project_id}/graph',
+        json={
+            'graph_version': graph_version,
+            'operations': [
+                {
+                    'type': 'add_notebook_node',
+                    'node_id': 'sample_node',
+                    'title': 'Sample Node',
+                }
+            ],
+        },
+    )
+    assert created.status_code == 200
+
+    run = client.post(
+        f'/api/v1/projects/{project_id}/nodes/sample_node/run',
+        json={'mode': 'run_stale', 'action': 'use_stale'},
+    )
+    assert run.status_code == 200
+    assert run.json()['status'] == 'succeeded'
+
+    response = client.get(f'/api/v1/projects/{project_id}/artifacts/sample_node/sample_df/download?format=csv')
+
+    assert response.status_code == 400
+    assert '100 MB' in response.text
+
+
 def test_file_artifact_content_endpoint_renders_inline_image(tmp_path) -> None:
     project_root = init_project_root(tmp_path / 'project').root
     app = create_app(project_path=project_root)

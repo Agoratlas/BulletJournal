@@ -3,14 +3,14 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import type { Connection, EdgeChange, Node } from 'reactflow'
 
 import { cancelRun, createCheckpoint, currentProject, dismissNotice, getSnapshot, initProject, listSessions, openProject, patchGraph, restoreCheckpoint, runAll, runNode, stopSession, uploadFile } from './lib/api'
-import { GRID_SIZE, activeRunNodeId, artifactCounts, artifactFor, badgeForNode, currentRun, formatDurationSeconds, formatTimestamp, globalArtifactCounts, hiddenInputNames, inputBindingSource, inputState, queuedRunNodeIds, templateByRef } from './lib/helpers'
+import { GRID_SIZE, activeRunNodeId, artifactCounts, artifactFor, badgeForNode, currentRun, formatBytes, formatDurationSeconds, formatTimestamp, globalArtifactCounts, hiddenInputNames, inputBindingSource, inputState, queuedRunNodeIds, templateByRef } from './lib/helpers'
 import type { ArtifactRecord, NodeRecord, NoticeRecord, ProjectSnapshot, TemplateRecord } from './lib/types'
 import { ConfirmDialog, CreateConstantValueDialog, CreateFileDialog, CreateNotebookDialog, CreatePipelineDialog, Modal } from './components/Dialogs'
 import { ArtifactPreviewPanel } from './components/ArtifactPreview'
 import { ArtifactCounts } from './components/ArtifactCounts'
 import { GraphCanvas } from './components/GraphCanvas'
 import { PortPill } from './components/PortPill'
-import { Plus, Info, Palette, Play } from './components/Icons'
+import { Download, Plus, Info, Palette, Play, X } from './components/Icons'
 
 type ThemeMode = 'system' | 'light' | 'dark'
 
@@ -115,6 +115,8 @@ function artifactEndpoint(projectId: string | null, artifact: ArtifactRecord, ac
   const artifactName = encodeURIComponent(artifact.artifact_name)
   return `/api/v1/projects/${projectId}/artifacts/${nodeId}/${artifactName}/${action}`
 }
+
+const DATAFRAME_CSV_DOWNLOAD_MAX_BYTES = 100_000_000
 
 function createClientNotice(
   issueId: string,
@@ -389,6 +391,7 @@ function App() {
   const [inspectorOpen, setInspectorOpen] = useState(false)
   const [confirmationState, setConfirmationState] = useState<ConfirmationState | null>(null)
   const [serverNowOffsetMs, setServerNowOffsetMs] = useState(0)
+  const [activeEditorNodeIds, setActiveEditorNodeIds] = useState<string[]>([])
   const [themeMode, setThemeMode] = useState<ThemeMode>(() => {
     const stored = window.localStorage.getItem('bulletjournal-theme')
     if (stored === 'light' || stored === 'dark' || stored === 'system') {
@@ -666,6 +669,31 @@ function App() {
     window.addEventListener('pointerdown', handlePointerDown)
     return () => window.removeEventListener('pointerdown', handlePointerDown)
   }, [nodeActionMenu])
+
+  useEffect(() => {
+    if (!projectId) {
+      setActiveEditorNodeIds([])
+      return
+    }
+    const currentProjectId: string = projectId
+    let cancelled = false
+    async function loadSessions() {
+      try {
+        const sessions = await listSessions(currentProjectId)
+        if (!cancelled) {
+          setActiveEditorNodeIds(Array.from(new Set(sessions.map((session) => session.node_id))))
+        }
+      } catch {
+        if (!cancelled) {
+          setActiveEditorNodeIds([])
+        }
+      }
+    }
+    void loadSessions()
+    return () => {
+      cancelled = true
+    }
+  }, [projectId, liveSnapshot?.graph.meta.graph_version])
 
   useEffect(() => {
     if (!liveSnapshot) {
@@ -1324,6 +1352,25 @@ function App() {
     await refreshSnapshot()
   }
 
+  async function handleOpenEditor(nodeId: string) {
+    await handleRunNode(nodeId, 'edit_run')
+  }
+
+  async function handleKillEditor(nodeId: string) {
+    if (!projectId) {
+      return
+    }
+    const sessions = await listSessions(projectId)
+    const session = sessions.find((item) => item.node_id === nodeId)
+    if (!session) {
+      setActiveEditorNodeIds((current) => current.filter((id) => id !== nodeId))
+      return
+    }
+    await stopSession(projectId, session.session_id)
+    setActiveEditorNodeIds((current) => current.filter((id) => id !== nodeId))
+    await refreshSnapshot()
+  }
+
   const counts = liveSnapshot ? globalArtifactCounts(liveSnapshot) : { ready: 0, stale: 0, pending: 0 }
   const activeRun = liveSnapshot ? currentRun(liveSnapshot) : null
   const runningNodeId = liveSnapshot ? activeRunNodeId(liveSnapshot, activeRun) : null
@@ -1439,6 +1486,9 @@ function App() {
                 setNodeActionMenu({ nodeId, x: position.x, y: position.y })
               }}
               onEditFileNode={openFileNodeEdit}
+              activeEditorNodeIds={activeEditorNodeIds}
+              onOpenEditor={(nodeId) => void handleOpenEditor(nodeId)}
+              onKillEditor={(nodeId) => void handleKillEditor(nodeId)}
               onRunNode={handleRunNode}
               onOpenArtifacts={(nodeId) => {
                 setArtifactNodeId(nodeId)
@@ -1734,10 +1784,10 @@ function SessionLoadingScreen({
           <div><span>Session</span><strong>{sessionId}</strong></div>
         </div>
         <div className="spinner" />
-        <button className="secondary" onClick={() => {
+        <button className="ghost-button modal-close-button" onClick={() => {
           onCancel()
           window.close()
-        }}>Close</button>
+        }} aria-label="Close loading screen"><X width={18} height={18} /></button>
       </div>
     </div>
   )
@@ -2212,23 +2262,65 @@ function ArtifactCard({ artifact, projectId }: { artifact: ArtifactRecord; proje
   const imageSrc = artifact.preview?.kind === 'file' && artifact.preview.mime_type?.startsWith('image/')
     ? artifactEndpoint(projectId, artifact, 'content')
     : null
+  const isDataFrame = artifact.data_type === 'pandas.DataFrame'
+  const canDownloadCsv = isDataFrame && (artifact.size_bytes ?? 0) <= DATAFRAME_CSV_DOWNLOAD_MAX_BYTES
+  const csvDisabledReason = canDownloadCsv ? null : 'CSV export is limited to DataFrame artifacts up to 100 MB.'
+  const csvDownloadHref = `${downloadHref}?format=csv`
+  const defaultDownloadLabel = artifact.extension?.toLowerCase() ?? 'file'
 
   return (
     <article className={`artifact-card state-${artifact.state}`}>
-      <div className="artifact-head">
-        <div>
-          <strong>{artifact.node_id}/{artifact.artifact_name}</strong>
-          <span className={`artifact-state-label ${artifact.state}`}>{artifact.state}</span>
-          <span>{artifact.data_type ?? 'unknown'}</span>
+        <div className="artifact-head">
+          <div className="artifact-title-block">
+            <div className="artifact-title-row">
+              <strong>{artifact.node_id}/{artifact.artifact_name}</strong>
+              <span className={`artifact-state-label ${artifact.state}`}>{artifact.state}</span>
+            </div>
+            <span>{artifact.data_type ?? 'unknown'}</span>
+          </div>
+        <div className="artifact-download-actions">
+          {isDataFrame ? (
+            <>
+              <a className="secondary link-button artifact-download-button" href={downloadHref}>
+                <Download width={16} height={16} />
+                .parquet
+              </a>
+              <span className="artifact-download-tooltip-shell" title={csvDisabledReason ?? undefined}>
+                <a
+                  className={`secondary link-button artifact-download-button${canDownloadCsv ? '' : ' disabled'}`}
+                  href={canDownloadCsv ? csvDownloadHref : undefined}
+                  aria-disabled={!canDownloadCsv}
+                  onClick={(event) => {
+                    if (!canDownloadCsv) {
+                      event.preventDefault()
+                    }
+                  }}
+                >
+                  <Download width={16} height={16} />
+                  .csv
+                </a>
+                {!canDownloadCsv ? (
+                  <span className="artifact-download-help" tabIndex={0} aria-label={csvDisabledReason ?? undefined}>
+                    <Info width={14} height={14} />
+                    <span className="artifact-tooltip">{csvDisabledReason}</span>
+                  </span>
+                ) : null}
+              </span>
+            </>
+          ) : (
+            <a className="secondary link-button artifact-download-button" href={downloadHref}>
+              <Download width={16} height={16} />
+              {defaultDownloadLabel}
+            </a>
+          )}
         </div>
-        <a className="secondary link-button" href={downloadHref}>Download</a>
       </div>
       <ArtifactPreviewPanel preview={artifact.preview} imageSrc={imageSrc} />
       <div className="artifact-meta-grid">
         <span>Storage: {artifact.storage_kind ?? 'n/a'}</span>
         <span>Lineage: {artifact.lineage_mode ?? 'n/a'}</span>
         <span>Created: {formatTimestamp(artifact.created_at)}</span>
-        <span>Size: {artifact.size_bytes ?? 0} bytes</span>
+        <span>Size: {formatBytes(artifact.size_bytes)}</span>
       </div>
     </article>
   )

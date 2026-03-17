@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import json
+import time
 import uuid
 from dataclasses import dataclass
-from datetime import datetime
 from threading import Event, Lock
 from typing import Any, cast
 
@@ -26,6 +26,7 @@ class ActiveRun:
     node_ids: list[str]
     current_node: str | None = None
     current_node_started_at: str | None = None
+    current_node_started_monotonic: float | None = None
     process: object | None = None
     cancel_reason: str | None = None
 
@@ -323,6 +324,7 @@ class RunService:
             for index, current_node_id in enumerate(plan, start=1):
                 active.current_node = current_node_id
                 active.current_node_started_at = utc_now_iso()
+                active.current_node_started_monotonic = time.monotonic()
                 with self._lock:
                     self._orchestrator_node_states[current_node_id] = OrchestratorNodeState(
                         node_id=current_node_id,
@@ -378,7 +380,7 @@ class RunService:
                         status='cancelled',
                         started_at=active.current_node_started_at or finished_at,
                         ended_at=finished_at,
-                        duration_seconds=self._elapsed_seconds(active.current_node_started_at, finished_at),
+                        duration_seconds=self._elapsed_seconds(active.current_node_started_monotonic),
                         current_cell=cast(dict[str, Any], progress) if progress is not None else None,
                         total_cells=int(total_cells) if isinstance(total_cells, int) else None,
                         last_completed_cell_number=int(current_cell_number) - 1 if isinstance(current_cell_number, int) and current_cell_number > 1 else None,
@@ -410,7 +412,7 @@ class RunService:
                         status='failed',
                         started_at=active.current_node_started_at or finished_at,
                         ended_at=finished_at,
-                        duration_seconds=self._elapsed_seconds(active.current_node_started_at, finished_at),
+                        duration_seconds=self._elapsed_seconds(active.current_node_started_monotonic),
                         current_cell=cast(dict[str, Any], progress) if progress is not None else None,
                         total_cells=int(total_cells) if isinstance(total_cells, int) else None,
                         last_completed_cell_number=int(current_cell_number) - 1 if isinstance(current_cell_number, int) and current_cell_number > 1 else None,
@@ -439,7 +441,7 @@ class RunService:
                     status='succeeded',
                     started_at=active.current_node_started_at or finished_at,
                     ended_at=finished_at,
-                    duration_seconds=self._elapsed_seconds(active.current_node_started_at, finished_at),
+                    duration_seconds=self._elapsed_seconds(active.current_node_started_monotonic),
                     current_cell=None,
                     total_cells=int(total_cells) if isinstance(total_cells, int) else None,
                     last_completed_cell_number=int(total_cells) if isinstance(total_cells, int) else None,
@@ -621,15 +623,10 @@ class RunService:
             for port in interface.get('outputs', []) + interface.get('assets', [])
         }
 
-    def _elapsed_seconds(self, started_at: str | None, ended_at: str) -> float | None:
-        if started_at is None:
+    def _elapsed_seconds(self, started_monotonic: float | None) -> float | None:
+        if started_monotonic is None:
             return None
-        try:
-            started = datetime.fromisoformat(started_at.replace('Z', '+00:00'))
-            ended = datetime.fromisoformat(ended_at.replace('Z', '+00:00'))
-        except ValueError:
-            return None
-        return max((ended - started).total_seconds(), 0.0)
+        return max(time.monotonic() - started_monotonic, 0.0)
 
 
 def _affected_plan_nodes(active_run: ActiveRun, changed_node_ids: list[str], graph: GraphData) -> list[str]:

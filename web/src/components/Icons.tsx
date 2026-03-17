@@ -25,6 +25,16 @@ export function Info(props: SVGProps<SVGSVGElement>) {
   )
 }
 
+export function Download(props: SVGProps<SVGSVGElement>) {
+  return (
+    <IconBase {...props}>
+      <path d="M12 4v10" />
+      <path d="m8 10 4 4 4-4" />
+      <path d="M5 19h14" />
+    </IconBase>
+  )
+}
+
 export function Palette(props: SVGProps<SVGSVGElement>) {
   return (
     <IconBase {...props}>
@@ -49,6 +59,15 @@ export function Play(props: SVGProps<SVGSVGElement>) {
   return (
     <IconBase {...props}>
       <path d="M8 6.5v11l8.5-5.5-8.5-5.5Z" fill="currentColor" stroke="none" />
+    </IconBase>
+  )
+}
+
+export function Pencil(props: SVGProps<SVGSVGElement>) {
+  return (
+    <IconBase {...props}>
+      <path d="m15 5 4 4" />
+      <path d="M4 20h4l11-11a1.4 1.4 0 0 0 0-2L17 5a1.4 1.4 0 0 0-2 0L4 16v4Z" />
     </IconBase>
   )
 }

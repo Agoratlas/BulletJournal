@@ -10,6 +10,8 @@ from bulletjournal.domain.models import file_input_artifact_name
 from bulletjournal.services.graph_service import GraphService
 from bulletjournal.utils import utc_now_iso
 
+DATAFRAME_CSV_DOWNLOAD_MAX_BYTES = 100_000_000
+
 
 class ArtifactService:
     def __init__(self, project_service) -> None:
@@ -85,17 +87,37 @@ class ArtifactService:
         GraphService(self.project_service).mark_downstream_stale([node_id])
         return self.get_artifact(node_id, artifact_name)
 
-    def download_file(self, node_id: str, artifact_name: str) -> dict[str, Any]:
+    def download_file(self, node_id: str, artifact_name: str, *, download_format: str | None = None) -> dict[str, Any]:
         head = self.get_artifact(node_id, artifact_name)
         if not head.get('artifact_hash'):
             raise FileNotFoundError(f'Artifact `{node_id}/{artifact_name}` is pending.')
         project = self.project_service.require_project()
         project.state_db.touch_artifact_object(str(head['artifact_hash']))
+        if download_format == 'csv':
+            return self._download_dataframe_csv(project, head)
+        if download_format not in {None, 'parquet'}:
+            raise InvalidRequestError(f'Unknown artifact download format `{download_format}`.')
         filename = self._download_filename(head)
         return {
+            'kind': 'path',
             'path': project.object_store.load_file_path(str(head['artifact_hash'])),
             'filename': filename,
             'mime_type': self._download_mime_type(head, filename),
+        }
+
+    def _download_dataframe_csv(self, project, head: dict[str, Any]) -> dict[str, Any]:
+        if head.get('data_type') != 'pandas.DataFrame':
+            raise InvalidRequestError('CSV downloads are only available for DataFrame artifacts.')
+        size_bytes = int(head.get('size_bytes') or 0)
+        if size_bytes > DATAFRAME_CSV_DOWNLOAD_MAX_BYTES:
+            raise InvalidRequestError('CSV downloads are limited to DataFrame artifacts no larger than 100 MB.')
+        frame = project.object_store.load_value(str(head['artifact_hash']), str(head['data_type']))
+        csv_bytes = frame.to_csv(index=False).encode('utf-8')
+        return {
+            'kind': 'bytes',
+            'content': csv_bytes,
+            'filename': f'{self._sanitize_filename_stem(str(head.get("artifact_name") or "artifact"))}.csv',
+            'mime_type': 'text/csv; charset=utf-8',
         }
 
     @staticmethod
