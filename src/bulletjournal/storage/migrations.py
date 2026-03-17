@@ -149,4 +149,21 @@ MIGRATIONS: list[tuple[str, str]] = [
         ON persistent_notices (created_at DESC);
         """,
     ),
+    (
+        '004_orchestrator_execution_meta',
+        """
+        CREATE TABLE IF NOT EXISTS orchestrator_execution_meta (
+            node_id TEXT PRIMARY KEY,
+            run_id TEXT NOT NULL,
+            status TEXT NOT NULL,
+            started_at TEXT NOT NULL,
+            ended_at TEXT NULL,
+            duration_seconds REAL NULL,
+            current_cell_json TEXT NULL,
+            total_cells INTEGER NULL,
+            last_completed_cell_number INTEGER NULL,
+            updated_at TEXT NOT NULL
+        );
+        """,
+    ),
 ]

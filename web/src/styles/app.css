@@ -646,9 +646,27 @@ label span,
 .rf-node.state-pending,
 .rf-node.state-idle { border-color: rgba(152, 162, 163, 0.44); }
 .rf-node.state-error { border-color: rgba(197, 48, 48, 0.58); }
+.rf-node.state-queued,
+.rf-node.execution-queued {
+  border-color: color-mix(in srgb, var(--run) 62%, white 20%);
+}
+.rf-node.has-validation-error {
+  box-shadow: 0 0 0 1px rgba(197, 48, 48, 0.16), 0 20px 52px rgba(197, 48, 48, 0.12);
+}
 .rf-node.state-running {
   border-color: rgba(37, 99, 235, 0.62);
   animation: pulse-border 1.5s ease-in-out infinite;
+}
+
+.rf-node.execution-active {
+  border-color: rgba(37, 99, 235, 0.78);
+  animation: pulse-border 1.5s ease-in-out infinite;
+}
+
+.rf-node.execution-complete {
+  border-color: rgba(47, 133, 90, 0.72);
+  animation: none;
+  box-shadow: 0 0 0 1px rgba(47, 133, 90, 0.12), 0 20px 52px rgba(47, 133, 90, 0.12);
 }
 
 .rf-node.is-selected {
@@ -666,10 +684,34 @@ label span,
   50% { box-shadow: 0 0 0 8px rgba(37, 99, 235, 0.08); }
 }
 
+@keyframes progress-shimmer {
+  0% { transform: translateX(-120%); opacity: 0.2; }
+  50% { opacity: 0.55; }
+  100% { transform: translateX(220%); opacity: 0.15; }
+}
+
 .rf-node-progress {
   position: relative;
   height: 6px;
-  background: linear-gradient(90deg, var(--good), #67b588);
+  background: linear-gradient(90deg, #4b9b7e, #63b59b);
+}
+
+.rf-node-progress-current {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  overflow: hidden;
+  background: linear-gradient(90deg, rgba(69, 132, 205, 0.9), rgba(96, 165, 220, 0.94));
+  box-shadow: 0 0 10px rgba(69, 132, 205, 0.26);
+}
+
+.rf-node-progress-current::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  width: 55%;
+  background: linear-gradient(90deg, rgba(255, 255, 255, 0), rgba(255, 255, 255, 0.55), rgba(255, 255, 255, 0));
+  animation: progress-shimmer 1.5s ease-in-out infinite;
 }
 
 .rf-node-progress-track {
@@ -780,6 +822,55 @@ label span,
   font-size: 11px;
   line-height: 1.15;
   font-family: var(--mono);
+}
+
+.rf-node-issue-pill {
+  flex: 0 0 auto;
+  padding: 6px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(197, 48, 48, 0.3);
+  background: rgba(197, 48, 48, 0.12);
+  color: #8f1d1d;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.rf-node-timer {
+  margin-left: auto;
+  padding: 6px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  border: 1px solid transparent;
+}
+
+.rf-node-timer.running {
+  color: var(--run);
+  border-color: rgba(37, 99, 235, 0.28);
+  background: rgba(37, 99, 235, 0.08);
+  animation: pulse-border 1.5s ease-in-out infinite;
+}
+
+.rf-node-timer.complete {
+  color: var(--good);
+  border-color: rgba(47, 133, 90, 0.24);
+  background: rgba(47, 133, 90, 0.08);
+}
+
+.inspector-subblock {
+  display: grid;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+:root[data-theme='dark'] .rf-node-issue-pill {
+  border-color: rgba(242, 117, 117, 0.34);
+  background: rgba(242, 117, 117, 0.16);
+  color: #ffd7d7;
 }
 
 .rf-node-body {
@@ -1267,12 +1358,50 @@ label span,
   gap: 10px;
 }
 
+.node-action-menu {
+  position: fixed;
+  z-index: 40;
+  display: grid;
+  gap: 6px;
+  min-width: 180px;
+  padding: 8px;
+  border-radius: 16px;
+  background: rgba(255, 250, 242, 0.94);
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow);
+  backdrop-filter: blur(14px);
+}
+
+:root[data-theme='dark'] .node-action-menu {
+  background: rgba(24, 22, 19, 0.94);
+}
+
+.danger-text {
+  color: var(--bad);
+}
+
 .warning-chip.error {
   border-color: rgba(197, 48, 48, 0.3);
 }
 
 .warning-chip.warning {
   border-color: rgba(201, 124, 0, 0.3);
+}
+
+.warning-details {
+  margin: 8px 0 0;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.04);
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+:root[data-theme='dark'] .warning-details {
+  background: rgba(255, 255, 255, 0.06);
 }
 
 .port-pill {
@@ -1580,6 +1709,20 @@ input.invalid {
   margin-top: 6px;
 }
 
+.confirm-dialog-card {
+  max-width: 520px;
+}
+
+.confirm-dialog-body {
+  display: grid;
+  gap: 20px;
+}
+
+.confirm-dialog-copy {
+  color: var(--muted);
+  line-height: 1.6;
+}
+
 .notice-overlay {
   position: fixed;
   right: 22px;
@@ -1629,6 +1772,14 @@ input.invalid {
   align-items: center;
   justify-content: space-between;
   gap: 10px;
+}
+
+.notice-card-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 
 .notice-card-copy {

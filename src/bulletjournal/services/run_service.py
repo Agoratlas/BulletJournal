@@ -3,13 +3,15 @@ from __future__ import annotations
 import json
 import uuid
 from dataclasses import dataclass
+from datetime import datetime
 from threading import Event, Lock
 from typing import Any, cast
 
 from bulletjournal.domain.enums import ArtifactState, LineageMode, NodeKind, RunMode, RunStatus, ValidationSeverity
-from bulletjournal.domain.errors import RunConflictError
+from bulletjournal.domain.errors import InvalidRequestError, NotFoundError, RunConflictError
+from bulletjournal.domain.models import GraphData
 from bulletjournal.execution.manifests import RunManifest
-from bulletjournal.execution.planner import run_plan_for_node, stale_or_pending_nodes, upstream_closure
+from bulletjournal.execution.planner import downstream_closure, run_plan_for_node, stale_or_pending_nodes, upstream_closure
 from bulletjournal.execution.runner import WorkerRunner
 from bulletjournal.execution.sessions import SessionManager
 from bulletjournal.parser.validation import build_issue_id
@@ -23,8 +25,18 @@ class ActiveRun:
     cancel_event: Event
     node_ids: list[str]
     current_node: str | None = None
+    current_node_started_at: str | None = None
     process: object | None = None
     cancel_reason: str | None = None
+
+
+@dataclass(slots=True)
+class OrchestratorNodeState:
+    node_id: str
+    run_id: str
+    status: str
+    started_at: str | None = None
+    completed_at: str | None = None
 
 
 class RunService:
@@ -34,6 +46,7 @@ class RunService:
         self.session_manager = SessionManager()
         self._lock = Lock()
         self._active_run: ActiveRun | None = None
+        self._orchestrator_node_states: dict[str, OrchestratorNodeState] = {}
 
     def start_node_run(
         self,
@@ -46,8 +59,6 @@ class RunService:
         run_mode = RunMode(mode)
         if run_mode == RunMode.EDIT_RUN:
             return self._start_edit_session(node_id)
-        if self.session_manager.get_by_node(node_id) is not None:
-            raise RunConflictError('An Edit & Run session is active for this notebook.')
         pending = self.preflight(node_id)
         blocked_inputs = cast(list[dict[str, Any]], pending['blocked_inputs'])
         if blocked_inputs and action is None:
@@ -80,17 +91,20 @@ class RunService:
             self._active_run.cancel_event.set()
         return {'run_id': run_id, 'status': 'cancelling'}
 
-    def interrupt_active_run_for_graph_edit(self) -> dict[str, Any] | None:
+    def interrupt_active_run_if_nodes_affected(self, changed_node_ids: list[str], graph: GraphData) -> dict[str, Any] | None:
         with self._lock:
             active = self._active_run
             if active is None:
+                return None
+            affected_nodes = _affected_plan_nodes(active, changed_node_ids, graph)
+            if not affected_nodes:
                 return None
             active.cancel_reason = 'graph_edit'
             active.cancel_event.set()
         return {
             'run_id': active.run_id,
             'node_id': active.current_node,
-            'node_ids': list(active.node_ids),
+            'node_ids': affected_nodes,
         }
 
     def preflight(self, node_id: str) -> dict[str, Any]:
@@ -124,6 +138,23 @@ class RunService:
         nodes = stale_or_pending_nodes(graph, self.project_service.require_project().state_db.list_artifact_heads())
         if not nodes:
             return {'status': 'noop', 'node_ids': []}
+        blocked_nodes: list[dict[str, Any]] = []
+        for node_id in nodes:
+            pending = self.preflight(node_id)
+            blocked_inputs = cast(list[dict[str, Any]], pending['blocked_inputs'])
+            unresolved = self._unrunnable_inputs(blocked_inputs)
+            if unresolved:
+                blocked_nodes.append(
+                    {
+                        'node_id': node_id,
+                        'blocked_inputs': unresolved,
+                    }
+                )
+        if blocked_nodes:
+            raise InvalidRequestError(
+                'Run queue is blocked by missing required inputs: '
+                + json.dumps({'blocked_nodes': blocked_nodes}, sort_keys=True)
+            )
         return self._execute_managed_run(
             plan=nodes,
             mode=RunMode.RUN_STALE,
@@ -142,10 +173,32 @@ class RunService:
             for session in self.session_manager.list()
         ]
 
+    def stop_session(self, session_id: str) -> dict[str, Any]:
+        session = self.session_manager.get(session_id)
+        if session is None:
+            raise NotFoundError(f'Unknown editor session `{session_id}`.')
+        self.session_manager.stop(session_id)
+        return {'session_id': session_id, 'node_id': session.node_id, 'status': 'stopped'}
+
     def stop(self) -> None:
         if self._active_run is not None:
             self._active_run.cancel_event.set()
+        with self._lock:
+            self._orchestrator_node_states = {}
         self.session_manager.stop_all()
+
+    def orchestrator_state(self) -> dict[str, dict[str, Any]]:
+        with self._lock:
+            return {
+                node_id: {
+                    'node_id': state.node_id,
+                    'run_id': state.run_id,
+                    'status': state.status,
+                    'started_at': state.started_at,
+                    'completed_at': state.completed_at,
+                }
+                for node_id, state in self._orchestrator_node_states.items()
+            }
 
     def _run_single_node(self, run_id: str, node_id: str, active_run: ActiveRun) -> dict[str, Any]:
         project = self.project_service.require_project()
@@ -154,10 +207,10 @@ class RunService:
             return {'status': 'ok', 'outputs': []}
         interface = self.project_service.latest_interface(node_id)
         if interface is None:
-            return {'status': 'error', 'error': f'Notebook `{node_id}` has no parsed interface.'}
+            return {'status': 'error', 'node_id': node_id, 'error': f'Notebook `{node_id}` has no parsed interface.'}
         issues = interface.get('issues', [])
         if any(issue['severity'] == ValidationSeverity.ERROR.value for issue in issues):
-            return {'status': 'error', 'error': f'Notebook `{node_id}` has validation errors.'}
+            return {'status': 'error', 'node_id': node_id, 'error': f'Notebook `{node_id}` has validation errors.'}
         notebook_path = project.paths.notebook_path(node_id)
         source_hash = compute_source_hash(notebook_path)
         bindings = self._bindings_for_node(node_id)
@@ -185,12 +238,38 @@ class RunService:
         def remember_process(process) -> None:
             active_run.process = process
 
+        def record_progress(progress_payload: dict[str, object]) -> None:
+            started_at = active_run.current_node_started_at or utc_now_iso()
+            total_cells = progress_payload.get('total_cells')
+            project.state_db.upsert_orchestrator_execution_meta(
+                node_id=node_id,
+                run_id=run_id,
+                status='running',
+                started_at=started_at,
+                current_cell=cast(dict[str, Any], progress_payload),
+                total_cells=int(total_cells) if isinstance(total_cells, int) else None,
+            )
+            self.project_service.event_service.publish(
+                'run.progress',
+                project_id=project.metadata.project_id,
+                graph_version=int(self.project_service.graph().meta['graph_version']),
+                payload={
+                    'run_id': run_id,
+                    'node_id': node_id,
+                    'started_at': started_at,
+                    'current_cell': progress_payload,
+                },
+            )
+
         result = self.worker_runner.run(
             manifest,
             temp_dir=project.paths.uploads_temp_dir,
             cancel_event=active_run.cancel_event,
             on_process_started=remember_process,
+            on_progress=record_progress,
         )
+        if result.get('status') != 'ok':
+            result.setdefault('node_id', node_id)
         raw_outputs = result.get('outputs')
         outputs = cast(list[dict[str, Any]], raw_outputs) if isinstance(raw_outputs, list) else []
         for output in outputs:
@@ -214,6 +293,10 @@ class RunService:
             run_id = str(uuid.uuid4())
             active = ActiveRun(run_id=run_id, cancel_event=Event(), node_ids=plan)
             self._active_run = active
+            self._orchestrator_node_states = {
+                node_id: OrchestratorNodeState(node_id=node_id, run_id=run_id, status='queued')
+                for node_id in plan
+            }
         try:
             graph_version = int(self.project_service.graph().meta['graph_version'])
             project.state_db.record_run(
@@ -239,14 +322,67 @@ class RunService:
             )
             for index, current_node_id in enumerate(plan, start=1):
                 active.current_node = current_node_id
+                active.current_node_started_at = utc_now_iso()
+                with self._lock:
+                    self._orchestrator_node_states[current_node_id] = OrchestratorNodeState(
+                        node_id=current_node_id,
+                        run_id=run_id,
+                        status='running',
+                        started_at=active.current_node_started_at,
+                    )
+                project.state_db.upsert_orchestrator_execution_meta(
+                    node_id=current_node_id,
+                    run_id=run_id,
+                    status='running',
+                    started_at=active.current_node_started_at,
+                    current_cell=None,
+                )
                 self.project_service.event_service.publish(
                     'run.progress',
                     project_id=project.metadata.project_id,
                     graph_version=graph_version,
-                    payload={'run_id': run_id, 'node_id': current_node_id, 'step': index, 'total_steps': len(plan)},
+                    payload={
+                        'run_id': run_id,
+                        'node_id': current_node_id,
+                        'step': index,
+                        'total_steps': len(plan),
+                        'started_at': active.current_node_started_at,
+                    },
                 )
                 result = self._run_single_node(run_id, current_node_id, active)
+                progress = result.get('progress') if isinstance(result.get('progress'), dict) else None
+                total_cells = progress.get('total_cells') if isinstance(progress, dict) else None
+                current_cell_number = progress.get('cell_number') if isinstance(progress, dict) else None
+                if progress is not None:
+                    project.state_db.upsert_orchestrator_execution_meta(
+                        node_id=current_node_id,
+                        run_id=run_id,
+                        status='running',
+                        started_at=active.current_node_started_at or utc_now_iso(),
+                        current_cell=cast(dict[str, Any], progress),
+                        total_cells=int(total_cells) if isinstance(total_cells, int) else None,
+                    )
                 if result['status'] == 'cancelled':
+                    finished_at = utc_now_iso()
+                    with self._lock:
+                        self._orchestrator_node_states[current_node_id] = OrchestratorNodeState(
+                            node_id=current_node_id,
+                            run_id=run_id,
+                            status='cancelled',
+                            started_at=active.current_node_started_at,
+                            completed_at=finished_at,
+                        )
+                    project.state_db.upsert_orchestrator_execution_meta(
+                        node_id=current_node_id,
+                        run_id=run_id,
+                        status='cancelled',
+                        started_at=active.current_node_started_at or finished_at,
+                        ended_at=finished_at,
+                        duration_seconds=self._elapsed_seconds(active.current_node_started_at, finished_at),
+                        current_cell=cast(dict[str, Any], progress) if progress is not None else None,
+                        total_cells=int(total_cells) if isinstance(total_cells, int) else None,
+                        last_completed_cell_number=int(current_cell_number) - 1 if isinstance(current_cell_number, int) and current_cell_number > 1 else None,
+                    )
                     cancelled_by_graph_edit = active.cancel_reason == 'graph_edit'
                     project.state_db.update_run_status(run_id, RunStatus.CANCELLED)
                     if cancelled_by_graph_edit:
@@ -259,6 +395,27 @@ class RunService:
                     )
                     return {'run_id': run_id, 'status': 'cancelled', 'node_results': result}
                 if result['status'] != 'ok':
+                    finished_at = utc_now_iso()
+                    with self._lock:
+                        self._orchestrator_node_states[current_node_id] = OrchestratorNodeState(
+                            node_id=current_node_id,
+                            run_id=run_id,
+                            status='failed',
+                            started_at=active.current_node_started_at,
+                            completed_at=finished_at,
+                        )
+                    project.state_db.upsert_orchestrator_execution_meta(
+                        node_id=current_node_id,
+                        run_id=run_id,
+                        status='failed',
+                        started_at=active.current_node_started_at or finished_at,
+                        ended_at=finished_at,
+                        duration_seconds=self._elapsed_seconds(active.current_node_started_at, finished_at),
+                        current_cell=cast(dict[str, Any], progress) if progress is not None else None,
+                        total_cells=int(total_cells) if isinstance(total_cells, int) else None,
+                        last_completed_cell_number=int(current_cell_number) - 1 if isinstance(current_cell_number, int) and current_cell_number > 1 else None,
+                    )
+                    self._record_run_failure_notice(run_id=run_id, result=result)
                     project.state_db.update_run_status(run_id, RunStatus.FAILED, failure_json=result)
                     self.project_service.event_service.publish(
                         'run.failed',
@@ -267,6 +424,26 @@ class RunService:
                         payload={'run_id': run_id, 'failure': result},
                     )
                     return {'run_id': run_id, 'status': 'failed', 'node_results': result}
+                finished_at = utc_now_iso()
+                with self._lock:
+                    self._orchestrator_node_states[current_node_id] = OrchestratorNodeState(
+                        node_id=current_node_id,
+                        run_id=run_id,
+                        status='succeeded',
+                        started_at=active.current_node_started_at,
+                        completed_at=finished_at,
+                    )
+                project.state_db.upsert_orchestrator_execution_meta(
+                    node_id=current_node_id,
+                    run_id=run_id,
+                    status='succeeded',
+                    started_at=active.current_node_started_at or finished_at,
+                    ended_at=finished_at,
+                    duration_seconds=self._elapsed_seconds(active.current_node_started_at, finished_at),
+                    current_cell=None,
+                    total_cells=int(total_cells) if isinstance(total_cells, int) else None,
+                    last_completed_cell_number=int(total_cells) if isinstance(total_cells, int) else None,
+                )
             project.state_db.update_run_status(run_id, RunStatus.SUCCEEDED)
             self.project_service.event_service.publish(
                 'run.finished',
@@ -278,6 +455,30 @@ class RunService:
         finally:
             with self._lock:
                 self._active_run = None
+                self._orchestrator_node_states = {}
+
+    def _record_run_failure_notice(self, *, run_id: str, result: dict[str, Any]) -> None:
+        node_id = str(result.get('node_id') or 'project')
+        error = str(result.get('error') or 'Run failed.')
+        details = {
+            'run_id': run_id,
+            **result,
+        }
+        issue_id = build_issue_id(
+            node_id=node_id,
+            severity=ValidationSeverity.ERROR,
+            code='run_failed',
+            message=error,
+            details=details,
+        )
+        self.project_service.record_notice(
+            issue_id=issue_id,
+            node_id=None if node_id == 'project' else node_id,
+            severity=ValidationSeverity.ERROR,
+            code='run_failed',
+            message=error,
+            details=details,
+        )
 
     def _bindings_for_node(self, node_id: str) -> dict[str, dict[str, Any]]:
         interface = self.project_service.latest_interface(node_id)
@@ -419,3 +620,37 @@ class RunService:
             }
             for port in interface.get('outputs', []) + interface.get('assets', [])
         }
+
+    def _elapsed_seconds(self, started_at: str | None, ended_at: str) -> float | None:
+        if started_at is None:
+            return None
+        try:
+            started = datetime.fromisoformat(started_at.replace('Z', '+00:00'))
+            ended = datetime.fromisoformat(ended_at.replace('Z', '+00:00'))
+        except ValueError:
+            return None
+        return max((ended - started).total_seconds(), 0.0)
+
+
+def _affected_plan_nodes(active_run: ActiveRun, changed_node_ids: list[str], graph: GraphData) -> list[str]:
+    if not changed_node_ids:
+        return []
+    remaining_nodes = _remaining_plan_nodes(active_run)
+    if not remaining_nodes:
+        return []
+    graph_node_ids = {node.id for node in graph.nodes}
+    affected = set(changed_node_ids)
+    for node_id in changed_node_ids:
+        if node_id in graph_node_ids:
+            affected.update(downstream_closure(graph, node_id))
+    return [node_id for node_id in remaining_nodes if node_id in affected]
+
+
+def _remaining_plan_nodes(active_run: ActiveRun) -> list[str]:
+    if active_run.current_node is None:
+        return list(active_run.node_ids)
+    try:
+        current_index = active_run.node_ids.index(active_run.current_node)
+    except ValueError:
+        return list(active_run.node_ids)
+    return active_run.node_ids[current_index:]

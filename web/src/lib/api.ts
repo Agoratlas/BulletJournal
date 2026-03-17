@@ -142,6 +142,12 @@ export async function listSessions(projectId: string): Promise<SessionRecord[]> 
   return request(`/api/v1/projects/${projectId}/sessions`)
 }
 
+export async function stopSession(projectId: string, sessionId: string) {
+  return request<Record<string, unknown>>(`/api/v1/projects/${projectId}/sessions/${sessionId}/stop`, {
+    method: 'POST',
+  })
+}
+
 export function makeEditSessionLoadingUrl(projectId: string, sessionId: string): string {
   const params = new URLSearchParams({ project_id: projectId, session_id: sessionId })
   return `/?${params.toString()}`

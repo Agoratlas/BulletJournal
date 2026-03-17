@@ -77,6 +77,11 @@ class ArtifactService:
                 'version_id': version_id,
             },
         )
+        if self.project_service.run_service is not None:
+            self.project_service.run_service.interrupt_active_run_if_nodes_affected(
+                [node_id],
+                self.project_service.graph(),
+            )
         GraphService(self.project_service).mark_downstream_stale([node_id])
         return self.get_artifact(node_id, artifact_name)
 

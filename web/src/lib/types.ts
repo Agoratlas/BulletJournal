@@ -1,5 +1,5 @@
 export type ArtifactState = 'ready' | 'stale' | 'pending'
-export type NodeState = 'ready' | 'stale' | 'pending' | 'idle' | 'error' | 'running' | 'mixed'
+export type NodeState = 'ready' | 'stale' | 'pending' | 'idle' | 'error' | 'running' | 'queued' | 'mixed'
 export type NoticeSeverity = 'error' | 'warning'
 
 export type Port = {
@@ -51,6 +51,30 @@ export type NodeRecord = {
     assets: Port[]
     docs: string | null
     issues: ValidationIssue[]
+  } | null
+  execution_meta?: {
+    node_id: string
+    run_id: string
+    status: 'running' | 'succeeded' | 'failed' | 'cancelled'
+    started_at: string
+    ended_at: string | null
+    duration_seconds: number | null
+    total_cells: number | null
+    last_completed_cell_number: number | null
+    current_cell: {
+      cell_id: string
+      cell_number: number | null
+      total_cells: number | null
+      cell_code: string | null
+    } | null
+    updated_at: string
+  } | null
+  orchestrator_state?: {
+    node_id: string
+    run_id: string
+    status: 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled'
+    started_at: string | null
+    completed_at: string | null
   } | null
   state: NodeState
 }
@@ -122,15 +146,44 @@ export type CheckpointRecord = {
 }
 
 export type TemplateRecord = {
-  kind: string
+  kind: 'template' | 'pipeline'
   ref: string
   title: string
   source: string
+  description?: string
   source_text?: string
   source_hash?: string
+  definition?: {
+    title?: string
+    description?: string
+    nodes?: Array<{
+      id: string
+      kind: 'notebook' | 'file_input'
+      title: string
+      template_ref?: string
+      artifact_name?: string
+      ui?: {
+        artifact_name?: string
+      }
+    }>
+    edges?: Array<{
+      source_node: string
+      source_port: string
+      target_node: string
+      target_port: string
+    }>
+    layout?: Array<{
+      node_id: string
+      x: number
+      y: number
+      w: number
+      h: number
+    }>
+  }
 }
 
 export type ProjectSnapshot = {
+  server_time: string
   project: {
     project_id: string
     title: string
@@ -178,6 +231,7 @@ export type ProjectOpenResponse = ProjectSnapshot
 export type GraphPatchOperation =
   | { type: 'add_notebook_node'; node_id: string; title: string; x?: number; y?: number; w?: number; h?: number; template_ref?: string; source_text?: string; ui?: { origin?: 'constant_value' | null } }
   | { type: 'add_file_input_node'; node_id: string; title: string; artifact_name?: string; x?: number; y?: number; w?: number; h?: number }
+  | { type: 'add_pipeline_template'; template_ref: string; x?: number; y?: number; node_id_prefix?: string | null }
   | { type: 'add_edge'; source_node: string; source_port: string; target_node: string; target_port: string }
   | { type: 'remove_edge'; edge_id: string }
   | { type: 'update_node_layout'; node_id: string; x: number; y: number; w?: number; h?: number }

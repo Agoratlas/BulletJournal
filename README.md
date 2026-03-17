@@ -10,7 +10,7 @@ and managed execution on top of Marimo notebooks.
 - Project format rooted in `graph/`, `notebooks/`, `artifacts/`, `metadata/`, and `checkpoints/`
 - Strict AST parsing for notebook inputs, outputs, assets, and notebook docs
 - Managed notebook execution in subprocesses with persisted artifact lineage and stale propagation
-- File input nodes and built-in notebook templates
+- File input nodes plus built-in notebook and pipeline templates
 - Checkpoint create/list/restore flows
 - A bundled ReactFlow-based web UI for browsing projects, nodes, artifacts, issues, and events
 

@@ -3,13 +3,14 @@ from __future__ import annotations
 import ast
 import json
 from pathlib import Path
+from textwrap import dedent
 
 from bulletjournal.domain.enums import ArtifactRole, ValidationSeverity
 from bulletjournal.domain.models import NotebookInterface, Port
 from bulletjournal.domain.models import ValidationIssue
 from bulletjournal.domain.type_system import normalize_type_expr
-from bulletjournal.parser.docs_parser import extract_notebook_docs
-from bulletjournal.parser.marimo_loader import iter_app_cells, load_module_ast
+from bulletjournal.parser.docs_parser import extract_notebook_docs_from_module
+from bulletjournal.parser.marimo_loader import iter_app_cells
 from bulletjournal.parser.source_hash import normalized_source_hash_text
 from bulletjournal.parser.validation import build_issue
 
@@ -18,9 +19,44 @@ ARTIFACT_CALLS = {'pull', 'pull_file', 'push', 'push_file'}
 
 
 def parse_notebook_interface(path: Path, node_id: str) -> NotebookInterface:
-    source_hash = normalized_source_hash_text(path.read_text(encoding='utf-8'))
-    module = load_module_ast(path)
+    source_text = path.read_text(encoding='utf-8')
+    source_hash = normalized_source_hash_text(source_text)
+    try:
+        module = ast.parse(source_text, filename=str(path))
+    except SyntaxError as exc:
+        return NotebookInterface(
+            node_id=node_id,
+            source_hash=source_hash,
+            issues=[
+                build_issue(
+                    node_id=node_id,
+                    severity=ValidationSeverity.ERROR,
+                    code='invalid_syntax',
+                    message=_syntax_error_message(exc),
+                    details=_syntax_error_details(exc),
+                )
+            ],
+        )
+    except Exception as exc:  # noqa: BLE001
+        return NotebookInterface(
+            node_id=node_id,
+            source_hash=source_hash,
+            issues=[
+                build_issue(
+                    node_id=node_id,
+                    severity=ValidationSeverity.ERROR,
+                    code='notebook_parse_failed',
+                    message=f'Failed to parse notebook: {exc}',
+                    details={'error_type': exc.__class__.__name__},
+                )
+            ],
+        )
+
     issues: list[ValidationIssue] = []
+    for statement in module.body:
+        unparsable_issue = _unparsable_cell_issue(statement, node_id=node_id)
+        if unparsable_issue is not None:
+            issues.append(unparsable_issue)
     if not _has_runtime_import(module):
         issues.append(
             build_issue(
@@ -35,6 +71,7 @@ def parse_notebook_interface(path: Path, node_id: str) -> NotebookInterface:
     outputs: list[Port] = []
     assets: list[Port] = []
     seen_names: set[str] = set()
+    exported_names: dict[str, int] = {}
     for cell in iter_app_cells(module):
         for statement in cell.body:
             alias_issue = _artifact_alias_issue(statement, node_id=node_id)
@@ -72,9 +109,10 @@ def parse_notebook_interface(path: Path, node_id: str) -> NotebookInterface:
                     outputs.append(port)
                 else:
                     assets.append(port)
+        _collect_duplicate_export_issues(cell, node_id=node_id, exported_names=exported_names, issues=issues)
 
     issues = sorted(issues, key=lambda item: (item.severity.value, item.code, item.message))
-    docs = extract_notebook_docs(path)
+    docs = extract_notebook_docs_from_module(module)
     return NotebookInterface(
         node_id=node_id,
         source_hash=source_hash,
@@ -84,6 +122,116 @@ def parse_notebook_interface(path: Path, node_id: str) -> NotebookInterface:
         docs=docs,
         issues=issues,
     )
+
+
+def _syntax_error_message(exc: SyntaxError) -> str:
+    message = exc.msg.strip() if isinstance(exc.msg, str) and exc.msg.strip() else 'invalid syntax'
+    if exc.lineno is None:
+        return f'Syntax error: {message}.'
+    return f'Syntax error on line {exc.lineno}: {message}.'
+
+
+def _syntax_error_details(exc: SyntaxError) -> dict[str, object]:
+    details: dict[str, object] = {}
+    if exc.lineno is not None:
+        details['line'] = exc.lineno
+    if exc.offset is not None:
+        details['column'] = exc.offset
+    if isinstance(exc.text, str) and exc.text.strip():
+        details['source'] = exc.text.rstrip('\n')
+    return details
+
+
+def _unparsable_cell_issue(statement: ast.stmt, *, node_id: str) -> ValidationIssue | None:
+    if not isinstance(statement, ast.Expr) or not isinstance(statement.value, ast.Call):
+        return None
+    call = statement.value
+    if not isinstance(call.func, ast.Attribute) or not isinstance(call.func.value, ast.Name):
+        return None
+    if call.func.value.id != 'app' or call.func.attr != '_unparsable_cell' or not call.args:
+        return None
+
+    raw_source = call.args[0]
+    if not isinstance(raw_source, ast.Constant) or not isinstance(raw_source.value, str):
+        return build_issue(
+            node_id=node_id,
+            severity=ValidationSeverity.ERROR,
+            code='invalid_syntax',
+            message='Marimo saved a cell that could not be parsed.',
+            details={'cell_line': statement.lineno},
+        )
+
+    cell_source = dedent(raw_source.value).strip('\n')
+    details: dict[str, object] = {'cell_line': statement.lineno, 'source': cell_source}
+    try:
+        ast.parse(cell_source)
+    except SyntaxError as exc:
+        if exc.lineno is not None:
+            details['line_in_cell'] = exc.lineno
+        if exc.offset is not None:
+            details['column'] = exc.offset
+        if isinstance(exc.text, str) and exc.text.strip():
+            details['source_line'] = exc.text.rstrip('\n')
+        message = exc.msg.strip() if isinstance(exc.msg, str) and exc.msg.strip() else 'invalid syntax'
+        return build_issue(
+            node_id=node_id,
+            severity=ValidationSeverity.ERROR,
+            code='invalid_syntax',
+            message=f'Syntax error in a Marimo cell: {message}.',
+            details=details,
+        )
+
+    return build_issue(
+        node_id=node_id,
+        severity=ValidationSeverity.ERROR,
+        code='invalid_syntax',
+        message='Marimo saved a cell that could not be parsed.',
+        details=details,
+    )
+
+
+def _collect_duplicate_export_issues(
+    cell: ast.FunctionDef | ast.AsyncFunctionDef,
+    *,
+    node_id: str,
+    exported_names: dict[str, int],
+    issues: list[ValidationIssue],
+) -> None:
+    for name in _cell_exported_names(cell):
+        first_line = exported_names.get(name)
+        if first_line is None:
+            exported_names[name] = cell.lineno
+            continue
+        issues.append(
+            build_issue(
+                node_id=node_id,
+                severity=ValidationSeverity.ERROR,
+                code='duplicate_cell_global',
+                message=f'Global name `{name}` is defined by multiple Marimo cells.',
+                details={'name': name, 'first_cell_line': first_line, 'duplicate_cell_line': cell.lineno},
+            )
+        )
+
+
+def _cell_exported_names(cell: ast.FunctionDef | ast.AsyncFunctionDef) -> list[str]:
+    exported: list[str] = []
+    for statement in cell.body:
+        if not isinstance(statement, ast.Return):
+            continue
+        exported.extend(_return_value_names(statement.value))
+    return exported
+
+
+def _return_value_names(node: ast.AST | None) -> list[str]:
+    if isinstance(node, ast.Name):
+        return [node.id]
+    if isinstance(node, ast.Tuple):
+        names: list[str] = []
+        for item in node.elts:
+            if isinstance(item, ast.Name):
+                names.append(item.id)
+        return names
+    return []
 
 
 def _has_runtime_import(module: ast.Module) -> bool:

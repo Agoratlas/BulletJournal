@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from bulletjournal.domain.errors import NotFoundError
@@ -37,6 +38,7 @@ class GraphService:
         active_run_interruption = None
         reparse_all = False
         stale_roots: set[str] = set()
+        interruption_roots: set[str] = set()
         pending_notebook_creates: list[tuple[str, str]] = []
         pending_notebook_deletes: list[str] = []
         pending_file_input_heads: list[str] = []
@@ -47,16 +49,27 @@ class GraphService:
                 node_id, source = self._add_notebook_node(graph, operation)
                 pending_notebook_creates.append((node_id, source))
                 reparse_all = True
+                interruption_roots.add(node_id)
             elif op_type == 'add_file_input_node':
                 node_id = self._add_file_input_node(graph, operation)
                 pending_file_input_heads.append(node_id)
+                interruption_roots.add(node_id)
+            elif op_type == 'add_pipeline_template':
+                created = self._add_pipeline_template(graph, operation)
+                pending_notebook_creates.extend(created['notebook_creates'])
+                pending_file_input_heads.extend(created['file_input_heads'])
+                reparse_all = True
+                interruption_roots.update(node_id for node_id, _ in created['notebook_creates'])
+                interruption_roots.update(created['file_input_heads'])
             elif op_type == 'add_edge':
                 self._add_edge(graph, operation)
                 stale_roots.add(str(operation['target_node']))
+                interruption_roots.add(str(operation['target_node']))
             elif op_type == 'remove_edge':
                 edge = self._remove_edge(graph, str(operation['edge_id']))
                 if edge is not None:
                     stale_roots.add(edge.target_node)
+                    interruption_roots.add(edge.target_node)
             elif op_type == 'update_node_layout':
                 self._update_layout(graph, operation)
             elif op_type == 'update_node_title':
@@ -66,6 +79,8 @@ class GraphService:
             elif op_type == 'delete_node':
                 deleted = self._delete_node(graph, str(operation['node_id']))
                 stale_roots.update(deleted['stale_roots'])
+                interruption_roots.update(deleted['stale_roots'])
+                interruption_roots.add(str(deleted['node_id']))
                 if deleted['delete_notebook_file']:
                     pending_notebook_deletes.append(str(deleted['node_id']))
                 pending_state_deletes.append(str(deleted['node_id']))
@@ -73,8 +88,11 @@ class GraphService:
             else:
                 raise GraphValidationError(f'Unsupported graph operation `{op_type}`.')
         self._validate_graph(graph)
-        if operations and self.project_service.run_service is not None:
-            active_run_interruption = self.project_service.run_service.interrupt_active_run_for_graph_edit()
+        if interruption_roots and self.project_service.run_service is not None:
+            active_run_interruption = self.project_service.run_service.interrupt_active_run_if_nodes_affected(
+                sorted(interruption_roots),
+                graph,
+            )
         graph = self.project_service.write_graph(graph)
         for node_id, source in pending_notebook_creates:
             self.project_service.require_project().paths.notebook_path(node_id).write_text(source, encoding='utf-8')
@@ -216,6 +234,106 @@ class GraphService:
         graph.layout.append(self._layout_entry(node_id, operation))
         return node_id
 
+    def _add_pipeline_template(self, graph: GraphData, operation: dict[str, Any]) -> dict[str, list[Any]]:
+        template_ref = str(operation['template_ref'])
+        pipeline = self.project_service.template_service.resolve_pipeline_template(template_ref)
+        definition = pipeline.definition
+        nodes = definition.get('nodes')
+        edges = definition.get('edges')
+        layout_rows = definition.get('layout')
+        if not isinstance(nodes, list) or not isinstance(edges, list) or not isinstance(layout_rows, list):
+            raise GraphValidationError(f'Pipeline template `{template_ref}` is malformed.')
+
+        layout_by_node = {
+            str(item['node_id']): item
+            for item in layout_rows
+            if isinstance(item, dict) and item.get('node_id') is not None
+        }
+        min_x = min((int(item.get('x', 0)) for item in layout_rows if isinstance(item, dict)), default=0)
+        min_y = min((int(item.get('y', 0)) for item in layout_rows if isinstance(item, dict)), default=0)
+        offset_x = int(operation.get('x', 80)) - min_x
+        offset_y = int(operation.get('y', 80)) - min_y
+        node_id_prefix = _normalize_node_id_prefix(operation.get('node_id_prefix'))
+        title_prefix = _normalize_title_prefix(operation.get('node_id_prefix'))
+
+        notebook_creates: list[tuple[str, str]] = []
+        file_input_heads: list[str] = []
+        node_id_map: dict[str, str] = {}
+        interfaces_by_node: dict[str, dict[str, Any]] = self.project_service.template_service.pipeline_node_interfaces(definition)
+
+        for raw_node in nodes:
+            if not isinstance(raw_node, dict):
+                raise GraphValidationError(f'Pipeline template `{template_ref}` contains an invalid node entry.')
+            template_node_id = str(raw_node.get('id') or '').strip()
+            if not template_node_id:
+                raise GraphValidationError(f'Pipeline template `{template_ref}` contains a node without an id.')
+            layout = layout_by_node.get(template_node_id)
+            if layout is None:
+                raise GraphValidationError(f'Pipeline template `{template_ref}` is missing layout for `{template_node_id}`.')
+            resolved_node_id = f'{node_id_prefix}{template_node_id}' if node_id_prefix else template_node_id
+            if any(node.id == resolved_node_id for node in graph.nodes) or resolved_node_id in node_id_map.values():
+                raise GraphValidationError(
+                    f'Pipeline template `{template_ref}` would create duplicate node `{resolved_node_id}`. Use a prefix to instantiate it.'
+                )
+            resolved_title = _apply_title_prefix(str(raw_node.get('title') or template_node_id), title_prefix)
+            kind = str(raw_node.get('kind') or '')
+            if kind == NodeKind.NOTEBOOK.value:
+                add_operation = {
+                    'node_id': resolved_node_id,
+                    'title': resolved_title,
+                    'template_ref': raw_node.get('template_ref'),
+                    'ui': raw_node.get('ui'),
+                    'x': int(layout.get('x', 80)) + offset_x,
+                    'y': int(layout.get('y', 80)) + offset_y,
+                    'w': int(layout.get('w', 320)),
+                    'h': int(layout.get('h', 220)),
+                }
+                node_id, source = self._add_notebook_node(graph, add_operation)
+                notebook_creates.append((node_id, source))
+            elif kind == NodeKind.FILE_INPUT.value:
+                add_operation = {
+                    'node_id': resolved_node_id,
+                    'title': resolved_title,
+                    'artifact_name': raw_node.get('artifact_name')
+                    or raw_node.get('ui', {}).get('artifact_name')
+                    if isinstance(raw_node.get('ui'), dict)
+                    else 'file',
+                    'x': int(layout.get('x', 80)) + offset_x,
+                    'y': int(layout.get('y', 80)) + offset_y,
+                    'w': int(layout.get('w', 320)),
+                    'h': int(layout.get('h', 220)),
+                }
+                node_id = self._add_file_input_node(graph, add_operation)
+                file_input_heads.append(node_id)
+            else:
+                raise GraphValidationError(f'Pipeline template `{template_ref}` contains unsupported node kind `{kind}`.')
+            node_id_map[template_node_id] = resolved_node_id
+
+        for raw_edge in edges:
+            if not isinstance(raw_edge, dict):
+                raise GraphValidationError(f'Pipeline template `{template_ref}` contains an invalid edge entry.')
+            source_node = node_id_map.get(str(raw_edge.get('source_node') or ''))
+            target_node = node_id_map.get(str(raw_edge.get('target_node') or ''))
+            if source_node is None or target_node is None:
+                raise GraphValidationError(f'Pipeline template `{template_ref}` references an unknown edge endpoint.')
+            source_interface = interfaces_by_node.get(str(raw_edge.get('source_node') or ''))
+            target_interface = interfaces_by_node.get(str(raw_edge.get('target_node') or ''))
+            if source_interface is None or target_interface is None:
+                raise GraphValidationError(f'Pipeline template `{template_ref}` could not resolve node interfaces.')
+            self._add_edge_from_interfaces(
+                graph,
+                {
+                    'source_node': source_node,
+                    'source_port': str(raw_edge.get('source_port') or ''),
+                    'target_node': target_node,
+                    'target_port': str(raw_edge.get('target_port') or ''),
+                },
+                source_interface=source_interface,
+                target_interface=target_interface,
+            )
+
+        return {'notebook_creates': notebook_creates, 'file_input_heads': file_input_heads}
+
     def _add_edge(self, graph: GraphData, operation: dict[str, Any]) -> None:
         source_node = str(operation['source_node'])
         source_port = str(operation['source_port'])
@@ -228,6 +346,25 @@ class GraphService:
         target_interface = self.project_service.latest_interface(target_node)
         if source_interface is None or target_interface is None:
             raise GraphValidationError('Cannot connect nodes without parsed interfaces.')
+        self._add_edge_from_interfaces(
+            graph,
+            operation,
+            source_interface=source_interface,
+            target_interface=target_interface,
+        )
+
+    def _add_edge_from_interfaces(
+        self,
+        graph: GraphData,
+        operation: dict[str, Any],
+        *,
+        source_interface: dict[str, Any],
+        target_interface: dict[str, Any],
+    ) -> None:
+        source_node = str(operation['source_node'])
+        source_port = str(operation['source_port'])
+        target_node = str(operation['target_node'])
+        target_port = str(operation['target_port'])
         source_type = _port_data_type(source_interface.get('outputs', []) + source_interface.get('assets', []), source_port)
         target_type = _port_data_type(target_interface.get('inputs', []), target_port)
         if source_type is None:
@@ -346,3 +483,22 @@ def _port_data_type(ports: list[dict[str, Any]], name: str) -> str | None:
         if port['name'] == name:
             return str(port['data_type'])
     return None
+
+
+def _normalize_node_id_prefix(value: Any) -> str:
+    if value is None:
+        return ''
+    normalized = re.sub(r'[^a-z0-9_]+', '_', str(value).strip().lower())
+    normalized = re.sub(r'_+', '_', normalized).strip('_')
+    return f'{normalized}_' if normalized else ''
+
+
+def _normalize_title_prefix(value: Any) -> str:
+    if value is None:
+        return ''
+    normalized = str(value).strip()
+    return f'{normalized} ' if normalized else ''
+
+
+def _apply_title_prefix(title: str, prefix: str) -> str:
+    return f'{prefix}{title}' if prefix else title

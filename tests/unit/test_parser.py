@@ -25,3 +25,24 @@ def test_parser_rejects_alias_calls() -> None:
     interface = parse_notebook_interface(notebook, node_id='bad_notebook_alias')
 
     assert any(issue.severity == ValidationSeverity.ERROR for issue in interface.issues)
+
+
+def test_parser_reports_duplicate_cell_globals() -> None:
+    notebook = FIXTURES / 'bad_notebook_duplicate_globals.py'
+    interface = parse_notebook_interface(notebook, node_id='bad_notebook_duplicate_globals')
+
+    assert any(issue.code == 'duplicate_cell_global' for issue in interface.issues)
+
+
+def test_parser_reports_syntax_errors() -> None:
+    notebook = FIXTURES / 'bad_notebook_syntax.py'
+    interface = parse_notebook_interface(notebook, node_id='bad_notebook_syntax')
+
+    assert any(issue.code == 'invalid_syntax' for issue in interface.issues)
+
+
+def test_parser_reports_unparsable_marimo_cells() -> None:
+    notebook = FIXTURES / 'bad_notebook_unparsable_cell.py'
+    interface = parse_notebook_interface(notebook, node_id='bad_notebook_unparsable_cell')
+
+    assert any(issue.code == 'invalid_syntax' for issue in interface.issues)

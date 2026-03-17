@@ -515,7 +515,7 @@ def test_reparse_input_port_removal_disconnects_edges_and_stales_node_outputs(tm
     assert 'edges_removed_for_port_change' in warning_codes
 
 
-def test_graph_edit_interrupts_active_run_and_records_dismissible_warning(tmp_path) -> None:
+def test_notebook_edit_interrupts_active_run_and_records_dismissible_warning(tmp_path) -> None:
     project_root = init_project_root(tmp_path / 'project').root
     app = create_app(project_path=project_root)
     client = TestClient(app)
@@ -544,16 +544,116 @@ def test_graph_edit_interrupts_active_run_and_records_dismissible_warning(tmp_pa
     notebook_path.write_text(
         """
 import marimo
-import time
 
 app = marimo.App()
 
 with app.setup:
     from bulletjournal.runtime import artifacts
+    import time
 
 @app.cell
-def _():
+def _(time):
     time.sleep(5)
+    artifacts.push(1, name='value', data_type=int, is_output=True)
+    return
+
+if __name__ == '__main__':
+    from bulletjournal.runtime.standalone import run_notebook_app
+
+    run_notebook_app(app, __file__)
+""".strip() + '\n',
+        encoding='utf-8',
+    )
+    container.project_service.reparse_notebook_by_path(notebook_path)
+
+    with TestClient(app) as threaded_client:
+        run_response: dict[str, object] = {}
+
+        def run_node_request() -> None:
+            response = threaded_client.post(
+                f'/api/v1/projects/{project_id}/nodes/slow_node/run',
+                json={'mode': 'run_stale', 'action': 'use_stale'},
+            )
+            run_response['status_code'] = response.status_code
+            run_response['body'] = response.json()
+
+        thread = threading.Thread(target=run_node_request)
+        thread.start()
+
+        for _ in range(40):
+            if container.run_service._active_run is not None:
+                break
+            time.sleep(0.1)
+        else:
+            raise AssertionError('Expected a managed run to become active.')
+
+        notebook_path.write_text(
+            notebook_path.read_text(encoding='utf-8').replace(
+                "artifacts.push(1, name='value', data_type=int, is_output=True)",
+                "artifacts.push(2, name='value', data_type=int, is_output=True)",
+            ),
+            encoding='utf-8',
+        )
+        container.project_service.reparse_notebook_by_path(notebook_path)
+
+        thread.join(timeout=10)
+
+    assert run_response['status_code'] == 200
+    assert isinstance(run_response['body'], dict)
+    assert run_response['body']['status'] == 'cancelled'
+
+    snapshot = client.get(f'/api/v1/projects/{project_id}/snapshot').json()
+    warning = next(notice for notice in snapshot['notices'] if notice['code'] == 'run_interrupted_by_graph_edit')
+    assert warning['severity'] == 'warning'
+
+    dismissed = client.post(f"/api/v1/projects/{project_id}/notices/{warning['issue_id']}/dismiss")
+    assert dismissed.status_code == 200
+
+    refreshed = client.get(f'/api/v1/projects/{project_id}/snapshot').json()
+    assert all(notice['issue_id'] != warning['issue_id'] for notice in refreshed['notices'])
+
+
+def test_cosmetic_graph_edit_does_not_interrupt_active_run(tmp_path) -> None:
+    project_root = init_project_root(tmp_path / 'project').root
+    app = create_app(project_path=project_root)
+    client = TestClient(app)
+    container = app.state.container
+
+    opened = client.post('/api/v1/projects/open', json={'path': str(project_root)})
+    project_id = opened.json()['project']['project_id']
+    graph_version = opened.json()['graph']['meta']['graph_version']
+
+    patch = client.patch(
+        f'/api/v1/projects/{project_id}/graph',
+        json={
+            'graph_version': graph_version,
+            'operations': [
+                {
+                    'type': 'add_notebook_node',
+                    'node_id': 'slow_node',
+                    'title': 'Slow Node',
+                    'x': 100,
+                    'y': 100,
+                }
+            ],
+        },
+    )
+    assert patch.status_code == 200
+
+    notebook_path = project_root / 'notebooks' / 'slow_node.py'
+    notebook_path.write_text(
+        """
+import marimo
+
+app = marimo.App()
+
+with app.setup:
+    from bulletjournal.runtime import artifacts
+    import time
+
+@app.cell
+def _(time):
+    time.sleep(2)
     artifacts.push(1, name='value', data_type=int, is_output=True)
     return
 
@@ -601,23 +701,16 @@ if __name__ == '__main__':
             },
         )
         assert edited.status_code == 200
-        assert edited.json()['interrupted_run'] is not None
+        assert edited.json()['interrupted_run'] is None
 
         thread.join(timeout=10)
 
     assert run_response['status_code'] == 200
     assert isinstance(run_response['body'], dict)
-    assert run_response['body']['status'] == 'cancelled'
+    assert run_response['body']['status'] == 'succeeded'
 
     snapshot = client.get(f'/api/v1/projects/{project_id}/snapshot').json()
-    warning = next(notice for notice in snapshot['notices'] if notice['code'] == 'run_interrupted_by_graph_edit')
-    assert warning['severity'] == 'warning'
-
-    dismissed = client.post(f"/api/v1/projects/{project_id}/notices/{warning['issue_id']}/dismiss")
-    assert dismissed.status_code == 200
-
-    refreshed = client.get(f'/api/v1/projects/{project_id}/snapshot').json()
-    assert all(notice['issue_id'] != warning['issue_id'] for notice in refreshed['notices'])
+    assert all(notice['code'] != 'run_interrupted_by_graph_edit' for notice in snapshot['notices'])
 
 
 def test_run_stale_noops_when_outputs_are_already_ready(tmp_path) -> None:
@@ -657,6 +750,201 @@ def test_run_stale_noops_when_outputs_are_already_ready(tmp_path) -> None:
     )
     assert second_run.status_code == 200
     assert second_run.json()['status'] == 'noop'
+
+
+def test_run_stale_succeeds_while_edit_session_for_same_node_is_open(tmp_path) -> None:
+    project_root = init_project_root(tmp_path / 'project').root
+    app = create_app(project_path=project_root)
+
+    with TestClient(app) as client:
+        opened = client.post('/api/v1/projects/open', json={'path': str(project_root)})
+        project_id = opened.json()['project']['project_id']
+        graph_version = opened.json()['graph']['meta']['graph_version']
+
+        patch = client.patch(
+            f'/api/v1/projects/{project_id}/graph',
+            json={
+                'graph_version': graph_version,
+                'operations': [
+                    {
+                        'type': 'add_notebook_node',
+                        'node_id': 'sample_node',
+                        'title': 'Sample Node',
+                    }
+                ],
+            },
+        )
+        assert patch.status_code == 200
+
+        edit_run = client.post(
+            f'/api/v1/projects/{project_id}/nodes/sample_node/run',
+            json={'mode': 'edit_run', 'action': None},
+        )
+        assert edit_run.status_code == 200
+        assert edit_run.json()['mode'] == 'edit_run'
+
+        managed_run = client.post(
+            f'/api/v1/projects/{project_id}/nodes/sample_node/run',
+            json={'mode': 'run_stale', 'action': 'use_stale'},
+        )
+        assert managed_run.status_code == 200
+        assert managed_run.json()['status'] == 'succeeded'
+
+        snapshot = client.get(f'/api/v1/projects/{project_id}/snapshot').json()
+        assert all(notice['code'] != 'editor_already_open' for notice in snapshot['notices'])
+
+
+def test_failed_run_records_traceback_notice_for_node(tmp_path) -> None:
+    project_root = init_project_root(tmp_path / 'project').root
+    app = create_app(project_path=project_root)
+    client = TestClient(app)
+    container = app.state.container
+
+    opened = client.post('/api/v1/projects/open', json={'path': str(project_root)})
+    project_id = opened.json()['project']['project_id']
+    graph_version = opened.json()['graph']['meta']['graph_version']
+
+    patch = client.patch(
+        f'/api/v1/projects/{project_id}/graph',
+        json={
+            'graph_version': graph_version,
+            'operations': [
+                {
+                    'type': 'add_notebook_node',
+                    'node_id': 'broken_node',
+                    'title': 'Broken Node',
+                }
+            ],
+        },
+    )
+    assert patch.status_code == 200
+
+    notebook_path = project_root / 'notebooks' / 'broken_node.py'
+    notebook_path.write_text(
+        """
+import marimo
+
+app = marimo.App()
+
+with app.setup:
+    from bulletjournal.runtime import artifacts
+
+@app.cell
+def _():
+    artifacts.push(1, name='value', data_type=int, is_output=True)
+    raise RuntimeError('boom')
+
+if __name__ == '__main__':
+    from bulletjournal.runtime.standalone import run_notebook_app
+
+    run_notebook_app(app, __file__)
+""".strip() + '\n',
+        encoding='utf-8',
+    )
+    container.project_service.reparse_notebook_by_path(notebook_path)
+
+    run = client.post(
+        f'/api/v1/projects/{project_id}/nodes/broken_node/run',
+        json={'mode': 'run_stale', 'action': 'use_stale'},
+    )
+    assert run.status_code == 200
+    assert run.json()['status'] == 'failed'
+
+    snapshot = client.get(f'/api/v1/projects/{project_id}/snapshot').json()
+    notice = next(notice for notice in snapshot['notices'] if notice['code'] == 'run_failed')
+    assert notice['node_id'] == 'broken_node'
+    assert notice['details']['node_id'] == 'broken_node'
+    assert 'Traceback' in notice['details']['traceback']
+
+
+def test_run_all_is_blocked_by_pending_file_input(tmp_path) -> None:
+    project_root = init_project_root(tmp_path / 'project').root
+    app = create_app(project_path=project_root)
+    client = TestClient(app)
+    container = app.state.container
+
+    opened = client.post('/api/v1/projects/open', json={'path': str(project_root)})
+    project_id = opened.json()['project']['project_id']
+    graph_version = opened.json()['graph']['meta']['graph_version']
+
+    patch = client.patch(
+        f'/api/v1/projects/{project_id}/graph',
+        json={
+            'graph_version': graph_version,
+            'operations': [
+                {
+                    'type': 'add_file_input_node',
+                    'node_id': 'input_file',
+                    'title': 'Input File',
+                    'artifact_name': 'file',
+                },
+                {
+                    'type': 'add_notebook_node',
+                    'node_id': 'consumer',
+                    'title': 'Consumer',
+                },
+            ],
+        },
+    )
+    assert patch.status_code == 200
+
+    consumer_path = project_root / 'notebooks' / 'consumer.py'
+    consumer_source = """
+import marimo
+
+app = marimo.App()
+
+with app.setup:
+    from bulletjournal.runtime import artifacts
+
+@app.cell
+def _():
+    file_path = artifacts.pull_file(name='incoming')
+    return file_path
+
+@app.cell
+def _(file_path):
+    artifacts.push(len(file_path), name='path_length', data_type=int, is_output=True)
+    return
+
+if __name__ == '__main__':
+    from bulletjournal.runtime.standalone import run_notebook_app
+
+    run_notebook_app(app, __file__)
+""".strip() + '\n'
+    consumer_path.write_text(consumer_source, encoding='utf-8')
+    container.project_service.reparse_notebook_by_path(consumer_path)
+
+    graph_version = client.get(f'/api/v1/projects/{project_id}/snapshot').json()['graph']['meta']['graph_version']
+    connect = client.patch(
+        f'/api/v1/projects/{project_id}/graph',
+        json={
+            'graph_version': graph_version,
+            'operations': [
+                {
+                    'type': 'add_edge',
+                    'source_node': 'input_file',
+                    'source_port': 'file',
+                    'target_node': 'consumer',
+                    'target_port': 'incoming',
+                }
+            ],
+        },
+    )
+    assert connect.status_code == 200
+
+    run_all = client.post(
+        f'/api/v1/projects/{project_id}/runs/run-all',
+        json={'mode': 'run_stale'},
+    )
+    assert run_all.status_code == 400
+    detail = run_all.json()['detail']
+    assert 'Run queue is blocked by missing required inputs:' in detail
+    assert '"node_id": "consumer"' in detail
+    assert '"source": "input_file/file"' in detail
+
+    snapshot = client.get(f'/api/v1/projects/{project_id}/snapshot').json()
+    assert all(run['status'] not in {'queued', 'running', 'failed'} for run in snapshot['runs'])
 
 
 def test_inline_constant_value_notebook_can_run_immediately(tmp_path) -> None:

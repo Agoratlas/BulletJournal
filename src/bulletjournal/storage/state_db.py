@@ -43,7 +43,18 @@ class StateDB:
                     'INSERT OR IGNORE INTO schema_migrations (name, applied_at) VALUES (?, ?)',
                     (name, utc_now_iso()),
                 )
+            self._ensure_orchestrator_execution_meta_columns(connection)
             connection.commit()
+
+    def _ensure_orchestrator_execution_meta_columns(self, connection: sqlite3.Connection) -> None:
+        columns = {
+            str(row['name'])
+            for row in connection.execute('PRAGMA table_info(orchestrator_execution_meta)').fetchall()
+        }
+        if 'total_cells' not in columns:
+            connection.execute('ALTER TABLE orchestrator_execution_meta ADD COLUMN total_cells INTEGER NULL')
+        if 'last_completed_cell_number' not in columns:
+            connection.execute('ALTER TABLE orchestrator_execution_meta ADD COLUMN last_completed_cell_number INTEGER NULL')
 
     def set_project_meta(self, key: str, value: str) -> None:
         with self._connect() as connection:
@@ -463,6 +474,65 @@ class StateDB:
             if record['failure_json']:
                 record['failure_json'] = json.loads(str(record['failure_json']))
             records.append(record)
+        return records
+
+    def upsert_orchestrator_execution_meta(
+        self,
+        *,
+        node_id: str,
+        run_id: str,
+        status: str,
+        started_at: str,
+        ended_at: str | None = None,
+        duration_seconds: float | None = None,
+        current_cell: dict[str, Any] | None = None,
+        total_cells: int | None = None,
+        last_completed_cell_number: int | None = None,
+    ) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                'INSERT INTO orchestrator_execution_meta '
+                '(node_id, run_id, status, started_at, ended_at, duration_seconds, current_cell_json, total_cells, last_completed_cell_number, updated_at) '
+                'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) '
+                'ON CONFLICT(node_id) DO UPDATE SET '
+                'run_id = excluded.run_id, '
+                'status = excluded.status, '
+                'started_at = excluded.started_at, '
+                'ended_at = excluded.ended_at, '
+                'duration_seconds = excluded.duration_seconds, '
+                'current_cell_json = excluded.current_cell_json, '
+                'total_cells = excluded.total_cells, '
+                'last_completed_cell_number = excluded.last_completed_cell_number, '
+                'updated_at = excluded.updated_at',
+                (
+                    node_id,
+                    run_id,
+                    status,
+                    started_at,
+                    ended_at,
+                    duration_seconds,
+                    None if current_cell is None else json_dumps(current_cell),
+                    total_cells,
+                    last_completed_cell_number,
+                    utc_now_iso(),
+                ),
+            )
+            connection.commit()
+
+    def list_orchestrator_execution_meta(self) -> dict[str, dict[str, Any]]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                'SELECT * FROM orchestrator_execution_meta ORDER BY updated_at DESC, node_id ASC'
+            ).fetchall()
+        records: dict[str, dict[str, Any]] = {}
+        for row in rows:
+            record = dict(row)
+            if record['current_cell_json']:
+                record['current_cell'] = json.loads(str(record['current_cell_json']))
+            else:
+                record['current_cell'] = None
+            del record['current_cell_json']
+            records[str(record['node_id'])] = record
         return records
 
     def abort_inflight_runs(self) -> None:

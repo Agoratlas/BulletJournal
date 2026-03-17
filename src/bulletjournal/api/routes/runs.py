@@ -36,3 +36,10 @@ def list_sessions(project_id: str, request: Request):
     container = request.app.state.container
     container.project_service.require_project_id(project_id)
     return container.run_service.list_sessions()
+
+
+@router.post('/sessions/{session_id}/stop')
+def stop_session(project_id: str, session_id: str, request: Request):
+    container = request.app.state.container
+    container.project_service.require_project_id(project_id)
+    return container.run_service.stop_session(session_id)

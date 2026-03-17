@@ -24,32 +24,45 @@ class NotebookService:
             raise FileNotFoundError(f'Notebook file not found: {notebook_path}')
         previous = project.state_db.latest_interface_json(node_id)
         interface = parse_notebook_interface(notebook_path, node_id=node_id)
-        removed_edges = self._sync_ports(node_id, previous, interface)
-        durable_warnings = self._removed_edge_warnings(node_id=node_id, removed_edges=removed_edges)
         interface_payload = interface.to_dict()
-        project.state_db.save_notebook_revision(node_id, interface.source_hash, interface.docs, interface_payload)
+        blocking_errors = [issue for issue in interface.issues if issue.severity == ValidationSeverity.ERROR]
         project.state_db.replace_validation_issues(node_id, interface.issues)
-        for warning in durable_warnings:
-            self.project_service.record_notice(
-                issue_id=warning.issue_id,
-                node_id=warning.node_id,
-                severity=warning.severity,
-                code=warning.code,
-                message=warning.message,
-                details=warning.details,
-            )
-        changed = previous is not None and previous.get('source_hash') != interface.source_hash
-        if changed:
-            self._mark_node_outputs_stale(node_id)
-            from bulletjournal.services.graph_service import GraphService
+        removed_edges: list[str] = []
+        if not blocking_errors:
+            removed_edges = self._sync_ports(node_id, previous, interface)
+            durable_warnings = self._removed_edge_warnings(node_id=node_id, removed_edges=removed_edges)
+            project.state_db.save_notebook_revision(node_id, interface.source_hash, interface.docs, interface_payload)
+            for warning in durable_warnings:
+                self.project_service.record_notice(
+                    issue_id=warning.issue_id,
+                    node_id=warning.node_id,
+                    severity=warning.severity,
+                    code=warning.code,
+                    message=warning.message,
+                    details=warning.details,
+                )
+            changed = previous is not None and previous.get('source_hash') != interface.source_hash
+            if changed:
+                if self.project_service.run_service is not None:
+                    self.project_service.run_service.interrupt_active_run_if_nodes_affected(
+                        [node_id],
+                        self.project_service.graph(),
+                    )
+                self._mark_node_outputs_stale(node_id)
+                from bulletjournal.services.graph_service import GraphService
 
-            GraphService(self.project_service).mark_downstream_stale([node_id])
+                GraphService(self.project_service).mark_downstream_stale([node_id])
         graph = self.project_service.graph()
         self.project_service.event_service.publish(
             'notebook.reparsed',
             project_id=project.metadata.project_id,
             graph_version=int(graph.meta['graph_version']),
-            payload={'node_id': node_id, 'removed_edges': removed_edges, 'source_hash': interface.source_hash},
+            payload={
+                'node_id': node_id,
+                'removed_edges': removed_edges,
+                'source_hash': interface.source_hash,
+                'applied': not blocking_errors,
+            },
         )
         self.project_service.event_service.publish(
             'validation.updated',

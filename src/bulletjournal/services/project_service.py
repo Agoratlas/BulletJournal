@@ -13,6 +13,7 @@ from bulletjournal.storage.graph_store import GraphStore
 from bulletjournal.storage.object_store import ObjectStore
 from bulletjournal.storage.project_fs import ProjectPaths, init_project_root, is_project_root, load_project_json
 from bulletjournal.storage.state_db import StateDB
+from bulletjournal.utils import utc_now_iso
 
 
 @dataclass(slots=True)
@@ -163,15 +164,11 @@ class ProjectService:
         project = self.require_project()
         issue = project.state_db.get_validation_issue(issue_id)
         if issue is not None:
-            if issue['severity'] != ValidationSeverity.WARNING.value:
-                raise InvalidRequestError('Errors cannot be dismissed.')
             project.state_db.dismiss_validation_issue(issue_id)
         else:
             issue = project.state_db.get_persistent_notice(issue_id)
             if issue is None:
                 raise NotFoundError(f'Unknown notice `{issue_id}`.')
-            if issue['severity'] != ValidationSeverity.WARNING.value:
-                raise InvalidRequestError('Errors cannot be dismissed.')
             project.state_db.dismiss_persistent_notice(issue_id)
         graph_version = int(self.graph().meta['graph_version'])
         self.event_service.publish(
@@ -226,44 +223,63 @@ class ProjectService:
         graph = project.graph_store.read()
         interfaces = self.interfaces_by_node()
         validation = self.validation_issues()
+        validation_errors_by_node: dict[str, bool] = {}
+        for issue in validation:
+            if issue.get('severity') == ValidationSeverity.ERROR.value:
+                validation_errors_by_node[str(issue['node_id'])] = True
         notices = self.notices()
         artifacts = project.state_db.list_artifact_heads()
         artifact_states_by_node: dict[str, list[str]] = {}
         for artifact in artifacts:
             artifact_states_by_node.setdefault(str(artifact['node_id']), []).append(str(artifact['state']))
         runs = project.state_db.list_run_records()
+        execution_meta_by_node = project.state_db.list_orchestrator_execution_meta()
+        orchestrator_state_by_node = self.run_service.orchestrator_state() if self.run_service is not None else {}
         node_payload = []
         last_run_by_node: dict[str, bool] = {}
-        running_nodes: set[str] = set()
         for run in runs:
             raw_target = run.get('target_json')
             target = raw_target if isinstance(raw_target, dict) else {}
-            node_id_value = target.get('node_id') if isinstance(target, dict) else None
-            if node_id_value is not None:
-                node_key = str(node_id_value)
+            target_node_ids: list[str] = []
+            if isinstance(target, dict):
+                node_id_value = target.get('node_id')
+                if node_id_value is not None:
+                    target_node_ids.append(str(node_id_value))
+                raw_node_ids = target.get('node_ids')
+                if isinstance(raw_node_ids, list):
+                    target_node_ids.extend(str(node_id) for node_id in raw_node_ids)
+                raw_plan = target.get('plan')
+                if isinstance(raw_plan, list):
+                    target_node_ids.extend(str(node_id) for node_id in raw_plan)
+            deduped_target_node_ids = list(dict.fromkeys(target_node_ids))
+            for node_key in deduped_target_node_ids:
                 if node_key not in last_run_by_node:
                     last_run_by_node[node_key] = run['status'] == 'failed'
-                if run['status'] in {'queued', 'running'} and run.get('mode') != 'edit_run':
-                    running_nodes.add(node_key)
         for node in graph.nodes:
             interface = interfaces.get(node.id)
             template_status = None
             if node.template and interface is not None:
                 template_source = self.template_service.resolve_template_source(node.template.ref)
                 template_status = 'template' if interface.get('source_hash') == template_source.source_hash else 'modified'
+            orchestrator_state = orchestrator_state_by_node.get(node.id)
             node_payload.append(
                 {
                     **node.to_dict(),
                     'interface': interface,
                     'template_status': template_status,
+                    'execution_meta': execution_meta_by_node.get(node.id),
+                    'orchestrator_state': orchestrator_state,
                     'state': derive_node_state(
                         artifact_states_by_node.get(node.id, []),
                         run_failed=last_run_by_node.get(node.id, False),
-                        running=node.id in running_nodes,
+                        running=orchestrator_state is not None and orchestrator_state.get('status') == 'running',
+                        queued=orchestrator_state is not None and orchestrator_state.get('status') == 'queued',
+                        validation_failed=validation_errors_by_node.get(node.id, False),
                     ),
                 }
             )
         return {
+            'server_time': utc_now_iso(),
             'project': {
                 'project_id': project.metadata.project_id,
                 'title': project.metadata.title,

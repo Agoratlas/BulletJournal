@@ -1,0 +1,123 @@
+{
+  "title": "Iris Example Pipeline",
+  "description": "A ready-made multi-step example that ingests an iris CSV, enriches it, computes summary metrics, and produces report artifacts.",
+  "nodes": [
+    {
+      "id": "file",
+      "kind": "file_input",
+      "title": "File",
+      "artifact_name": "file"
+    },
+    {
+      "id": "example_1",
+      "kind": "notebook",
+      "title": "Example 1",
+      "template_ref": "example_1.py"
+    },
+    {
+      "id": "example_2",
+      "kind": "notebook",
+      "title": "Example 2",
+      "template_ref": "example_2.py"
+    },
+    {
+      "id": "example_3",
+      "kind": "notebook",
+      "title": "Example 3",
+      "template_ref": "example_3.py"
+    },
+    {
+      "id": "example_4",
+      "kind": "notebook",
+      "title": "Example 4",
+      "template_ref": "example_4.py"
+    }
+  ],
+  "edges": [
+    {
+      "source_node": "example_1",
+      "source_port": "iris_dataframe",
+      "target_node": "example_2",
+      "target_port": "iris_dataframe"
+    },
+    {
+      "source_node": "example_1",
+      "source_port": "iris_rows_count",
+      "target_node": "example_3",
+      "target_port": "expected_rows_count"
+    },
+    {
+      "source_node": "example_2",
+      "source_port": "iris_with_size_category",
+      "target_node": "example_3",
+      "target_port": "iris_with_size_category"
+    },
+    {
+      "source_node": "example_2",
+      "source_port": "iris_with_size_category",
+      "target_node": "example_4",
+      "target_port": "iris_with_size_category"
+    },
+    {
+      "source_node": "example_3",
+      "source_port": "avg_petal_length",
+      "target_node": "example_4",
+      "target_port": "avg_petal_length"
+    },
+    {
+      "source_node": "example_3",
+      "source_port": "row_count_ok",
+      "target_node": "example_4",
+      "target_port": "row_count_ok"
+    },
+    {
+      "source_node": "example_3",
+      "source_port": "size_category_counts",
+      "target_node": "example_4",
+      "target_port": "size_category_counts"
+    },
+    {
+      "source_node": "file",
+      "source_port": "file",
+      "target_node": "example_1",
+      "target_port": "iris_csv"
+    }
+  ],
+  "layout": [
+    {
+      "node_id": "example_1",
+      "x": 720,
+      "y": 280,
+      "w": 360,
+      "h": 220
+    },
+    {
+      "node_id": "example_2",
+      "x": 1160,
+      "y": 120,
+      "w": 360,
+      "h": 220
+    },
+    {
+      "node_id": "example_3",
+      "x": 1600,
+      "y": 360,
+      "w": 360,
+      "h": 220
+    },
+    {
+      "node_id": "example_4",
+      "x": 2120,
+      "y": 100,
+      "w": 360,
+      "h": 220
+    },
+    {
+      "node_id": "file",
+      "x": 260,
+      "y": 280,
+      "w": 360,
+      "h": 220
+    }
+  ]
+}

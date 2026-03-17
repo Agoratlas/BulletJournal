@@ -19,16 +19,23 @@ import ReactFlow, {
   useReactFlow,
 } from 'reactflow'
 
-import { artifactCounts, artifactFor, assetsForNode, badgeForNode, formatType, hiddenInputs, inputState, outputsForNode, visibleInputs } from '../lib/helpers'
+import { artifactCounts, artifactFor, assetsForNode, badgeForNode, formatDurationSeconds, formatType, hiddenInputs, inputState, outputsForNode, visibleInputs } from '../lib/helpers'
 import type { ArtifactState, NodeRecord, Port, ProjectSnapshot } from '../lib/types'
 import { ArtifactCounts } from './ArtifactCounts'
 import { ChevronDown } from './Icons'
 
 type GraphCanvasProps = {
   snapshot: ProjectSnapshot
+  serverNowMs?: number
+  serverNowClientAnchorMs?: number
+  activeRunNodeId?: string | null
+  queuedRunNodeIds?: string[]
+  completedRunNodeIds?: string[]
   onConnect: (connection: Connection) => void
   onEdgesChange: (changes: EdgeChange[]) => void
   onNodeSelect: (nodeId: string) => void
+  onNodeContextMenu: (nodeId: string, position: { x: number; y: number }) => void
+  onEditFileNode: (nodeId: string) => void
   onRunNode: (nodeId: string, mode: 'run_stale' | 'run_all' | 'edit_run') => void
   onOpenArtifacts: (nodeId: string) => void
   onCanvasInteract: () => void
@@ -41,10 +48,21 @@ type GraphCanvasProps = {
 
 const NON_RUNNABLE_NODE_KINDS = new Set(['file_input'])
 
+function validationIssuesForNode(snapshot: ProjectSnapshot, nodeId: string) {
+  return snapshot.validation_issues.filter((issue) => issue.node_id === nodeId)
+}
+
 type BulletJournalNodeData = {
   node: NodeRecord
   snapshot: ProjectSnapshot
+  serverNowMs: number
+  serverNowClientAnchorMs: number
+  activeRunNodeId: string | null
+  queuedRunNodeIds: string[]
+  completedRunNodeIds: string[]
   onSelect: (nodeId: string) => void
+  onNodeContextMenu: (nodeId: string, position: { x: number; y: number }) => void
+  onEditFileNode: (nodeId: string) => void
   onRunNode: (nodeId: string, mode: 'run_stale' | 'run_all' | 'edit_run') => void
   onOpenArtifacts: (nodeId: string) => void
 }
@@ -142,15 +160,23 @@ function PortRow({
 }
 
 const BulletJournalNodeCard = memo(({ data, selected }: NodeProps<BulletJournalNodeData>) => {
-  const { node, snapshot, onSelect, onRunNode, onOpenArtifacts } = data
+  const { node, snapshot, onSelect, onNodeContextMenu, onEditFileNode, onRunNode, onOpenArtifacts } = data
   const visible = visibleInputs(node)
   const hidden = hiddenInputs(node)
   const outputs = outputsForNode(node)
   const assets = assetsForNode(node)
   const counts = artifactCounts(snapshot, node.id)
-  const totalArtifacts = counts.ready + counts.stale + counts.pending
-  const progressPercent = totalArtifacts > 0 ? (counts.ready / totalArtifacts) * 100 : 0
   const badge = badgeForNode(snapshot, node)
+  const validationIssues = validationIssuesForNode(snapshot, node.id)
+  const blockingValidationIssues = validationIssues.filter((issue) => issue.severity === 'error')
+  const hasBlockingValidationIssues = blockingValidationIssues.length > 0
+  const validationSummary = blockingValidationIssues.map((issue) => issue.message).join('\n')
+  const isExecutionActive = data.activeRunNodeId === node.id
+  const isExecutionQueued = data.queuedRunNodeIds.includes(node.id)
+  const isExecutionComplete = data.completedRunNodeIds.includes(node.id)
+  const executionMeta = node.execution_meta
+  const serverNowMs = data.serverNowMs
+  const [now, setNow] = useState(() => Date.now())
   const [menuOpen, setMenuOpen] = useState(false)
   const menuRef = useRef<HTMLDivElement | null>(null)
   const connectionIntent = useStore((state: FlowConnectionState) => {
@@ -165,6 +191,14 @@ const BulletJournalNodeCard = memo(({ data, selected }: NodeProps<BulletJournalN
   })
 
   useEffect(() => {
+    if (!isExecutionActive) {
+      return
+    }
+    const interval = window.setInterval(() => setNow(Date.now()), 100)
+    return () => window.clearInterval(interval)
+  }, [isExecutionActive])
+
+  useEffect(() => {
     if (!menuOpen) {
       return
     }
@@ -177,26 +211,72 @@ const BulletJournalNodeCard = memo(({ data, selected }: NodeProps<BulletJournalN
     return () => window.removeEventListener('pointerdown', handlePointerDown)
   }, [menuOpen])
 
+  const shouldShowExecutionTimer = Boolean(executionMeta) && (isExecutionActive || executionMeta?.status === 'succeeded')
+  const approxServerNowMs = serverNowMs + (now - data.serverNowClientAnchorMs)
+  const totalCells = executionMeta?.total_cells ?? null
+  const runningCellNumber = executionMeta?.current_cell?.cell_number ?? null
+  const completedCells = executionMeta?.status === 'succeeded'
+    ? (totalCells ?? 0)
+    : isExecutionActive && typeof runningCellNumber === 'number' && runningCellNumber > 1
+      ? runningCellNumber - 1
+      : (executionMeta?.last_completed_cell_number ?? 0)
+  const completedProgressPercent = totalCells && totalCells > 0
+    ? Math.min((completedCells / totalCells) * 100, 100)
+    : 0
+  const runningSegmentPercent = totalCells && totalCells > 0 && isExecutionActive
+    ? 100 / totalCells
+    : 0
+  const runningSegmentLeftPercent = totalCells && totalCells > 0 && runningCellNumber && runningCellNumber > 0
+    ? Math.min(((runningCellNumber - 1) / totalCells) * 100, 100)
+    : completedProgressPercent
+  let executionTimerLabel: string | null = null
+  if (executionMeta && shouldShowExecutionTimer) {
+    if (isExecutionActive) {
+      const startedAt = Date.parse(executionMeta.started_at)
+      if (!Number.isNaN(startedAt)) {
+        executionTimerLabel = formatDurationSeconds((approxServerNowMs - startedAt) / 1000)
+      }
+    } else if (typeof executionMeta.duration_seconds === 'number') {
+      executionTimerLabel = formatDurationSeconds(executionMeta.duration_seconds)
+    }
+  }
+
   return (
-    <div className={`rf-node state-${node.state} ${selected ? 'is-selected' : ''}`} onClick={() => onSelect(node.id)}>
+    <div
+      className={`rf-node state-${node.state} ${selected ? 'is-selected' : ''} ${hasBlockingValidationIssues ? 'has-validation-error' : ''} ${isExecutionActive ? 'execution-active' : ''} ${isExecutionQueued ? 'execution-queued' : ''} ${isExecutionComplete ? 'execution-complete' : ''}`}
+      title={validationSummary || undefined}
+      onClick={() => onSelect(node.id)}
+      onContextMenu={(event) => {
+        event.preventDefault()
+        onSelect(node.id)
+        onNodeContextMenu(node.id, { x: event.clientX, y: event.clientY })
+      }}
+    >
       <div className="rf-node-header">
         <div className={`rf-badge tone-${badge.tone}`} title={badge.title}>{badge.label}</div>
         <div className="rf-node-titles">
           <h4>{node.title}</h4>
           <span>{node.id}</span>
         </div>
-        <button className="icon-button" title="View notebook docs" onClick={(event) => {
-          event.stopPropagation()
-          onSelect(node.id)
-        }}>i</button>
+        {hasBlockingValidationIssues ? <div className="rf-node-issue-pill" title={validationSummary}>{blockingValidationIssues.length} error{blockingValidationIssues.length === 1 ? '' : 's'}</div> : null}
+        {executionTimerLabel ? <div className={`rf-node-timer ${isExecutionActive ? 'running' : 'complete'}`} title={isExecutionActive ? 'Current orchestrated run time' : 'Most recent orchestrated run time'}>{executionTimerLabel}</div> : null}
       </div>
       <div className="rf-node-progress-track" aria-hidden="true">
         <div
           className="rf-node-progress"
           style={{
-            width: `${progressPercent}%`,
+            width: `${completedProgressPercent}%`,
           }}
         />
+        {isExecutionActive && runningSegmentPercent > 0 ? (
+          <div
+            className="rf-node-progress-current"
+            style={{
+              left: `${runningSegmentLeftPercent}%`,
+              width: `${runningSegmentPercent}%`,
+            }}
+          />
+        ) : null}
       </div>
       <div className="rf-node-body">
         <div className="rf-port-column">
@@ -282,10 +362,9 @@ function isCompatibleWithIntent(snapshot: ProjectSnapshot, node: NodeRecord, por
   return targetPort?.data_type === port.data_type
 }
 
-export function GraphCanvas({ snapshot, onConnect, onEdgesChange, onNodeSelect, onRunNode, onOpenArtifacts, onCanvasInteract, onCanvasClear, onNodeMove, onNodesDelete, draggedBlock, onBlockDrop }: GraphCanvasProps) {
+export function GraphCanvas({ snapshot, serverNowMs = Date.now(), serverNowClientAnchorMs = Date.now(), activeRunNodeId = null, queuedRunNodeIds = [], completedRunNodeIds = [], onConnect, onEdgesChange, onNodeSelect, onNodeContextMenu, onEditFileNode, onRunNode, onOpenArtifacts, onCanvasInteract, onCanvasClear, onNodeMove, onNodesDelete, draggedBlock, onBlockDrop }: GraphCanvasProps) {
   const { fitView, screenToFlowPosition } = useReactFlow()
   const [selectedEdgeIds, setSelectedEdgeIds] = useState<string[]>([])
-  const [nodes, setNodes] = useState<Node<BulletJournalNodeData>[]>([])
   const pendingPositionsRef = useRef<Record<string, { x: number; y: number }>>({})
   const hasFitViewRef = useRef(false)
   const shouldAutoFitOnMountRef = useRef(snapshot.graph.nodes.length > 0)
@@ -297,10 +376,17 @@ export function GraphCanvas({ snapshot, onConnect, onEdgesChange, onNodeSelect, 
       return {
         id: node.id,
         type: 'bulletJournalNode',
-        data: {
-          node,
-          snapshot,
-          onSelect: onNodeSelect,
+          data: {
+            node,
+            snapshot,
+            serverNowMs,
+            serverNowClientAnchorMs,
+            activeRunNodeId: activeRunNodeId ?? null,
+            queuedRunNodeIds: queuedRunNodeIds ?? [],
+            completedRunNodeIds: completedRunNodeIds ?? [],
+            onSelect: onNodeSelect,
+            onNodeContextMenu,
+            onEditFileNode,
           onRunNode,
           onOpenArtifacts,
         },
@@ -308,7 +394,9 @@ export function GraphCanvas({ snapshot, onConnect, onEdgesChange, onNodeSelect, 
         style: { width: layout?.w ?? 360 },
       }
     })
-  }, [snapshot])
+  }, [snapshot, serverNowMs, serverNowClientAnchorMs, activeRunNodeId, queuedRunNodeIds, completedRunNodeIds, onNodeContextMenu, onEditFileNode, onNodeSelect, onOpenArtifacts, onRunNode])
+
+  const [nodes, setNodes] = useState<Node<BulletJournalNodeData>[]>(mappedNodes)
 
   useEffect(() => {
     setNodes((current) => {
@@ -343,14 +431,6 @@ export function GraphCanvas({ snapshot, onConnect, onEdgesChange, onNodeSelect, 
     })
   }, [mappedNodes])
 
-  useEffect(() => {
-    if (hasFitViewRef.current || !shouldAutoFitOnMountRef.current || snapshot.graph.nodes.length === 0) {
-      return
-    }
-    hasFitViewRef.current = true
-    fitView({ padding: 0.18 })
-  }, [fitView, snapshot.graph.nodes.length])
-
   const edges = useMemo<Edge[]>(() => {
     return snapshot.graph.edges.map((edge) => ({
       id: edge.id,
@@ -380,6 +460,7 @@ export function GraphCanvas({ snapshot, onConnect, onEdgesChange, onNodeSelect, 
         nodeTypes={nodeTypes}
         minZoom={0.18}
         maxZoom={1.35}
+        zoomOnDoubleClick={false}
         connectionMode={ConnectionMode.Strict}
         snapToGrid
         snapGrid={[20, 20]}
@@ -424,6 +505,8 @@ export function GraphCanvas({ snapshot, onConnect, onEdgesChange, onNodeSelect, 
           const current = snapshot.graph.nodes.find((item) => item.id === node.id)
           if (current?.kind === 'notebook') {
             onRunNode(node.id, 'edit_run')
+          } else if (current?.kind === 'file_input') {
+            onEditFileNode(node.id)
           }
         }}
         onNodeDragStop={handleNodeDragStop}
@@ -441,6 +524,16 @@ export function GraphCanvas({ snapshot, onConnect, onEdgesChange, onNodeSelect, 
           onCanvasInteract()
         }}
         defaultEdgeOptions={{ markerEnd: { type: MarkerType.ArrowClosed } }}
+        onInit={() => {
+          if (hasFitViewRef.current || !shouldAutoFitOnMountRef.current) {
+            return
+          }
+          const frame = window.requestAnimationFrame(() => {
+            fitView({ padding: 0.18, minZoom: 0.18, duration: 0 })
+            hasFitViewRef.current = true
+          })
+          return () => window.cancelAnimationFrame(frame)
+        }}
         onDragOver={(event) => {
           if (!draggedBlock) {
             return

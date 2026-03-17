@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import os
 import subprocess
 import sys
 from pathlib import Path
 from types import ModuleType
-
 
 def load_notebook_module(path: Path) -> ModuleType:
     spec = importlib.util.spec_from_file_location(f'bulletjournal_notebook_{path.stem}', path)
@@ -17,12 +17,20 @@ def load_notebook_module(path: Path) -> ModuleType:
     return module
 
 
-def execute_notebook(path: Path) -> dict[str, object]:
+def execute_notebook(
+    path: Path,
+    *,
+    progress_path: Path | None = None,
+) -> dict[str, object]:
     module = load_notebook_module(path)
     app = getattr(module, 'app', None)
     if app is None:
         raise RuntimeError(f'Notebook {path} does not define `app`.')
+    if progress_path is not None:
+        os.environ['BULLETJOURNAL_PROGRESS_PATH'] = str(progress_path)
     result = app.run()
+    if progress_path is not None:
+        os.environ.pop('BULLETJOURNAL_PROGRESS_PATH', None)
     return {'result': result}
 
 

@@ -45,6 +45,14 @@ class AddFileInputNodeOperation(StrictModel):
     artifact_name: str = 'file'
 
 
+class AddPipelineTemplateOperation(StrictModel):
+    type: Literal['add_pipeline_template']
+    template_ref: str
+    x: int = 80
+    y: int = 80
+    node_id_prefix: str | None = None
+
+
 class AddEdgeOperation(StrictModel):
     type: Literal['add_edge']
     source_node: str
@@ -87,6 +95,7 @@ class DeleteNodeOperation(StrictModel):
 GraphOperation = Annotated[
     AddNotebookNodeOperation
     | AddFileInputNodeOperation
+    | AddPipelineTemplateOperation
     | AddEdgeOperation
     | RemoveEdgeOperation
     | UpdateNodeLayoutOperation
@@ -119,6 +128,7 @@ class FileUploadResponse(StrictModel):
 
 
 class SnapshotResponse(StrictModel):
+    server_time: str
     project: dict[str, Any]
     graph: dict[str, Any]
     validation_issues: list[dict[str, Any]]

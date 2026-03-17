@@ -31,6 +31,7 @@ Base path: `/api/v1`
 - `operations: []` where each item is one of:
   - `add_notebook_node { node_id, title, x?, y?, w?, h?, template_ref? }`
   - `add_file_input_node { node_id, title, x?, y?, w?, h? }`
+  - `add_pipeline_template { template_ref, x?, y?, node_id_prefix? }`
   - `add_edge { source_node, source_port, target_node, target_port }`
   - `remove_edge { edge_id }`
   - `update_node_layout { node_id, x, y, w, h }`

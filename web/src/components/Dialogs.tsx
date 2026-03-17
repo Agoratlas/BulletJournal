@@ -1,4 +1,4 @@
-import type { ChangeEvent, ReactNode } from 'react'
+import type { ChangeEvent, FormEvent, ReactNode } from 'react'
 import { useEffect, useMemo, useState } from 'react'
 
 import { Info, Plus, X } from './Icons'
@@ -8,19 +8,57 @@ type ModalProps = {
   onClose: () => void
   children: ReactNode
   contentClassName?: string
+  showCloseButton?: boolean
 }
 
-export function Modal({ title, onClose, children, contentClassName }: ModalProps) {
+export function Modal({ title, onClose, children, contentClassName, showCloseButton = true }: ModalProps) {
   return (
     <div className="modal-backdrop" onClick={onClose}>
       <div className={`modal-card${contentClassName ? ` ${contentClassName}` : ''}`} onClick={(event) => event.stopPropagation()}>
         <div className="modal-header">
           <h3>{title}</h3>
-          <button className="ghost-button" onClick={onClose}>Close</button>
+          {showCloseButton ? <button className="ghost-button" onClick={onClose}>Close</button> : null}
         </div>
         {children}
       </div>
     </div>
+  )
+}
+
+type ConfirmDialogProps = {
+  title: string
+  message: ReactNode
+  confirmLabel?: string
+  cancelLabel?: string
+  alternateLabel?: string
+  tone?: 'default' | 'danger'
+  onConfirm: () => void
+  onAlternate?: () => void
+  onClose: () => void
+}
+
+export function ConfirmDialog({
+  title,
+  message,
+  confirmLabel = 'Confirm',
+  cancelLabel = 'Cancel',
+  alternateLabel,
+  tone = 'default',
+  onConfirm,
+  onAlternate,
+  onClose,
+}: ConfirmDialogProps) {
+  return (
+    <Modal title={title} onClose={onClose} contentClassName="confirm-dialog-card" showCloseButton={false}>
+      <div className="confirm-dialog-body">
+        <div className="confirm-dialog-copy">{message}</div>
+        <div className="dialog-actions">
+          <button type="button" className="secondary" onClick={onClose}>{cancelLabel}</button>
+          {alternateLabel && onAlternate ? <button type="button" className="secondary" onClick={onAlternate}>{alternateLabel}</button> : null}
+          <button type="button" className={tone === 'danger' ? 'danger' : undefined} onClick={onConfirm}>{confirmLabel}</button>
+        </div>
+      </div>
+    </Modal>
   )
 }
 
@@ -65,9 +103,14 @@ export function CreateNotebookDialog({ blockLabel, suggestedTitle, existingIds, 
     }
   }
 
+  function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    void submit()
+  }
+
   return (
     <Modal title={`Create ${blockLabel}`} onClose={onClose}>
-      <div className="form-grid">
+      <form className="form-grid" onSubmit={handleSubmit}>
         <label>
           <span>Name</span>
           <input
@@ -104,10 +147,99 @@ export function CreateNotebookDialog({ blockLabel, suggestedTitle, existingIds, 
           )}
         </label>
         <div className="dialog-actions">
-          <button className="secondary" onClick={onClose}>Cancel</button>
-          <button onClick={submit} disabled={busy || invalidTitle || invalidId || duplicateId}>{busy ? 'Creating...' : submitLabel}</button>
+          <button type="button" className="secondary" onClick={onClose}>Cancel</button>
+          <button type="submit" disabled={busy || invalidTitle || invalidId || duplicateId}>{busy ? 'Creating...' : submitLabel}</button>
         </div>
-      </div>
+      </form>
+    </Modal>
+  )
+}
+
+type CreatePipelineDialogProps = {
+  pipelineLabel: string
+  existingIds: string[]
+  templateNodeIds: string[]
+  suggestedPrefix: string
+  requirePrefix: boolean
+  onClose: () => void
+  onCreate: (payload: { nodeIdPrefix: string | null }) => Promise<void>
+}
+
+export function CreatePipelineDialog({
+  pipelineLabel,
+  existingIds,
+  templateNodeIds,
+  suggestedPrefix,
+  requirePrefix,
+  onClose,
+  onCreate,
+}: CreatePipelineDialogProps) {
+  const [prefix, setPrefix] = useState(suggestedPrefix)
+  const [busy, setBusy] = useState(false)
+
+  useEffect(() => {
+    setPrefix(suggestedPrefix)
+    setBusy(false)
+  }, [suggestedPrefix])
+
+  const resolvedPrefix = useMemo(() => normalizeNodeId(prefix), [prefix])
+  const prefixedNodeIds = useMemo(() => {
+    return templateNodeIds.map((nodeId) => (resolvedPrefix ? `${resolvedPrefix}_${nodeId}` : nodeId))
+  }, [resolvedPrefix, templateNodeIds])
+  const duplicateIds = prefixedNodeIds.filter((nodeId) => existingIds.includes(nodeId))
+  const missingRequiredPrefix = requirePrefix && !resolvedPrefix
+  const invalid = missingRequiredPrefix || duplicateIds.length > 0
+
+  async function submit() {
+    if (invalid) {
+      return
+    }
+    setBusy(true)
+    try {
+      await onCreate({ nodeIdPrefix: resolvedPrefix || null })
+      onClose()
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    void submit()
+  }
+
+  return (
+    <Modal title={`Create ${pipelineLabel}`} onClose={onClose}>
+      <form className="form-grid" onSubmit={handleSubmit}>
+        <label>
+          <span>Node ID prefix</span>
+          <input
+            className={invalid ? 'invalid' : ''}
+            value={prefix}
+            onChange={(event) => setPrefix(event.target.value)}
+            placeholder="study_a"
+            spellCheck={false}
+          />
+          {missingRequiredPrefix ? (
+            <span className="field-note error">A prefix is required because this pipeline would reuse existing node IDs.</span>
+          ) : duplicateIds.length ? (
+            <span className="field-note error">These node IDs are still taken: {duplicateIds.join(', ')}</span>
+          ) : requirePrefix ? (
+            <span className="field-note">The prefix is added to every node in this pipeline.</span>
+          ) : (
+            <span className="field-note">Optional. Leave blank to keep the template node IDs as-is.</span>
+          )}
+        </label>
+        <label>
+          <span>Resulting node IDs</span>
+          <input value={prefixedNodeIds.join(', ')} readOnly spellCheck={false} />
+          <span className="field-note">Preview of the nodes created from this pipeline template.</span>
+        </label>
+        <div className="dialog-actions">
+          <button type="button" className="secondary" onClick={onClose}>Cancel</button>
+          <button type="submit" disabled={busy || invalid}>{busy ? 'Creating...' : 'Create pipeline'}</button>
+        </div>
+      </form>
     </Modal>
   )
 }
@@ -172,9 +304,14 @@ export function CreateConstantValueDialog({ suggestedTitle, existingIds, onClose
     }
   }
 
+  function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    void submit()
+  }
+
   return (
     <Modal title="Create Constant Value" onClose={onClose}>
-      <div className="form-grid">
+      <form className="form-grid" onSubmit={handleSubmit}>
         <label>
           <span>Name</span>
           <input
@@ -258,7 +395,7 @@ export function CreateConstantValueDialog({ suggestedTitle, existingIds, onClose
                 </label>
                 <div className="output-line-actions">
                   {outputs.length > 1 ? (
-                    <button className="danger icon-pill small-icon-pill" onClick={() => setOutputs((current) => current.filter((item) => item.key !== output.key))} aria-label={`Delete output ${index + 1}`}>
+                    <button type="button" className="danger icon-pill small-icon-pill" onClick={() => setOutputs((current) => current.filter((item) => item.key !== output.key))} aria-label={`Delete output ${index + 1}`}>
                       <X width={16} height={16} />
                     </button>
                   ) : null}
@@ -266,16 +403,16 @@ export function CreateConstantValueDialog({ suggestedTitle, existingIds, onClose
               </div>
             )
           })}
-          <button className="secondary add-output-button" onClick={() => setOutputs((current) => [...current, makeDefaultOutput(current.length)])}>
+          <button type="button" className="secondary add-output-button" onClick={() => setOutputs((current) => [...current, makeDefaultOutput(current.length)])}>
             <Plus width={16} height={16} />
             Add output
           </button>
         </div>
         <div className="dialog-actions">
-          <button className="secondary" onClick={onClose}>Cancel</button>
-          <button onClick={submit} disabled={busy || invalidTitle || invalidId || duplicateId || hasInvalidOutput || duplicateOutputNames.size > 0}>{busy ? 'Creating...' : 'Create block'}</button>
+          <button type="button" className="secondary" onClick={onClose}>Cancel</button>
+          <button type="submit" disabled={busy || invalidTitle || invalidId || duplicateId || hasInvalidOutput || duplicateOutputNames.size > 0}>{busy ? 'Creating...' : 'Create block'}</button>
         </div>
-      </div>
+      </form>
     </Modal>
   )
 }
@@ -284,25 +421,28 @@ type CreateFileDialogProps = {
   suggestedTitle: string
   existingIds: string[]
   onClose: () => void
+  mode?: 'create' | 'edit'
+  fixedNodeId?: string
+  initialArtifactName?: string
   onCreate: (payload: { nodeId: string; title: string; file: File | null; artifactName: string }) => Promise<void>
 }
 
-export function CreateFileDialog({ suggestedTitle, existingIds, onClose, onCreate }: CreateFileDialogProps) {
+export function CreateFileDialog({ suggestedTitle, existingIds, onClose, mode = 'create', fixedNodeId, initialArtifactName = 'file', onCreate }: CreateFileDialogProps) {
   const [title, setTitle] = useState(suggestedTitle)
-  const [nodeId, setNodeId] = useState(normalizeNodeId(suggestedTitle))
+  const [nodeId, setNodeId] = useState(fixedNodeId ?? normalizeNodeId(suggestedTitle))
   const [nodeIdTouched, setNodeIdTouched] = useState(false)
-  const [artifactName, setArtifactName] = useState('file')
+  const [artifactName, setArtifactName] = useState(initialArtifactName)
   const [file, setFile] = useState<File | null>(null)
   const [busy, setBusy] = useState(false)
 
   useEffect(() => {
     setTitle(suggestedTitle)
-    setNodeId(normalizeNodeId(suggestedTitle))
+    setNodeId(fixedNodeId ?? normalizeNodeId(suggestedTitle))
     setNodeIdTouched(false)
-    setArtifactName('file')
+    setArtifactName(initialArtifactName)
     setFile(null)
     setBusy(false)
-  }, [suggestedTitle])
+  }, [fixedNodeId, initialArtifactName, suggestedTitle])
 
   const resolvedId = useMemo(() => normalizeNodeId(nodeId), [nodeId])
   const duplicateId = existingIds.includes(resolvedId)
@@ -325,9 +465,14 @@ export function CreateFileDialog({ suggestedTitle, existingIds, onClose, onCreat
     }
   }
 
+  function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    void submit()
+  }
+
   return (
-    <Modal title="Create File" onClose={onClose}>
-      <div className="form-grid">
+    <Modal title={mode === 'edit' ? 'Edit File Block' : 'Create File'} onClose={onClose}>
+      <form className="form-grid" onSubmit={handleSubmit}>
         <label>
           <span>Name</span>
           <input
@@ -347,6 +492,7 @@ export function CreateFileDialog({ suggestedTitle, existingIds, onClose, onCreat
           <input
             className={duplicateId || invalidId ? 'invalid' : ''}
             value={nodeId}
+            disabled={mode === 'edit'}
             onChange={(event) => {
               setNodeIdTouched(true)
               setNodeId(normalizeNodeId(event.target.value))
@@ -359,11 +505,16 @@ export function CreateFileDialog({ suggestedTitle, existingIds, onClose, onCreat
           <span>Output name</span>
           <input
             value={artifactName}
+            disabled={mode === 'edit'}
             onChange={(event) => setArtifactName(normalizeFreeformSnakeCase(event.target.value))}
             placeholder="file"
             spellCheck={false}
           />
-          {invalidArtifactName ? <span className="field-note error">Output name is required.</span> : <span className="field-note">The uploaded file keeps its original extension.</span>}
+          {mode === 'edit'
+            ? <span className="field-note">Output names for existing file blocks are fixed.</span>
+            : invalidArtifactName
+              ? <span className="field-note error">Output name is required.</span>
+              : <span className="field-note">The uploaded file keeps its original extension.</span>}
         </label>
         <label>
           <span>Upload file</span>
@@ -374,13 +525,15 @@ export function CreateFileDialog({ suggestedTitle, existingIds, onClose, onCreat
               setFile(nextFile)
             }}
           />
-          {!file ? <span className="field-note">Optional. Leave blank to create a pending file input.</span> : <span className="field-note">The file node is created, then the file is uploaded.</span>}
+          {!file
+            ? <span className="field-note">{mode === 'edit' ? 'Optional. Leave blank to keep the current file state.' : 'Optional. Leave blank to create a pending file input.'}</span>
+            : <span className="field-note">{mode === 'edit' ? 'The new file uploads after saving changes.' : 'The file node is created, then the file is uploaded.'}</span>}
         </label>
         <div className="dialog-actions">
-          <button className="secondary" onClick={onClose}>Cancel</button>
-          <button onClick={submit} disabled={busy || invalidTitle || invalidId || duplicateId || invalidArtifactName}>{busy ? 'Creating...' : 'Create file'}</button>
+          <button type="button" className="secondary" onClick={onClose}>Cancel</button>
+          <button type="submit" disabled={busy || invalidTitle || invalidId || duplicateId || invalidArtifactName}>{busy ? (mode === 'edit' ? 'Saving...' : 'Creating...') : (mode === 'edit' ? 'Save changes' : 'Create file')}</button>
         </div>
-      </div>
+      </form>
     </Modal>
   )
 }

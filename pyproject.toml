@@ -57,7 +57,8 @@ where = ["src"]
 [tool.setuptools.package-data]
 bulletjournal = [
     "_web/**/*",
-    "templates/builtin/*.py",
+    "templates/builtin/**/*.py",
+    "templates/pipelines/**/*.json",
 ]
 
 [tool.pytest.ini_options]

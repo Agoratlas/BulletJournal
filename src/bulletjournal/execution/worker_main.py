@@ -1,15 +1,89 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 import traceback
+from collections import deque
 from pathlib import Path
 
 from bulletjournal.domain.enums import ArtifactRole, LineageMode
 from bulletjournal.domain.models import Port
 from bulletjournal.execution.manifests import RunManifest
 from bulletjournal.execution.marimo_adapter import execute_notebook
+from bulletjournal.parser.marimo_loader import iter_app_cells, load_module_ast
 from bulletjournal.runtime.context import Binding, RuntimeContext, activate_runtime_context
+
+
+def _write_progress(
+    progress_path: Path | None,
+    payload: dict[str, object],
+) -> None:
+    if progress_path is None:
+        return
+    progress_path.write_text(json.dumps(payload), encoding='utf-8')
+
+
+def _install_script_runner_progress_hooks(
+    *,
+    notebook_path: Path,
+    progress_path: Path | None,
+) -> None:
+    if progress_path is None:
+        return
+    from marimo._runtime.app.script_runner import AppScriptRunner
+
+    module = load_module_ast(notebook_path)
+    cell_order = iter_app_cells(module)
+    cell_number_by_index = {index: index + 1 for index in range(len(cell_order))}
+    total_cells = len(cell_order)
+
+    original_run_synchronous = AppScriptRunner._run_synchronous
+    original_run_asynchronous = AppScriptRunner._run_asynchronous
+
+    class ProgressDeque(deque):
+        def __init__(self, values: deque, runner: object) -> None:
+            super().__init__(values)
+            self._runner = runner
+            self._execution_index = 0
+
+        def popleft(self):  # type: ignore[override]
+            cell_id = super().popleft()
+            if total_cells > 0:
+                cell_number = cell_number_by_index.get(self._execution_index)
+                self._execution_index += 1
+                graph = getattr(self._runner, 'app').graph
+                cell_impl = graph.cells[cell_id]
+                _write_progress(
+                    progress_path,
+                    {
+                        'cell_id': str(cell_id),
+                        'cell_number': cell_number,
+                        'total_cells': total_cells,
+                        'cell_code': cell_impl.code,
+                    },
+                )
+            return cell_id
+
+    def _decorate_queue(runner: object) -> deque:
+        queue = getattr(runner, 'cells_to_run')
+        if getattr(runner, '_bulletjournal_progress_wrapped', False):
+            return queue
+        wrapped_queue = ProgressDeque(queue, runner)
+        setattr(runner, 'cells_to_run', wrapped_queue)
+        setattr(runner, '_bulletjournal_progress_wrapped', True)
+        return wrapped_queue
+
+    def patched_run_synchronous(self, post_execute_hooks):
+        _decorate_queue(self)
+        return original_run_synchronous(self, post_execute_hooks)
+
+    async def patched_run_asynchronous(self, post_execute_hooks):
+        _decorate_queue(self)
+        return await original_run_asynchronous(self, post_execute_hooks)
+
+    AppScriptRunner._run_synchronous = patched_run_synchronous
+    AppScriptRunner._run_asynchronous = patched_run_asynchronous
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -48,9 +122,14 @@ def main(argv: list[str] | None = None) -> int:
         bindings=bindings,
         outputs=outputs,
     )
+    progress_path = Path(manifest.progress_path) if manifest.progress_path else None
+    _install_script_runner_progress_hooks(
+        notebook_path=Path(manifest.notebook_path),
+        progress_path=progress_path,
+    )
     try:
         with activate_runtime_context(context):
-            execute_notebook(Path(manifest.notebook_path))
+            execute_notebook(Path(manifest.notebook_path), progress_path=progress_path)
     except Exception as exc:  # noqa: BLE001
         payload = {
             'status': 'error',

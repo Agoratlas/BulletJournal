@@ -2,10 +2,10 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import type { Connection, EdgeChange, Node } from 'reactflow'
 
-import { cancelRun, createCheckpoint, currentProject, dismissNotice, getSnapshot, initProject, listSessions, openProject, patchGraph, restoreCheckpoint, runAll, runNode, uploadFile } from './lib/api'
-import { GRID_SIZE, artifactCounts, artifactFor, badgeForNode, currentRun, formatTimestamp, globalArtifactCounts, hiddenInputNames, inputBindingSource, inputState, templateByRef } from './lib/helpers'
-import type { ArtifactRecord, NodeRecord, NoticeRecord, ProjectSnapshot } from './lib/types'
-import { CreateConstantValueDialog, CreateFileDialog, CreateNotebookDialog, Modal } from './components/Dialogs'
+import { cancelRun, createCheckpoint, currentProject, dismissNotice, getSnapshot, initProject, listSessions, openProject, patchGraph, restoreCheckpoint, runAll, runNode, stopSession, uploadFile } from './lib/api'
+import { GRID_SIZE, activeRunNodeId, artifactCounts, artifactFor, badgeForNode, currentRun, formatDurationSeconds, formatTimestamp, globalArtifactCounts, hiddenInputNames, inputBindingSource, inputState, queuedRunNodeIds, templateByRef } from './lib/helpers'
+import type { ArtifactRecord, NodeRecord, NoticeRecord, ProjectSnapshot, TemplateRecord } from './lib/types'
+import { ConfirmDialog, CreateConstantValueDialog, CreateFileDialog, CreateNotebookDialog, CreatePipelineDialog, Modal } from './components/Dialogs'
 import { ArtifactPreviewPanel } from './components/ArtifactPreview'
 import { ArtifactCounts } from './components/ArtifactCounts'
 import { GraphCanvas } from './components/GraphCanvas'
@@ -28,15 +28,53 @@ type PendingBlockCreation = {
   y: number
 }
 
+type FileNodeEditState = {
+  nodeId: string
+  title: string
+  artifactName: string
+}
+
+type NodeActionMenuState = {
+  nodeId: string
+  x: number
+  y: number
+}
+
+type PendingPipelineCreation = {
+  entry: PaletteEntry
+  x: number
+  y: number
+  template: TemplateRecord
+  suggestedPrefix: string
+  requirePrefix: boolean
+}
+
 const NEW_NODE_WIDTH = 360
 const NEW_NODE_HEIGHT = 220
 
 type ConstantValueType = 'int' | 'float' | 'bool' | 'str' | 'list' | 'dict' | 'object'
-type BlockCreateMode = 'notebook' | 'constant_value' | 'file'
+type BlockCreateMode = 'notebook' | 'constant_value' | 'file' | 'pipeline'
 
 type AppNotice = NoticeRecord & {
   origin: 'snapshot' | 'client'
 }
+
+type EditorSessionNoticeDetails = {
+  session_id: string
+  session_url: string
+  ready?: boolean
+}
+
+type ConfirmationState =
+  | {
+      kind: 'run-upstream'
+      nodeId: string
+      mode: 'run_stale' | 'run_all'
+      message: string
+    }
+  | {
+      kind: 'run-all'
+    }
 
 type OptimisticGraphState = {
   snapshot: ProjectSnapshot
@@ -49,7 +87,7 @@ type SnapshotLike = Pick<ProjectSnapshot, 'project' | 'graph' | 'validation_issu
 
 function blockCreateMode(entry: PaletteEntry): BlockCreateMode | null {
   if (entry.kind === 'pipeline') {
-    return null
+    return 'pipeline'
   }
   if (entry.kind === 'value_input') {
     return 'constant_value'
@@ -110,6 +148,21 @@ function runFailureMessage(response: Record<string, unknown>, fallback: string):
     }
   }
   return fallback
+}
+
+function isEditorOpenConflict(message: string): boolean {
+  return message.includes('An editor is open for this notebook.')
+}
+
+function editorSessionDetails(details: Record<string, unknown>): EditorSessionNoticeDetails | null {
+  if (typeof details.session_id !== 'string' || typeof details.session_url !== 'string') {
+    return null
+  }
+  return {
+    session_id: details.session_id,
+    session_url: details.session_url,
+    ready: typeof details.ready === 'boolean' ? details.ready : undefined,
+  }
 }
 
 function cloneSnapshot(snapshot: ProjectSnapshot): ProjectSnapshot {
@@ -176,6 +229,9 @@ function applyOptimisticGraphOperations(snapshot: ProjectSnapshot, operations: A
 
   for (const operation of operations) {
     const type = operation.type
+    if (type === 'add_pipeline_template') {
+      continue
+    }
     if (type === 'update_node_layout') {
       const nodeId = String(operation.node_id)
       const layout = next.graph.layout.find((entry) => entry.node_id === nodeId)
@@ -258,6 +314,57 @@ function setSnapshotData(queryClient: ReturnType<typeof useQueryClient>, project
   })
 }
 
+const SNAPSHOT_REFRESH_EVENTS = [
+  'artifact.state_changed',
+  'checkpoint.created',
+  'checkpoint.restored',
+  'graph.updated',
+  'notebook.reparsed',
+  'notice.created',
+  'notice.dismissed',
+  'project.opened',
+  'run.failed',
+  'run.finished',
+  'run.progress',
+  'run.queued',
+  'run.started',
+  'validation.updated',
+]
+
+function validationIssuesForNode(snapshot: ProjectSnapshot, nodeId: string) {
+  return snapshot.validation_issues.filter((issue) => issue.node_id === nodeId)
+}
+
+function formatIssueDetails(details: Record<string, unknown>): string | null {
+  const entries = Object.entries(details)
+  if (!entries.length) {
+    return null
+  }
+  return JSON.stringify(details, null, 2)
+}
+
+function nodeRunFailures(snapshot: ProjectSnapshot, nodeId: string) {
+  return snapshot.runs.filter((run) => {
+    if (run.status !== 'failed' || !run.failure_json) {
+      return false
+    }
+    if (typeof run.failure_json.node_id === 'string') {
+      return run.failure_json.node_id === nodeId
+    }
+    const target = run.target_json
+    if (typeof target.node_id === 'string') {
+      return target.node_id === nodeId
+    }
+    if (Array.isArray(target.plan)) {
+      return target.plan.includes(nodeId)
+    }
+    if (Array.isArray(target.node_ids)) {
+      return target.node_ids.includes(nodeId)
+    }
+    return false
+  })
+}
+
 function App() {
   const queryClient = useQueryClient()
   const [projectPath, setProjectPath] = useState('')
@@ -275,8 +382,13 @@ function App() {
   const [draggedPaletteEntry, setDraggedPaletteEntry] = useState<PaletteEntry | null>(null)
   const [dragPointer, setDragPointer] = useState<{ x: number; y: number } | null>(null)
   const [pendingBlockCreation, setPendingBlockCreation] = useState<PendingBlockCreation | null>(null)
+  const [pendingPipelineCreation, setPendingPipelineCreation] = useState<PendingPipelineCreation | null>(null)
+  const [fileNodeEdit, setFileNodeEdit] = useState<FileNodeEditState | null>(null)
+  const [nodeActionMenu, setNodeActionMenu] = useState<NodeActionMenuState | null>(null)
   const [optimisticGraph, setOptimisticGraph] = useState<OptimisticGraphState | null>(null)
   const [inspectorOpen, setInspectorOpen] = useState(false)
+  const [confirmationState, setConfirmationState] = useState<ConfirmationState | null>(null)
+  const [serverNowOffsetMs, setServerNowOffsetMs] = useState(0)
   const [themeMode, setThemeMode] = useState<ThemeMode>(() => {
     const stored = window.localStorage.getItem('bulletjournal-theme')
     if (stored === 'light' || stored === 'dark' || stored === 'system') {
@@ -312,6 +424,17 @@ function App() {
 
   const serverSnapshot = snapshotQuery.data ?? snapshot
   const liveSnapshot = optimisticGraph?.snapshot ?? serverSnapshot
+
+  useEffect(() => {
+    if (!liveSnapshot?.server_time) {
+      return
+    }
+    const parsedServerTime = Date.parse(liveSnapshot.server_time)
+    if (Number.isNaN(parsedServerTime)) {
+      return
+    }
+    setServerNowOffsetMs(parsedServerTime - Date.now())
+  }, [liveSnapshot?.server_time])
 
   function upsertClientNotice(notice: AppNotice) {
     setClientNotices((current) => {
@@ -384,9 +507,7 @@ function App() {
   }, [serverSnapshot])
 
   useEffect(() => {
-    if (selectedNodeId) {
-      setInspectorOpen(true)
-    }
+    setInspectorOpen(Boolean(selectedNodeId))
   }, [selectedNodeId])
 
   useEffect(() => {
@@ -476,9 +597,13 @@ function App() {
       }
       hadEventConnectionRef.current = true
     }
-    source.onmessage = () => {
+    const refreshSnapshot = () => {
       void queryClient.refetchQueries({ queryKey: ['snapshot', projectId], exact: true })
       void queryClient.refetchQueries({ queryKey: ['project-current'], exact: true })
+    }
+    source.onmessage = refreshSnapshot
+    for (const eventType of SNAPSHOT_REFRESH_EVENTS) {
+      source.addEventListener(eventType, refreshSnapshot)
     }
     source.addEventListener('stream.reset', () => {
       reportClientWarning(
@@ -497,6 +622,9 @@ function App() {
       void queryClient.refetchQueries({ queryKey: ['snapshot', projectId], exact: true })
     }
     return () => {
+      for (const eventType of SNAPSHOT_REFRESH_EVENTS) {
+        source.removeEventListener(eventType, refreshSnapshot)
+      }
       source.close()
     }
   }, [projectId, queryClient])
@@ -525,6 +653,17 @@ function App() {
     () => liveSnapshot?.graph.nodes.find((node) => node.id === selectedNodeId) ?? null,
     [liveSnapshot, selectedNodeId],
   )
+
+  useEffect(() => {
+    if (!nodeActionMenu) {
+      return
+    }
+    function handlePointerDown() {
+      setNodeActionMenu(null)
+    }
+    window.addEventListener('pointerdown', handlePointerDown)
+    return () => window.removeEventListener('pointerdown', handlePointerDown)
+  }, [nodeActionMenu])
 
   useEffect(() => {
     if (!liveSnapshot) {
@@ -614,22 +753,23 @@ function App() {
       },
     ]
     const templateEntries = (liveSnapshot?.templates ?? [])
-      .filter((template) => template.ref !== 'value_input.py')
+      .filter((template) => template.kind === 'template' && template.ref !== 'value_input.py')
       .map<PaletteEntry>((template) => ({
         key: `template:${template.ref}`,
         title: template.title,
-        description: template.ref,
+        description: template.description ?? template.ref,
         kind: 'template',
         templateRef: template.ref,
       }))
-    const pipelineEntries: PaletteEntry[] = [
-      {
-        key: 'pipeline-placeholder',
-        title: 'Pipeline templates coming later',
-        description: 'Reserved section for post-MVP pipeline templates.',
+    const pipelineEntries = (liveSnapshot?.templates ?? [])
+      .filter((template) => template.kind === 'pipeline')
+      .map<PaletteEntry>((template) => ({
+        key: `pipeline:${template.ref}`,
+        title: template.title,
+        description: template.description ?? template.ref,
         kind: 'pipeline',
-      },
-    ]
+        templateRef: template.ref,
+      }))
     const needle = paletteSearch.trim().toLowerCase()
     const allEntries = [...builtins, ...templateEntries, ...pipelineEntries]
     if (!needle) {
@@ -659,20 +799,6 @@ function App() {
       const response = await patchGraph(projectId, liveSnapshot.graph.meta.graph_version, operations as never)
       setSnapshotData(queryClient, projectId, (current) => mergeGraphIntoSnapshot(current, response))
       dismissClientNotice('graph-update')
-      if (response.interrupted_run) {
-        reportClientWarning(
-          `run-interrupted:${response.interrupted_run.run_id}`,
-          'run_interrupted_by_graph_edit',
-          'The current run was interrupted because the graph changed.',
-          {
-            nodeId: response.interrupted_run.node_id,
-            details: {
-              run_id: response.interrupted_run.run_id,
-              node_ids: response.interrupted_run.node_ids,
-            },
-          },
-        )
-      }
       await refreshSnapshot()
     } catch (err) {
       setOptimisticGraph(null)
@@ -719,14 +845,76 @@ function App() {
     ])
   }
 
+  async function handleCreatePipelineTemplate(templateRef: string, placement: { x: number; y: number }, nodeIdPrefix?: string | null) {
+    await mutateGraph([
+      {
+        type: 'add_pipeline_template',
+        template_ref: templateRef,
+        x: snapToGrid(placement.x),
+        y: snapToGrid(placement.y),
+        node_id_prefix: nodeIdPrefix ?? null,
+      },
+    ])
+  }
+
+  function pipelineTemplateByEntry(entry: PaletteEntry): TemplateRecord | null {
+    if (!liveSnapshot || !entry.templateRef) {
+      return null
+    }
+    return liveSnapshot.templates.find((template) => template.kind === 'pipeline' && template.ref === entry.templateRef) ?? null
+  }
+
+  function pipelineTemplateNodeIds(template: TemplateRecord): string[] {
+    return pipelineDefinitionNodeIds(template)
+  }
+
+  function pipelinePrefixRequirements(template: TemplateRecord) {
+    const templateNodeIds = pipelineTemplateNodeIds(template)
+    const colliding = templateNodeIds.filter((nodeId) => existingNodeIdSet.has(nodeId))
+    const suggestedPrefixBase = normalizeNodeId(template.title)
+    let suggestedPrefix = suggestedPrefixBase
+    if (colliding.length) {
+      let index = 2
+      while (!suggestedPrefix || templateNodeIds.some((nodeId) => existingNodeIdSet.has(`${suggestedPrefix}_${nodeId}`))) {
+        suggestedPrefix = `${suggestedPrefixBase || 'pipeline'}_${index}`
+        index += 1
+      }
+    }
+    return {
+      templateNodeIds,
+      requirePrefix: colliding.length > 0,
+      suggestedPrefix: colliding.length > 0 ? suggestedPrefix : '',
+    }
+  }
+
   async function openCreateBlockDialog(entry: PaletteEntry, placement?: { x: number; y: number }) {
-    if (!liveSnapshot || blockCreateMode(entry) === null) {
+    if (!liveSnapshot) {
       return
     }
     const baseX = 120 + (liveSnapshot.graph.nodes.length % 4) * 420
     const baseY = 120 + Math.floor(liveSnapshot.graph.nodes.length / 4) * 280
     const x = placement?.x ?? baseX
     const y = placement?.y ?? baseY
+    if (entry.kind === 'pipeline') {
+      const template = pipelineTemplateByEntry(entry)
+      if (!template || !entry.templateRef) {
+        return
+      }
+      setPendingBlockCreation(null)
+      const pipelinePlacement = placement
+        ? pipelineTopLeftForCenter(template, { x, y })
+        : { x, y }
+      const { templateNodeIds, requirePrefix, suggestedPrefix } = pipelinePrefixRequirements(template)
+      if (!requirePrefix) {
+        await handleCreatePipelineTemplate(entry.templateRef, pipelinePlacement, null)
+        return
+      }
+      if (!templateNodeIds.length) {
+        return
+      }
+      setPendingPipelineCreation({ entry, x: pipelinePlacement.x, y: pipelinePlacement.y, template, suggestedPrefix, requirePrefix })
+      return
+    }
     if (entry.kind === 'template') {
       const suggestedNodeId = normalizeNodeId(entry.title)
       if (suggestedNodeId && !existingNodeIdSet.has(suggestedNodeId)) {
@@ -753,11 +941,22 @@ function App() {
     await openCreateBlockDialog(entry)
   }
 
+  async function handleConfirmCreatePipeline(payload: { nodeIdPrefix: string | null }) {
+    if (!pendingPipelineCreation || !pendingPipelineCreation.entry.templateRef) {
+      return
+    }
+    const { entry, x, y } = pendingPipelineCreation
+    const templateRef = entry.templateRef!
+    setPendingPipelineCreation(null)
+    await handleCreatePipelineTemplate(templateRef, { x, y }, payload.nodeIdPrefix)
+  }
+
   async function handleConfirmCreateBlock(payload: { nodeId: string; title: string }) {
     if (!pendingBlockCreation) {
       return
     }
     const { entry, x, y } = pendingBlockCreation
+    setPendingBlockCreation(null)
     if (entry.kind === 'file_input') {
       await handleCreateNode({ type: 'file_input', nodeId: payload.nodeId, title: payload.title }, { x, y })
       return
@@ -769,12 +968,10 @@ function App() {
         title: payload.title,
         templateRef: entry.templateRef,
       }, { x, y })
-      setPendingBlockCreation(null)
       return
     }
     if (entry.kind === 'empty') {
       await handleCreateNode({ type: 'empty', nodeId: payload.nodeId, title: payload.title }, { x, y })
-      setPendingBlockCreation(null)
     }
   }
 
@@ -831,9 +1028,6 @@ function App() {
   }
 
   function handlePaletteDragStart(entry: PaletteEntry, position?: { x: number; y: number }) {
-    if (entry.kind === 'pipeline') {
-      return
-    }
     setDraggedPaletteEntry(entry)
     setDragPointer(position ?? null)
   }
@@ -860,13 +1054,17 @@ function App() {
       const initialResponse = await runNode(projectId, nodeId, mode, mode === 'edit_run' ? null : 'use_stale')
       let response = initialResponse
       if (initialResponse.requires_confirmation) {
-        const useUpstream = window.confirm('Some inputs are stale or pending. Click OK to refresh upstream notebooks first, or Cancel to use stale data.')
-        response = await runNode(
-          projectId,
+        if (mode === 'edit_run') {
+          reportClientError(`run:${nodeId}:${mode}`, 'run_failed', 'Edit runs do not support upstream refresh confirmation.', { nodeId })
+          return
+        }
+        setConfirmationState({
+          kind: 'run-upstream',
           nodeId,
           mode,
-          useUpstream ? 'run_upstream' : 'use_stale',
-        )
+          message: 'Some inputs are stale or pending. Refresh upstream notebooks first, or run with stale data.',
+        })
+        return
       }
       if (typeof response.session_id === 'string') {
         launchEditorTab(projectId, response.session_id, nodeId)
@@ -883,6 +1081,22 @@ function App() {
       await refreshSnapshot()
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Run failed.'
+      if (isEditorOpenConflict(message)) {
+        const sessions = await listSessions(projectId)
+        const session = sessions.find((item) => item.node_id === nodeId)
+        reportClientWarning(
+          `editor-open:${nodeId}`,
+          'editor_already_open',
+          'An editor is open for this notebook.',
+          {
+            nodeId,
+            details: session
+              ? { session_id: session.session_id, session_url: session.url, ready: session.ready }
+              : {},
+          },
+        )
+        return
+      }
       reportClientError(`run:${nodeId}:${mode}`, 'run_failed', message, { nodeId })
     }
   }
@@ -891,7 +1105,34 @@ function App() {
     if (!projectId) {
       return
     }
-    if (!window.confirm('Run all pending and stale notebooks in dependency order?')) {
+    setConfirmationState({ kind: 'run-all' })
+  }
+
+  async function confirmRunNodeWithAction(nodeId: string, mode: 'run_stale' | 'run_all', action: 'run_upstream' | 'use_stale') {
+    if (!projectId) {
+      return
+    }
+    try {
+      const response = await runNode(projectId, nodeId, mode, action)
+      if (response.status === 'failed') {
+        reportClientError(`run:${nodeId}:${mode}`, 'run_failed', runFailureMessage(response, 'Run failed.'), { nodeId, details: response })
+      } else if (response.status === 'blocked') {
+        reportClientWarning(
+          `run-blocked:${nodeId}:${mode}`,
+          'run_blocked',
+          'This run is blocked by missing or pending inputs.',
+          { nodeId, details: response },
+        )
+      }
+      await refreshSnapshot()
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Run failed.'
+      reportClientError(`run:${nodeId}:${mode}`, 'run_failed', message, { nodeId })
+    }
+  }
+
+  async function confirmRunAll() {
+    if (!projectId) {
       return
     }
     try {
@@ -1011,8 +1252,45 @@ function App() {
       return
     }
     await mutateGraph(nodes.map((node) => ({ type: 'delete_node', node_id: node.id })))
-    setSelectedNodeId((current) => (current && nodes.some((node) => node.id === current) ? null : current))
+    setSelectedNodeId((current) => {
+      const next = current && nodes.some((node) => node.id === current) ? null : current
+      if (!next) {
+        setInspectorOpen(false)
+      }
+      return next
+    })
     setArtifactNodeId((current) => (current && nodes.some((node) => node.id === current) ? null : current))
+  }
+
+  function openFileNodeEdit(nodeId: string) {
+    const node = liveSnapshot?.graph.nodes.find((entry) => entry.id === nodeId)
+    if (!node || node.kind !== 'file_input') {
+      return
+    }
+    setSelectedNodeId(nodeId)
+    setInspectorOpen(true)
+    setFileNodeEdit({
+      nodeId,
+      title: node.title,
+      artifactName: node.ui?.artifact_name ?? 'file',
+    })
+  }
+
+  async function handleDeleteNodeAction(nodeId: string) {
+    if (!projectId) {
+      return
+    }
+    const node = liveSnapshot?.graph.nodes.find((entry) => entry.id === nodeId)
+    if (!node) {
+      return
+    }
+    if (!window.confirm(`Create a checkpoint and delete block "${node.title}"?`)) {
+      return
+    }
+    await createCheckpoint(projectId)
+    await handleNodesDelete([{ id: nodeId } as Node])
+    await refreshSnapshot()
+    setNodeActionMenu(null)
   }
 
   async function handleDismissNotice(notice: AppNotice) {
@@ -1024,8 +1302,38 @@ function App() {
     await refreshSnapshot()
   }
 
+  async function handleOpenEditorNotice(notice: AppNotice) {
+    const details = editorSessionDetails(notice.details)
+    if (!details) {
+      return
+    }
+    window.open(details.session_url, '_blank', 'noopener,noreferrer')
+  }
+
+  async function handleKillEditorNotice(notice: AppNotice) {
+    if (!projectId) {
+      return
+    }
+    const details = editorSessionDetails(notice.details)
+    if (!details) {
+      return
+    }
+    await stopSession(projectId, details.session_id)
+    dismissClientNotice(notice.issue_id)
+    await refreshSnapshot()
+  }
+
   const counts = liveSnapshot ? globalArtifactCounts(liveSnapshot) : { ready: 0, stale: 0, pending: 0 }
   const activeRun = liveSnapshot ? currentRun(liveSnapshot) : null
+  const runningNodeId = liveSnapshot ? activeRunNodeId(liveSnapshot, activeRun) : null
+  const queuedNodeIds = liveSnapshot ? queuedRunNodeIds(liveSnapshot, activeRun) : []
+  const completedNodeIds = liveSnapshot
+    ? liveSnapshot.graph.nodes
+      .filter((node) => node.orchestrator_state?.status === 'succeeded')
+      .map((node) => node.id)
+    : []
+  const clientNowAnchorMs = Date.now()
+  const serverNowMs = clientNowAnchorMs + serverNowOffsetMs
 
   if (loadingSession) {
     return (
@@ -1048,12 +1356,12 @@ function App() {
       {draggedPaletteEntry && dragPointer ? (
         <div className="drag-cursor-preview" style={{ left: dragPointer.x, top: dragPointer.y }}>
           <div className="drop-preview-card">
-            <div className={`drop-preview-badge ${draggedPaletteEntry.kind === 'file_input' || draggedPaletteEntry.kind === 'value_input' ? 'tone-input' : draggedPaletteEntry.kind === 'template' ? 'tone-template' : 'tone-custom'}`}>
-              {draggedPaletteEntry.kind === 'file_input' ? 'F' : draggedPaletteEntry.kind === 'value_input' ? 'V' : draggedPaletteEntry.kind === 'template' ? 'T' : 'C'}
+            <div className={`drop-preview-badge ${draggedPaletteEntry.kind === 'file_input' || draggedPaletteEntry.kind === 'value_input' ? 'tone-input' : draggedPaletteEntry.kind === 'template' || draggedPaletteEntry.kind === 'pipeline' ? 'tone-template' : 'tone-custom'}`}>
+              {draggedPaletteEntry.kind === 'file_input' ? 'F' : draggedPaletteEntry.kind === 'value_input' ? 'V' : draggedPaletteEntry.kind === 'template' ? 'T' : draggedPaletteEntry.kind === 'pipeline' ? 'P' : 'C'}
             </div>
             <div className="drop-preview-copy">
               <strong>{draggedPaletteEntry.title}</strong>
-              <span>Drop to place block</span>
+              <span>{draggedPaletteEntry.kind === 'pipeline' ? 'Drop to place pipeline' : 'Drop to place block'}</span>
             </div>
           </div>
         </div>
@@ -1116,9 +1424,20 @@ function App() {
           {liveSnapshot ? (
             <GraphCanvas
               snapshot={liveSnapshot}
+              serverNowMs={serverNowMs}
+              serverNowClientAnchorMs={clientNowAnchorMs}
+              activeRunNodeId={runningNodeId}
+              queuedRunNodeIds={queuedNodeIds}
+              completedRunNodeIds={completedNodeIds}
               onConnect={handleConnect}
               onEdgesChange={handleEdgeChanges}
               onNodeSelect={setSelectedNodeId}
+              onNodeContextMenu={(nodeId, position) => {
+                setSelectedNodeId(nodeId)
+                setInspectorOpen(true)
+                setNodeActionMenu({ nodeId, x: position.x, y: position.y })
+              }}
+              onEditFileNode={openFileNodeEdit}
               onRunNode={handleRunNode}
               onOpenArtifacts={(nodeId) => {
                 setArtifactNodeId(nodeId)
@@ -1142,11 +1461,11 @@ function App() {
           )}
         </main>
 
-        <aside className={`sidebar right floating-panel ${inspectorOpen ? 'open' : 'closed'}`}>
-          <div className={`panel inspector-panel ${inspectorOpen ? 'open' : 'closed'}`}>
+        <aside className={`sidebar right floating-panel ${selectedNode && inspectorOpen ? 'open' : 'closed'}`}>
+          <div className={`panel inspector-panel ${selectedNode && inspectorOpen ? 'open' : 'closed'}`}>
             <div className="panel-header-row">
               <h2>Inspector</h2>
-              {(selectedNode || inspectorOpen) ? <button className="secondary" onClick={() => {
+              {selectedNode ? <button className="secondary" onClick={() => {
                 setSelectedNodeId(null)
                 setInspectorOpen(false)
               }}>Clear</button> : null}
@@ -1155,14 +1474,30 @@ function App() {
               <NodeInspector
                 snapshot={liveSnapshot as ProjectSnapshot}
                 node={selectedNode}
+                serverNowMs={serverNowMs}
+                serverNowClientAnchorMs={clientNowAnchorMs}
+                activeRunNodeId={runningNodeId}
+                queuedRunNodeIds={queuedNodeIds}
+                completedRunNodeIds={completedNodeIds}
                 onToggleHiddenInput={handleToggleHiddenInput}
                 onUploadFile={handleUploadFile}
                 onOpenTemplate={setTemplateRefView}
+                onEditFileNode={openFileNodeEdit}
+                onDeleteNode={handleDeleteNodeAction}
               />
             ) : null}
           </div>
         </aside>
       </section>
+
+      {nodeActionMenu && selectedNode ? (
+        <div className="node-action-menu" style={{ left: nodeActionMenu.x, top: nodeActionMenu.y }} onClick={(event) => event.stopPropagation()}>
+          {selectedNode.kind === 'file_input' ? (
+            <button className="secondary menu-item" onClick={() => openFileNodeEdit(selectedNode.id)}>Edit block</button>
+          ) : null}
+          <button className="secondary menu-item danger-text" onClick={() => void handleDeleteNodeAction(selectedNode.id)}>Delete block</button>
+        </div>
+      ) : null}
 
       {artifactExplorerOpen ? (
         <Modal title={artifactNode ? `${artifactNode.title} artifacts` : 'Artifact explorer'} onClose={() => setArtifactExplorerOpen(false)} contentClassName="artifact-explorer-modal">
@@ -1199,6 +1534,18 @@ function App() {
         </Modal>
       ) : null}
 
+      {pendingPipelineCreation && liveSnapshot ? (
+        <CreatePipelineDialog
+          pipelineLabel={pendingPipelineCreation.entry.title}
+          existingIds={existingNodeIds}
+          templateNodeIds={pipelineTemplateNodeIds(pendingPipelineCreation.template)}
+          suggestedPrefix={pendingPipelineCreation.suggestedPrefix}
+          requirePrefix={pendingPipelineCreation.requirePrefix}
+          onClose={() => setPendingPipelineCreation(null)}
+          onCreate={handleConfirmCreatePipeline}
+        />
+      ) : null}
+
       {pendingBlockCreation && liveSnapshot && blockCreateMode(pendingBlockCreation.entry) === 'constant_value' ? (
         <CreateConstantValueDialog
           suggestedTitle={pendingBlockCreation.entry.title}
@@ -1214,6 +1561,30 @@ function App() {
           existingIds={existingNodeIds}
           onClose={() => setPendingBlockCreation(null)}
           onCreate={handleCreateFileBlock}
+        />
+      ) : null}
+
+      {fileNodeEdit ? (
+        <CreateFileDialog
+          mode="edit"
+          suggestedTitle={fileNodeEdit.title}
+          existingIds={existingNodeIds.filter((nodeId) => nodeId !== fileNodeEdit.nodeId)}
+          fixedNodeId={fileNodeEdit.nodeId}
+          initialArtifactName={fileNodeEdit.artifactName}
+          onClose={() => setFileNodeEdit(null)}
+          onCreate={async (payload) => {
+            setFileNodeEdit(null)
+            if (!projectId) {
+              return
+            }
+            await mutateGraph([
+              { type: 'update_node_title', node_id: fileNodeEdit.nodeId, title: payload.title },
+            ])
+            if (payload.file) {
+              await uploadFile(projectId, fileNodeEdit.nodeId, payload.file)
+              await refreshSnapshot()
+            }
+          }}
         />
       ) : null}
 
@@ -1293,10 +1664,46 @@ function App() {
         </Modal>
       ) : null}
 
+      {confirmationState?.kind === 'run-all' ? (
+        <ConfirmDialog
+          title="Run all notebooks"
+          message="Run all pending and stale notebooks in dependency order?"
+          confirmLabel="Run all"
+          onClose={() => setConfirmationState(null)}
+          onConfirm={() => {
+            setConfirmationState(null)
+            void confirmRunAll()
+          }}
+        />
+      ) : null}
+
+      {confirmationState?.kind === 'run-upstream' ? (
+        <ConfirmDialog
+          title="Refresh upstream notebooks?"
+          message={confirmationState.message}
+          confirmLabel="Refresh upstream"
+          alternateLabel="Use stale data"
+          cancelLabel="Cancel"
+          onClose={() => setConfirmationState(null)}
+          onAlternate={() => {
+            const pending = confirmationState
+            setConfirmationState(null)
+            void confirmRunNodeWithAction(pending.nodeId, pending.mode, 'use_stale')
+          }}
+          onConfirm={() => {
+            const pending = confirmationState
+            setConfirmationState(null)
+            void confirmRunNodeWithAction(pending.nodeId, pending.mode, 'run_upstream')
+          }}
+        />
+      ) : null}
+
       <NoticeOverlay
         notices={overlayNotices}
         onDismiss={(notice) => void handleDismissNotice(notice)}
         onOpenNode={(nodeId) => setSelectedNodeId(nodeId)}
+        onOpenEditor={(notice) => void handleOpenEditorNotice(notice)}
+        onKillEditor={(notice) => void handleKillEditorNotice(notice)}
       />
     </div>
   )
@@ -1381,14 +1788,10 @@ function BlockPalette({
               {section.items.map((entry) => (
                 <div key={entry.key} className="template-tile palette-tile">
                   <button
-                    className={`palette-main ${entry.kind === 'pipeline' ? '' : 'draggable-block'}`}
+                    className="palette-main draggable-block"
                     onClick={() => void onCreate(entry)}
-                    disabled={entry.kind === 'pipeline'}
-                    draggable={entry.kind !== 'pipeline'}
+                    draggable
                     onDragStart={(event) => {
-                      if (entry.kind === 'pipeline') {
-                        return
-                      }
                       const dragImage = document.createElement('div')
                       dragImage.textContent = ''
                       dragImage.style.width = '1px'
@@ -1411,7 +1814,7 @@ function BlockPalette({
                     <strong>{entry.title}</strong>
                     <span>{entry.description}</span>
                   </button>
-                {entry.kind === 'template' || entry.kind === 'value_input' ? (
+                {entry.kind === 'template' || entry.kind === 'value_input' || entry.kind === 'pipeline' ? (
                   <button className="secondary small" onClick={(event) => {
                     event.stopPropagation()
                     if (entry.templateRef) {
@@ -1429,6 +1832,31 @@ function BlockPalette({
       ))}
     </div>
   )
+}
+
+function pipelineDefinitionNodeIds(template: TemplateRecord | null | undefined): string[] {
+  if (!template) {
+    return []
+  }
+  return (template.definition?.nodes ?? []).map((node) => node.id)
+}
+
+
+function pipelineTopLeftForCenter(template: TemplateRecord, center: { x: number; y: number }): { x: number; y: number } {
+  const layout = template.definition?.layout ?? []
+  if (!layout.length) {
+    return center
+  }
+  const minX = Math.min(...layout.map((entry) => entry.x))
+  const minY = Math.min(...layout.map((entry) => entry.y))
+  const maxRight = Math.max(...layout.map((entry) => entry.x + entry.w))
+  const maxBottom = Math.max(...layout.map((entry) => entry.y + entry.h))
+  const width = maxRight - minX
+  const height = maxBottom - minY
+  return {
+    x: center.x - width / 2,
+    y: center.y - height / 2,
+  }
 }
 
 
@@ -1494,10 +1922,14 @@ function NoticeOverlay({
   notices,
   onDismiss,
   onOpenNode,
+  onOpenEditor,
+  onKillEditor,
 }: {
   notices: AppNotice[]
   onDismiss: (notice: AppNotice) => void
   onOpenNode: (nodeId: string) => void
+  onOpenEditor: (notice: AppNotice) => void
+  onKillEditor: (notice: AppNotice) => void
 }) {
   if (!notices.length) {
     return null
@@ -1506,7 +1938,8 @@ function NoticeOverlay({
   return (
     <div className="notice-overlay" aria-live="polite" aria-label="Errors and warnings">
       {notices.map((notice) => {
-        const dismissible = notice.severity === 'warning'
+        const dismissible = notice.severity === 'warning' || notice.origin === 'client'
+        const editorDetails = notice.code === 'editor_already_open' ? editorSessionDetails(notice.details) : null
         return (
           <article key={notice.issue_id} className={`notice-card ${notice.severity}`}>
             <div className="notice-card-head">
@@ -1519,9 +1952,13 @@ function NoticeOverlay({
             <p className="notice-message">{notice.message}</p>
             <div className="notice-card-foot">
               <span>{formatTimestamp(notice.created_at)}</span>
-              {notice.node_id ? (
-                <button className="secondary small" onClick={() => onOpenNode(notice.node_id as string)}>Open node</button>
-              ) : null}
+              <div className="notice-card-actions">
+                {notice.node_id ? (
+                  <button className="secondary small" onClick={() => onOpenNode(notice.node_id as string)}>Open node</button>
+                ) : null}
+                {editorDetails ? <button className="secondary small" onClick={() => onOpenEditor(notice)}>Open editor</button> : null}
+                {editorDetails ? <button className="secondary small" onClick={() => onKillEditor(notice)}>Kill editor</button> : null}
+              </div>
             </div>
           </article>
         )
@@ -1533,20 +1970,77 @@ function NoticeOverlay({
 function NodeInspector({
   snapshot,
   node,
+  serverNowMs,
+  serverNowClientAnchorMs,
+  activeRunNodeId,
+  queuedRunNodeIds,
+  completedRunNodeIds,
   onToggleHiddenInput,
   onUploadFile,
   onOpenTemplate,
+  onEditFileNode,
+  onDeleteNode,
 }: {
   snapshot: ProjectSnapshot
   node: NodeRecord
+  serverNowMs: number
+  serverNowClientAnchorMs: number
+  activeRunNodeId: string | null
+  queuedRunNodeIds: string[]
+  completedRunNodeIds: string[]
   onToggleHiddenInput: (node: NodeRecord, inputName: string) => Promise<void>
   onUploadFile: (nodeId: string, file: File) => Promise<void>
   onOpenTemplate: (templateRef: string) => void
+  onEditFileNode: (nodeId: string) => void
+  onDeleteNode: (nodeId: string) => Promise<void>
 }) {
   const badge = badgeForNode(snapshot, node)
   const counts = artifactCounts(snapshot, node.id)
   const template = templateByRef(snapshot, node.template?.ref)
+  const validationIssues = validationIssuesForNode(snapshot, node.id)
+  const blockingValidationIssues = validationIssues.filter((issue) => issue.severity === 'error')
+  const runFailures = nodeRunFailures(snapshot, node.id)
+  const [now, setNow] = useState(() => Date.now())
   const fileInputRef = useRef<HTMLInputElement | null>(null)
+
+  useEffect(() => {
+    if (node.execution_meta?.status !== 'running') {
+      return
+    }
+    const interval = window.setInterval(() => setNow(Date.now()), 100)
+    return () => window.clearInterval(interval)
+  }, [node.execution_meta?.status])
+
+  const runningDurationLabel = useMemo(() => {
+    if (node.execution_meta?.status !== 'running') {
+      return null
+    }
+    const startedAt = Date.parse(node.execution_meta.started_at)
+    if (Number.isNaN(startedAt)) {
+      return null
+    }
+    return formatDurationSeconds((serverNowMs + (now - serverNowClientAnchorMs) - startedAt) / 1000)
+  }, [node.execution_meta, now, serverNowMs, serverNowClientAnchorMs])
+  const displayedCurrentCell = node.execution_meta?.current_cell
+    ? {
+        nodeId: node.id,
+        cell_number: node.execution_meta.current_cell.cell_number,
+        total_cells: node.execution_meta.current_cell.total_cells,
+        cell_code: node.execution_meta.current_cell.cell_code,
+      }
+    : null
+  const displayedState = useMemo(() => {
+    if (node.orchestrator_state?.status === 'running' || activeRunNodeId === node.id) {
+      return 'running'
+    }
+    if (node.orchestrator_state?.status === 'queued' || queuedRunNodeIds.includes(node.id)) {
+      return 'queued'
+    }
+    if (node.orchestrator_state?.status === 'succeeded' || completedRunNodeIds.includes(node.id)) {
+      return 'ready'
+    }
+    return node.state
+  }, [activeRunNodeId, queuedRunNodeIds, completedRunNodeIds, node.id, node.state, node.orchestrator_state])
 
   return (
     <div className="inspector-stack">
@@ -1557,9 +2051,36 @@ function NodeInspector({
       <div className="stack-list subtle">
         <div><span>Node ID</span><strong>{node.id}</strong></div>
         <div><span>Kind</span><strong>{node.kind}</strong></div>
-        <div><span>State</span><strong>{node.state}</strong></div>
+        <div><span>State</span><strong>{displayedState}</strong></div>
+        <div><span>Validation</span><strong>{blockingValidationIssues.length ? `${blockingValidationIssues.length} error${blockingValidationIssues.length === 1 ? '' : 's'}` : 'ok'}</strong></div>
         <div><span>Artifacts</span><ArtifactCounts counts={counts} showLabels /></div>
       </div>
+
+      {node.execution_meta ? (
+        <div className="inspector-block">
+          <h3>Execution</h3>
+          <div className="stack-list subtle">
+            <div><span>Origin</span><strong>Orchestrator</strong></div>
+            <div><span>Status</span><strong>{node.execution_meta.status}</strong></div>
+            <div><span>Started</span><strong>{formatTimestamp(node.execution_meta.started_at)}</strong></div>
+            {node.execution_meta.status === 'running' && runningDurationLabel ? <div><span>Elapsed</span><strong>{runningDurationLabel}</strong></div> : null}
+            {node.execution_meta.status !== 'running' && typeof node.execution_meta.duration_seconds === 'number' && node.state === 'ready' ? <div><span>Duration</span><strong>{formatDurationSeconds(node.execution_meta.duration_seconds)}</strong></div> : null}
+          </div>
+        </div>
+      ) : null}
+
+      {displayedCurrentCell ? (
+        <div className="inspector-block">
+          <h3>Current cell</h3>
+          <div className="inspector-subblock">
+            <strong>
+              Cell {displayedCurrentCell.cell_number ?? '?'}
+              /{displayedCurrentCell.total_cells ?? '?'}
+            </strong>
+            {displayedCurrentCell.cell_code ? <pre className="code-block docs-block">{displayedCurrentCell.cell_code}</pre> : null}
+          </div>
+        </div>
+      ) : null}
 
       {node.template?.ref ? (
         <div className="inspector-block">
@@ -1621,15 +2142,40 @@ function NodeInspector({
       </div>
 
       <div className="inspector-block">
-        <h3>Warnings</h3>
+        <h3>Validation</h3>
         <div className="warning-list">
-          {snapshot.notices.filter((issue) => issue.node_id === node.id).map((issue) => (
-            <div key={issue.issue_id} className={`warning-chip ${issue.severity}`}>
-              <strong>{issue.code}</strong>
-              <span>{issue.message}</span>
-            </div>
-          ))}
+          {snapshot.notices.filter((issue) => issue.node_id === node.id).map((issue) => {
+            const details = formatIssueDetails(issue.details)
+            return (
+              <div key={issue.issue_id} className={`warning-chip ${issue.severity}`}>
+                <strong>{issue.code}</strong>
+                <span>{issue.message}</span>
+                {details ? <pre className="warning-details">{details}</pre> : null}
+              </div>
+            )
+          })}
           {!snapshot.notices.some((issue) => issue.node_id === node.id) ? <p className="muted-copy">No active validation issues.</p> : null}
+        </div>
+      </div>
+
+      <div className="inspector-block">
+        <h3>Runtime errors</h3>
+        <div className="warning-list">
+          {runFailures.map((run) => {
+            const failure = run.failure_json as Record<string, unknown>
+            const traceback = typeof failure.traceback === 'string' ? failure.traceback : null
+            const stderr = typeof failure.stderr === 'string' ? failure.stderr : null
+            const errorMessage = typeof failure.error === 'string' ? failure.error : 'Run failed.'
+            return (
+              <div key={run.run_id} className="warning-chip error">
+                <strong>{errorMessage}</strong>
+                <span>{formatTimestamp(run.ended_at ?? run.started_at)}</span>
+                {traceback ? <pre className="warning-details">{traceback}</pre> : null}
+                {!traceback && stderr ? <pre className="warning-details">{stderr}</pre> : null}
+              </div>
+            )
+          })}
+          {!runFailures.length ? <p className="muted-copy">No recorded runtime errors.</p> : null}
         </div>
       </div>
 
@@ -1648,6 +2194,14 @@ function NodeInspector({
           />
         </div>
       ) : null}
+
+      <div className="inspector-block">
+        <h3>Actions</h3>
+        <div className="stack-list">
+          {node.kind === 'file_input' ? <button className="secondary" onClick={() => onEditFileNode(node.id)}>Edit block</button> : null}
+          <button className="danger" onClick={() => void onDeleteNode(node.id)}>Delete block</button>
+        </div>
+      </div>
     </div>
   )
 }

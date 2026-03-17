@@ -101,6 +101,39 @@ export function currentRun(snapshot: ProjectSnapshot) {
   })[0]
 }
 
+export function runNodeSequence(run: ProjectSnapshot['runs'][number] | null | undefined): string[] {
+  if (!run || typeof run.target_json !== 'object' || run.target_json === null) {
+    return []
+  }
+  const sequence: string[] = []
+  const target = run.target_json as Record<string, unknown>
+  const plan = Array.isArray(target.plan) ? target.plan : null
+  const nodeIds = Array.isArray(target.node_ids) ? target.node_ids : null
+  const directNodeId = typeof target.node_id === 'string' ? target.node_id : null
+
+  if (plan) {
+    sequence.push(...plan.filter((value): value is string => typeof value === 'string'))
+  }
+  if (!sequence.length && nodeIds) {
+    sequence.push(...nodeIds.filter((value): value is string => typeof value === 'string'))
+  }
+  if (!sequence.length && directNodeId) {
+    sequence.push(directNodeId)
+  }
+  return Array.from(new Set(sequence))
+}
+
+export function activeRunNodeId(snapshot: ProjectSnapshot, run: ProjectSnapshot['runs'][number] | null | undefined): string | null {
+  const activeNode = snapshot.graph.nodes.find((node) => node.orchestrator_state?.status === 'running')
+  return activeNode?.id ?? null
+}
+
+export function queuedRunNodeIds(snapshot: ProjectSnapshot, run: ProjectSnapshot['runs'][number] | null | undefined): string[] {
+  return snapshot.graph.nodes
+    .filter((node) => node.orchestrator_state?.status === 'queued')
+    .map((node) => node.id)
+}
+
 export function templateByRef(snapshot: ProjectSnapshot, ref: string | null | undefined): TemplateRecord | null {
   if (!ref) {
     return null
@@ -121,6 +154,24 @@ export function formatTimestamp(value: string | null | undefined): string {
     return value
   }
   return date.toLocaleString()
+}
+
+export function formatDurationSeconds(value: number): string {
+  const clampedValue = Math.max(0, value)
+  if (clampedValue < 60) {
+    return `${clampedValue.toFixed(1)}s`
+  }
+  const totalSeconds = Math.floor(clampedValue)
+  const hours = Math.floor(totalSeconds / 3600)
+  const minutes = Math.floor((totalSeconds % 3600) / 60)
+  const seconds = totalSeconds % 60
+  if (hours > 0) {
+    return `${hours}h${minutes}m${seconds}s`
+  }
+  if (minutes > 0) {
+    return `${minutes}m${seconds}s`
+  }
+  return `${seconds}s`
 }
 
 export function buildNodeLookup(snapshot: ProjectSnapshot): Record<string, NodeRecord> {
