@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import type { Connection, EdgeChange, Node } from 'reactflow'
 
-import { cancelRun, createCheckpoint, currentProject, dismissNotice, getSnapshot, initProject, listSessions, openProject, patchGraph, restoreCheckpoint, runAll, runNode, stopSession, uploadFile } from './lib/api'
+import { appUrl, cancelRun, createCheckpoint, currentProject, dismissNotice, getSnapshot, listSessions, patchGraph, restoreCheckpoint, runAll, runNode, stopSession, uploadFile } from './lib/api'
 import { GRID_SIZE, activeRunNodeId, artifactCounts, artifactFor, badgeForNode, currentRun, formatBytes, formatDurationSeconds, formatTimestamp, globalArtifactCounts, hiddenInputNames, inputBindingSource, inputState, queuedRunNodeIds, templateByRef } from './lib/helpers'
 import type { ArtifactRecord, NodeRecord, NoticeRecord, ProjectSnapshot, TemplateRecord } from './lib/types'
 import { ConfirmDialog, CreateConstantValueDialog, CreateFileDialog, CreateNotebookDialog, CreatePipelineDialog, Modal } from './components/Dialogs'
@@ -107,13 +107,10 @@ function normalizeNodeId(value: string): string {
     .replace(/^_+|_+$/g, '')
 }
 
-function artifactEndpoint(projectId: string | null, artifact: ArtifactRecord, action: 'download' | 'content'): string {
-  if (!projectId) {
-    return '#'
-  }
+function artifactEndpoint(artifact: ArtifactRecord, action: 'download' | 'content'): string {
   const nodeId = encodeURIComponent(artifact.node_id)
   const artifactName = encodeURIComponent(artifact.artifact_name)
-  return `/api/v1/projects/${projectId}/artifacts/${nodeId}/${artifactName}/${action}`
+  return appUrl(`/api/v1/artifacts/${nodeId}/${artifactName}/${action}`)
 }
 
 const DATAFRAME_CSV_DOWNLOAD_MAX_BYTES = 100_000_000
@@ -301,15 +298,15 @@ function applyOptimisticGraphOperations(snapshot: ProjectSnapshot, operations: A
   }
 }
 
-function setSnapshotData(queryClient: ReturnType<typeof useQueryClient>, projectId: string, updater: (current: ProjectSnapshot) => ProjectSnapshot) {
-  queryClient.setQueryData(['snapshot', projectId], (current: ProjectSnapshot | undefined) => {
+function setSnapshotData(queryClient: ReturnType<typeof useQueryClient>, updater: (current: ProjectSnapshot) => ProjectSnapshot) {
+  queryClient.setQueryData(['snapshot'], (current: ProjectSnapshot | undefined) => {
     if (!current) {
       return current
     }
     return updater(current)
   })
   queryClient.setQueryData(['project-current'], (current: ProjectSnapshot | undefined) => {
-    if (!current || current.project.project_id !== projectId) {
+    if (!current) {
       return current
     }
     return updater(current)
@@ -369,8 +366,6 @@ function nodeRunFailures(snapshot: ProjectSnapshot, nodeId: string) {
 
 function App() {
   const queryClient = useQueryClient()
-  const [projectPath, setProjectPath] = useState('')
-  const [projectTitle, setProjectTitle] = useState('')
   const [clientNotices, setClientNotices] = useState<AppNotice[]>([])
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null)
   const [artifactNodeId, setArtifactNodeId] = useState<string | null>(null)
@@ -402,9 +397,8 @@ function App() {
   const eventSourceRef = useRef<EventSource | null>(null)
   const hadEventConnectionRef = useRef(false)
   const startupSearch = useMemo(() => new URLSearchParams(window.location.search), [])
-  const loadingSession = startupSearch.get('project_id') && startupSearch.get('session_id')
+  const loadingSession = startupSearch.get('session_id')
     ? {
-        projectId: startupSearch.get('project_id') as string,
         sessionId: startupSearch.get('session_id') as string,
         nodeId: startupSearch.get('node_id') ?? 'notebook',
       }
@@ -423,8 +417,8 @@ function App() {
   const projectId = snapshot?.project.project_id ?? null
 
   const snapshotQuery = useQuery({
-    queryKey: ['snapshot', projectId],
-    queryFn: () => getSnapshot(projectId as string),
+    queryKey: ['snapshot'],
+    queryFn: () => getSnapshot(),
     enabled: Boolean(projectId),
   })
 
@@ -560,7 +554,7 @@ function App() {
       }
       try {
         for (let attempt = 0; attempt < 60; attempt += 1) {
-          const sessions = await listSessions(loadingSession.projectId)
+          const sessions = await listSessions()
           const session = sessions.find((item) => item.session_id === loadingSession.sessionId)
           if (session?.ready && typeof session.url === 'string') {
             window.location.replace(session.url)
@@ -595,7 +589,7 @@ function App() {
     if (eventSourceRef.current) {
       eventSourceRef.current.close()
     }
-    const source = new EventSource(`/api/v1/projects/${projectId}/events`)
+    const source = new EventSource(appUrl('/api/v1/events'))
     eventSourceRef.current = source
     source.onopen = () => {
       if (hadEventConnectionRef.current) {
@@ -604,7 +598,7 @@ function App() {
       hadEventConnectionRef.current = true
     }
     const refreshSnapshot = () => {
-      void queryClient.refetchQueries({ queryKey: ['snapshot', projectId], exact: true })
+      void queryClient.refetchQueries({ queryKey: ['snapshot'], exact: true })
     }
     source.onmessage = refreshSnapshot
     for (const eventType of SNAPSHOT_REFRESH_EVENTS) {
@@ -616,7 +610,7 @@ function App() {
         'event_stream_reset',
         'The live event stream fell behind and was resynced from the latest snapshot.',
       )
-      void queryClient.refetchQueries({ queryKey: ['snapshot', projectId], exact: true })
+      void queryClient.refetchQueries({ queryKey: ['snapshot'], exact: true })
     })
     source.onerror = () => {
       reportClientError(
@@ -624,7 +618,7 @@ function App() {
         'server_connection_lost',
         'The server connection was interrupted. Reconnecting now.',
       )
-      void queryClient.refetchQueries({ queryKey: ['snapshot', projectId], exact: true })
+      void queryClient.refetchQueries({ queryKey: ['snapshot'], exact: true })
     }
     return () => {
       for (const eventType of SNAPSHOT_REFRESH_EVENTS) {
@@ -633,26 +627,6 @@ function App() {
       source.close()
     }
   }, [projectId, queryClient])
-
-  const openMutation = useMutation({
-    mutationFn: (path: string) => openProject(path),
-    onSuccess: (data) => {
-      queryClient.setQueryData(['project-current'], data)
-      queryClient.setQueryData(['snapshot', data.project.project_id], data)
-      dismissClientNotice('project-open')
-    },
-    onError: (err: Error) => reportClientError('project-open', 'project_open_failed', err.message),
-  })
-
-  const initMutation = useMutation({
-    mutationFn: ({ path, title }: { path: string; title?: string }) => initProject(path, title),
-    onSuccess: (data) => {
-      queryClient.setQueryData(['project-current'], data)
-      queryClient.setQueryData(['snapshot', data.project.project_id], data)
-      dismissClientNotice('project-init')
-    },
-    onError: (err: Error) => reportClientError('project-init', 'project_init_failed', err.message),
-  })
 
   const selectedNode = useMemo(
     () => liveSnapshot?.graph.nodes.find((node) => node.id === selectedNodeId) ?? null,
@@ -675,11 +649,10 @@ function App() {
       setActiveEditorNodeIds([])
       return
     }
-    const currentProjectId: string = projectId
     let cancelled = false
     async function loadSessions() {
       try {
-        const sessions = await listSessions(currentProjectId)
+        const sessions = await listSessions()
         if (!cancelled) {
           setActiveEditorNodeIds(Array.from(new Set(sessions.map((session) => session.node_id))))
         }
@@ -783,7 +756,7 @@ function App() {
       },
     ]
     const templateEntries = (liveSnapshot?.templates ?? [])
-      .filter((template) => template.kind === 'template' && template.ref !== 'value_input.py')
+      .filter((template) => template.kind === 'notebook' && template.ref !== 'builtin/value_input')
       .map<PaletteEntry>((template) => ({
         key: `template:${template.ref}`,
         title: template.title,
@@ -812,7 +785,7 @@ function App() {
     if (!projectId) {
       return
     }
-    await queryClient.refetchQueries({ queryKey: ['snapshot', projectId], exact: true })
+    await queryClient.refetchQueries({ queryKey: ['snapshot'], exact: true })
   }
 
   async function mutateGraph(operations: Array<Record<string, unknown>>) {
@@ -825,13 +798,13 @@ function App() {
       if (optimistic) {
         setOptimisticGraph(optimistic)
       }
-      const response = await patchGraph(projectId, liveSnapshot.graph.meta.graph_version, operations as never)
-      setSnapshotData(queryClient, projectId, (current) => mergeGraphIntoSnapshot(current, response))
+      const response = await patchGraph(liveSnapshot.graph.meta.graph_version, operations as never)
+      setSnapshotData(queryClient, (current) => mergeGraphIntoSnapshot(current, response))
       dismissClientNotice('graph-update')
       await refreshSnapshot()
     } catch (err) {
       setOptimisticGraph(null)
-      setSnapshotData(queryClient, projectId, () => rollbackSnapshot)
+      setSnapshotData(queryClient, () => rollbackSnapshot)
       const message = err instanceof Error ? err.message : 'Graph update failed.'
       reportClientError('graph-update', 'graph_update_failed', message)
       await refreshSnapshot()
@@ -1025,7 +998,7 @@ function App() {
       },
       { x, y },
     )
-    const response = await runNode(projectId, payload.nodeId, 'run_stale', 'use_stale')
+    const response = await runNode(payload.nodeId, 'run_stale', 'use_stale')
     if (response.status === 'failed') {
       reportClientError(`run:${payload.nodeId}:run_stale`, 'run_failed', runFailureMessage(response, 'Run failed.'), { nodeId: payload.nodeId, details: response })
     }
@@ -1051,7 +1024,7 @@ function App() {
       },
     ])
     if (payload.file) {
-      await uploadFile(projectId, payload.nodeId, payload.file)
+      await uploadFile(payload.nodeId, payload.file)
       await refreshSnapshot()
     }
   }
@@ -1080,7 +1053,7 @@ function App() {
       return
     }
     try {
-      const initialResponse = await runNode(projectId, nodeId, mode, mode === 'edit_run' ? null : 'use_stale')
+      const initialResponse = await runNode(nodeId, mode, mode === 'edit_run' ? null : 'use_stale')
       let response = initialResponse
       if (initialResponse.requires_confirmation) {
         if (mode === 'edit_run') {
@@ -1096,7 +1069,7 @@ function App() {
         return
       }
       if (typeof response.session_id === 'string') {
-        launchEditorTab(projectId, response.session_id, nodeId)
+        launchEditorTab(response.session_id, nodeId)
       } else if (response.status === 'failed') {
         reportClientError(`run:${nodeId}:${mode}`, 'run_failed', runFailureMessage(response, 'Run failed.'), { nodeId, details: response })
       } else if (response.status === 'blocked') {
@@ -1111,7 +1084,7 @@ function App() {
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Run failed.'
       if (isEditorOpenConflict(message)) {
-        const sessions = await listSessions(projectId)
+        const sessions = await listSessions()
         const session = sessions.find((item) => item.node_id === nodeId)
         reportClientWarning(
           `editor-open:${nodeId}`,
@@ -1142,7 +1115,7 @@ function App() {
       return
     }
     try {
-      const response = await runNode(projectId, nodeId, mode, action)
+      const response = await runNode(nodeId, mode, action)
       if (response.status === 'failed') {
         reportClientError(`run:${nodeId}:${mode}`, 'run_failed', runFailureMessage(response, 'Run failed.'), { nodeId, details: response })
       } else if (response.status === 'blocked') {
@@ -1165,7 +1138,7 @@ function App() {
       return
     }
     try {
-      const response = await runAll(projectId)
+      const response = await runAll()
       if (response.status === 'failed') {
         reportClientError('run-all', 'run_queue_failed', runFailureMessage(response, 'Run queue failed.'), { details: response })
       }
@@ -1184,7 +1157,7 @@ function App() {
     if (!active) {
       return
     }
-    await cancelRun(projectId, active.run_id)
+    await cancelRun(active.run_id)
     await refreshSnapshot()
   }
 
@@ -1234,7 +1207,7 @@ function App() {
       return
     }
     try {
-      await uploadFile(projectId, nodeId, file)
+      await uploadFile(nodeId, file)
       await refreshSnapshot()
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Upload failed.'
@@ -1246,7 +1219,7 @@ function App() {
     if (!projectId) {
       return
     }
-    await createCheckpoint(projectId)
+    await createCheckpoint()
     await refreshSnapshot()
   }
 
@@ -1257,7 +1230,7 @@ function App() {
     if (!window.confirm(`Restore checkpoint ${checkpointId}?`)) {
       return
     }
-    await restoreCheckpoint(projectId, checkpointId)
+    await restoreCheckpoint(checkpointId)
     setOptimisticGraph(null)
     setSelectedNodeId(null)
     setArtifactNodeId(null)
@@ -1316,7 +1289,7 @@ function App() {
     if (!window.confirm(`Create a checkpoint and delete block "${node.title}"?`)) {
       return
     }
-    await createCheckpoint(projectId)
+    await createCheckpoint()
     await handleNodesDelete([{ id: nodeId } as Node])
     await refreshSnapshot()
     setNodeActionMenu(null)
@@ -1327,7 +1300,7 @@ function App() {
       dismissClientNotice(notice.issue_id)
       return
     }
-    await dismissNotice(projectId, notice.issue_id)
+    await dismissNotice(notice.issue_id)
     await refreshSnapshot()
   }
 
@@ -1347,7 +1320,7 @@ function App() {
     if (!details) {
       return
     }
-    await stopSession(projectId, details.session_id)
+    await stopSession(details.session_id)
     dismissClientNotice(notice.issue_id)
     await refreshSnapshot()
   }
@@ -1360,13 +1333,13 @@ function App() {
     if (!projectId) {
       return
     }
-    const sessions = await listSessions(projectId)
+    const sessions = await listSessions()
     const session = sessions.find((item) => item.node_id === nodeId)
     if (!session) {
       setActiveEditorNodeIds((current) => current.filter((id) => id !== nodeId))
       return
     }
-    await stopSession(projectId, session.session_id)
+    await stopSession(session.session_id)
     setActiveEditorNodeIds((current) => current.filter((id) => id !== nodeId))
     await refreshSnapshot()
   }
@@ -1386,7 +1359,6 @@ function App() {
   if (loadingSession) {
     return (
       <SessionLoadingScreen
-        projectId={loadingSession.projectId}
         sessionId={loadingSession.sessionId}
         nodeId={loadingSession.nodeId}
         onCancel={() => {
@@ -1566,7 +1538,7 @@ function App() {
             {artifactList.length ? (
               <div className="artifact-grid artifact-explorer-grid">
                 {artifactList.map((artifact) => (
-                  <ArtifactCard key={`${artifact.node_id}/${artifact.artifact_name}`} artifact={artifact} projectId={projectId} />
+                  <ArtifactCard key={`${artifact.node_id}/${artifact.artifact_name}`} artifact={artifact} />
                 ))}
               </div>
             ) : (
@@ -1632,7 +1604,7 @@ function App() {
               { type: 'update_node_title', node_id: fileNodeEdit.nodeId, title: payload.title },
             ])
             if (payload.file) {
-              await uploadFile(projectId, fileNodeEdit.nodeId, payload.file)
+              await uploadFile(fileNodeEdit.nodeId, payload.file)
               await refreshSnapshot()
             }
           }}
@@ -1651,30 +1623,9 @@ function App() {
 
       {showProjectInfo && liveSnapshot ? (
         <Modal title="Project info" onClose={() => setShowProjectInfo(false)}>
-          <div className="form-grid compact open-project-form">
-            <label>
-              <span>Project path</span>
-              <input value={projectPath} onChange={(event) => setProjectPath(event.target.value)} placeholder="/path/to/project" />
-            </label>
-            <div className="inline-actions">
-              <button className="secondary" onClick={() => openMutation.mutate(projectPath)} disabled={!projectPath.trim() || openMutation.isPending}>
-                {openMutation.isPending ? 'Opening...' : 'Open'}
-              </button>
-            </div>
-            <label>
-              <span>New project title</span>
-              <input value={projectTitle} onChange={(event) => setProjectTitle(event.target.value)} placeholder="Study 2026 03" />
-            </label>
-            <button
-              onClick={() => initMutation.mutate({ path: projectPath, title: projectTitle || undefined })}
-              disabled={!projectPath.trim() || initMutation.isPending}
-            >
-              {initMutation.isPending ? 'Creating...' : 'Init project'}
-            </button>
-          </div>
           <div className="stack-list subtle">
             <div><span>ID</span><strong>{liveSnapshot.project.project_id}</strong></div>
-            <div><span>Root</span><strong>{liveSnapshot.project.root}</strong></div>
+            <div><span>Root</span><strong>{liveSnapshot.project.project_root}</strong></div>
             <div><span>Graph version</span><strong>{liveSnapshot.graph.meta.graph_version}</strong></div>
             <div><span>Updated</span><strong>{formatTimestamp(liveSnapshot.graph.meta.updated_at)}</strong></div>
             <div><span>Checkpoints</span><strong>{liveSnapshot.checkpoints.length}</strong></div>
@@ -1761,12 +1712,10 @@ function App() {
 }
 
 function SessionLoadingScreen({
-  projectId,
   sessionId,
   nodeId,
   onCancel,
 }: {
-  projectId: string
   sessionId: string
   nodeId: string
   onCancel: () => void
@@ -1780,7 +1729,6 @@ function SessionLoadingScreen({
           Waiting for the local editor to become available for `{nodeId}`.
         </p>
         <div className="stack-list subtle">
-          <div><span>Project</span><strong>{projectId}</strong></div>
           <div><span>Session</span><strong>{sessionId}</strong></div>
         </div>
         <div className="spinner" />
@@ -1793,13 +1741,12 @@ function SessionLoadingScreen({
   )
 }
 
-function launchEditorTab(projectId: string, sessionId: string, nodeId: string) {
+function launchEditorTab(sessionId: string, nodeId: string) {
   const params = new URLSearchParams({
-    project_id: projectId,
     session_id: sessionId,
     node_id: nodeId,
   })
-  window.open(`/?${params.toString()}`, '_blank', 'noopener,noreferrer')
+  window.open(appUrl(`/?${params.toString()}`), '_blank', 'noopener,noreferrer')
 }
 
 function BlockPalette({
@@ -2257,10 +2204,10 @@ function NodeInspector({
   )
 }
 
-function ArtifactCard({ artifact, projectId }: { artifact: ArtifactRecord; projectId: string | null }) {
-  const downloadHref = artifactEndpoint(projectId, artifact, 'download')
+function ArtifactCard({ artifact }: { artifact: ArtifactRecord }) {
+  const downloadHref = artifactEndpoint(artifact, 'download')
   const imageSrc = artifact.preview?.kind === 'file' && artifact.preview.mime_type?.startsWith('image/')
-    ? artifactEndpoint(projectId, artifact, 'content')
+    ? artifactEndpoint(artifact, 'content')
     : null
   const isDataFrame = artifact.data_type === 'pandas.DataFrame'
   const canDownloadCsv = isDataFrame && (artifact.size_bytes ?? 0) <= DATAFRAME_CSV_DOWNLOAD_MAX_BYTES

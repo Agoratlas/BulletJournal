@@ -12,15 +12,6 @@ class StrictModel(BaseModel):
     model_config = ConfigDict(extra='forbid')
 
 
-class OpenProjectRequest(StrictModel):
-    path: str
-
-
-class InitProjectRequest(StrictModel):
-    path: str
-    title: str | None = None
-
-
 class AddNotebookNodeOperation(StrictModel):
     type: Literal['add_notebook_node']
     node_id: str
@@ -146,3 +137,8 @@ class NoticeDismissResponse(StrictModel):
 
 class RunAllRequest(StrictModel):
     mode: Literal[RunMode.RUN_STALE] = Field(default=RunMode.RUN_STALE)
+
+
+class ControllerEnvironmentChangeRequest(StrictModel):
+    reason: str
+    mark_all_artifacts_stale: bool = True

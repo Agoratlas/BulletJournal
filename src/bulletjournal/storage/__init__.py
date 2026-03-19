@@ -32,7 +32,11 @@ def __getattr__(name: str):
         from bulletjournal.storage.project_fs import is_project_root
 
         return is_project_root
+    if name == 'require_project_root':
+        from bulletjournal.storage.project_fs import require_project_root
+
+        return require_project_root
     raise AttributeError(name)
 
 
-__all__ = ['GraphStore', 'ObjectStore', 'ProjectPaths', 'StateDB', 'init_project_root', 'is_project_root']
+__all__ = ['GraphStore', 'ObjectStore', 'ProjectPaths', 'StateDB', 'init_project_root', 'is_project_root', 'require_project_root']

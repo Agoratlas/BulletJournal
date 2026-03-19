@@ -11,11 +11,11 @@ def test_open_and_snapshot(tmp_path) -> None:
     app = create_app(project_path=project_root)
     client = TestClient(app)
 
-    response = client.post('/api/v1/projects/open', json={'path': str(project_root)})
+    response = client.get('/api/v1/project/snapshot')
     assert response.status_code == 200
 
     project_id = response.json()['project']['project_id']
-    snapshot = client.get(f'/api/v1/projects/{project_id}/snapshot')
+    snapshot = client.get('/api/v1/project/snapshot')
     assert snapshot.status_code == 200
     assert snapshot.json()['project']['project_id'] == project_id
     assert 'notices' in snapshot.json()
@@ -26,12 +26,12 @@ def test_node_detail_endpoint_available_at_project_nodes_path(tmp_path) -> None:
     app = create_app(project_path=project_root)
     client = TestClient(app)
 
-    opened = client.post('/api/v1/projects/open', json={'path': str(project_root)})
+    opened = client.get('/api/v1/project/snapshot')
     project_id = opened.json()['project']['project_id']
     graph_version = opened.json()['graph']['meta']['graph_version']
 
     patched = client.patch(
-        f'/api/v1/projects/{project_id}/graph',
+        '/api/v1/graph',
         json={
             'graph_version': graph_version,
             'operations': [
@@ -45,7 +45,7 @@ def test_node_detail_endpoint_available_at_project_nodes_path(tmp_path) -> None:
     )
     assert patched.status_code == 200
 
-    detail = client.get(f'/api/v1/projects/{project_id}/nodes/sample_node')
+    detail = client.get('/api/v1/nodes/sample_node')
 
     assert detail.status_code == 200
     assert detail.json()['id'] == 'sample_node'
@@ -56,12 +56,12 @@ def test_graph_patch_rejects_unknown_operation_fields(tmp_path) -> None:
     app = create_app(project_path=project_root)
     client = TestClient(app)
 
-    opened = client.post('/api/v1/projects/open', json={'path': str(project_root)})
+    opened = client.get('/api/v1/project/snapshot')
     project_id = opened.json()['project']['project_id']
     graph_version = opened.json()['graph']['meta']['graph_version']
 
     invalid = client.patch(
-        f'/api/v1/projects/{project_id}/graph',
+        '/api/v1/graph',
         json={
             'graph_version': graph_version,
             'operations': [
@@ -95,12 +95,12 @@ def test_graph_layout_patch_accepts_position_only_updates(tmp_path) -> None:
     app = create_app(project_path=project_root)
     client = TestClient(app)
 
-    opened = client.post('/api/v1/projects/open', json={'path': str(project_root)})
+    opened = client.get('/api/v1/project/snapshot')
     project_id = opened.json()['project']['project_id']
     graph_version = opened.json()['graph']['meta']['graph_version']
 
     created = client.patch(
-        f'/api/v1/projects/{project_id}/graph',
+        '/api/v1/graph',
         json={
             'graph_version': graph_version,
             'operations': [
@@ -119,7 +119,7 @@ def test_graph_layout_patch_accepts_position_only_updates(tmp_path) -> None:
     assert created.status_code == 200
 
     moved = client.patch(
-        f'/api/v1/projects/{project_id}/graph',
+        '/api/v1/graph',
         json={
             'graph_version': created.json()['meta']['graph_version'],
             'operations': [
@@ -147,12 +147,12 @@ def test_warning_notice_can_be_dismissed_via_api(tmp_path) -> None:
     client = TestClient(app)
     container = app.state.container
 
-    opened = client.post('/api/v1/projects/open', json={'path': str(project_root)})
+    opened = client.get('/api/v1/project/snapshot')
     project_id = opened.json()['project']['project_id']
     graph_version = opened.json()['graph']['meta']['graph_version']
 
     created = client.patch(
-        f'/api/v1/projects/{project_id}/graph',
+        '/api/v1/graph',
         json={
             'graph_version': graph_version,
             'operations': [
@@ -177,14 +177,14 @@ def test_warning_notice_can_be_dismissed_via_api(tmp_path) -> None:
     )
     container.project_service.reparse_notebook_by_path(notebook_path)
 
-    snapshot = client.get(f'/api/v1/projects/{project_id}/snapshot').json()
+    snapshot = client.get('/api/v1/project/snapshot').json()
     warning = next(issue for issue in snapshot['validation_issues'] if issue['severity'] == 'warning')
     assert any(issue['issue_id'] == warning['issue_id'] for issue in snapshot['notices'])
 
-    dismissed = client.post(f"/api/v1/projects/{project_id}/notices/{warning['issue_id']}/dismiss")
+    dismissed = client.post(f"/api/v1/notices/{warning['issue_id']}/dismiss")
 
     assert dismissed.status_code == 200
-    refreshed = client.get(f'/api/v1/projects/{project_id}/snapshot').json()
+    refreshed = client.get('/api/v1/project/snapshot').json()
     assert all(issue['issue_id'] != warning['issue_id'] for issue in refreshed['notices'])
 
 
@@ -194,12 +194,12 @@ def test_error_notice_can_be_dismissed_via_api(tmp_path) -> None:
     client = TestClient(app)
     container = app.state.container
 
-    opened = client.post('/api/v1/projects/open', json={'path': str(project_root)})
+    opened = client.get('/api/v1/project/snapshot')
     project_id = opened.json()['project']['project_id']
     graph_version = opened.json()['graph']['meta']['graph_version']
 
     created = client.patch(
-        f'/api/v1/projects/{project_id}/graph',
+        '/api/v1/graph',
         json={
             'graph_version': graph_version,
             'operations': [
@@ -217,13 +217,13 @@ def test_error_notice_can_be_dismissed_via_api(tmp_path) -> None:
     notebook_path.write_text(notebook_path.read_text(encoding='utf-8') + '\nbroken =\n', encoding='utf-8')
     container.project_service.reparse_notebook_by_path(notebook_path)
 
-    snapshot = client.get(f'/api/v1/projects/{project_id}/snapshot').json()
+    snapshot = client.get('/api/v1/project/snapshot').json()
     error_issue = next(issue for issue in snapshot['validation_issues'] if issue['severity'] == 'error')
 
-    dismissed = client.post(f"/api/v1/projects/{project_id}/notices/{error_issue['issue_id']}/dismiss")
+    dismissed = client.post(f"/api/v1/notices/{error_issue['issue_id']}/dismiss")
 
     assert dismissed.status_code == 200
-    refreshed = client.get(f'/api/v1/projects/{project_id}/snapshot').json()
+    refreshed = client.get('/api/v1/project/snapshot').json()
     assert all(issue['issue_id'] != error_issue['issue_id'] for issue in refreshed['notices'])
 
 
@@ -233,12 +233,12 @@ def test_run_session_can_be_stopped_via_api(tmp_path) -> None:
     client = TestClient(app)
     container = app.state.container
 
-    opened = client.post('/api/v1/projects/open', json={'path': str(project_root)})
+    opened = client.get('/api/v1/project/snapshot')
     project_id = opened.json()['project']['project_id']
     graph_version = opened.json()['graph']['meta']['graph_version']
 
     created = client.patch(
-        f'/api/v1/projects/{project_id}/graph',
+        '/api/v1/graph',
         json={
             'graph_version': graph_version,
             'operations': [
@@ -253,13 +253,13 @@ def test_run_session_can_be_stopped_via_api(tmp_path) -> None:
     assert created.status_code == 200
 
     started = client.post(
-        f'/api/v1/projects/{project_id}/nodes/sample_node/run',
+        '/api/v1/nodes/sample_node/run',
         json={'mode': 'edit_run', 'action': None},
     )
     assert started.status_code == 200
     session_id = started.json()['session_id']
 
-    stopped = client.post(f'/api/v1/projects/{project_id}/sessions/{session_id}/stop')
+    stopped = client.post(f'/api/v1/sessions/{session_id}/stop')
     assert stopped.status_code == 200
     assert stopped.json()['status'] == 'stopped'
     assert container.run_service.session_manager.get(session_id) is None
@@ -270,12 +270,12 @@ def test_file_input_artifact_name_round_trips_in_snapshot(tmp_path) -> None:
     app = create_app(project_path=project_root)
     client = TestClient(app)
 
-    opened = client.post('/api/v1/projects/open', json={'path': str(project_root)})
+    opened = client.get('/api/v1/project/snapshot')
     project_id = opened.json()['project']['project_id']
     graph_version = opened.json()['graph']['meta']['graph_version']
 
     created = client.patch(
-        f'/api/v1/projects/{project_id}/graph',
+        '/api/v1/graph',
         json={
             'graph_version': graph_version,
             'operations': [
@@ -290,7 +290,7 @@ def test_file_input_artifact_name_round_trips_in_snapshot(tmp_path) -> None:
     )
 
     assert created.status_code == 200
-    snapshot = client.get(f'/api/v1/projects/{project_id}/snapshot').json()
+    snapshot = client.get('/api/v1/project/snapshot').json()
     node = next(item for item in snapshot['graph']['nodes'] if item['id'] == 'uploaded_file')
     assert node['ui']['artifact_name'] == 'dataset'
     assert node['interface']['outputs'][0]['name'] == 'dataset'
@@ -301,12 +301,12 @@ def test_invalid_notebook_changes_keep_previous_ports_and_surface_errors(tmp_pat
     app = create_app(project_path=project_root)
     client = TestClient(app)
 
-    opened = client.post('/api/v1/projects/open', json={'path': str(project_root)})
+    opened = client.get('/api/v1/project/snapshot')
     project_id = opened.json()['project']['project_id']
     graph_version = opened.json()['graph']['meta']['graph_version']
 
     created = client.patch(
-        f'/api/v1/projects/{project_id}/graph',
+        '/api/v1/graph',
         json={
             'graph_version': graph_version,
             'operations': [
@@ -333,7 +333,7 @@ def test_invalid_notebook_changes_keep_previous_ports_and_surface_errors(tmp_pat
     container = app.state.container
     container.project_service.reparse_notebook_by_path(notebook_path)
 
-    snapshot = client.get(f'/api/v1/projects/{project_id}/snapshot').json()
+    snapshot = client.get('/api/v1/project/snapshot').json()
     node = next(item for item in snapshot['graph']['nodes'] if item['id'] == 'sample_node')
 
     assert [port['name'] for port in node['interface']['outputs']] == ['sample_df']
@@ -346,12 +346,12 @@ def test_unparsable_marimo_cell_keeps_previous_ports_and_surfaces_errors(tmp_pat
     app = create_app(project_path=project_root)
     client = TestClient(app)
 
-    opened = client.post('/api/v1/projects/open', json={'path': str(project_root)})
+    opened = client.get('/api/v1/project/snapshot')
     project_id = opened.json()['project']['project_id']
     graph_version = opened.json()['graph']['meta']['graph_version']
 
     created = client.patch(
-        f'/api/v1/projects/{project_id}/graph',
+        '/api/v1/graph',
         json={
             'graph_version': graph_version,
             'operations': [
@@ -378,7 +378,7 @@ def test_unparsable_marimo_cell_keeps_previous_ports_and_surfaces_errors(tmp_pat
     container = app.state.container
     container.project_service.reparse_notebook_by_path(notebook_path)
 
-    snapshot = client.get(f'/api/v1/projects/{project_id}/snapshot').json()
+    snapshot = client.get('/api/v1/project/snapshot').json()
     node = next(item for item in snapshot['graph']['nodes'] if item['id'] == 'sample_node')
 
     assert [port['name'] for port in node['interface']['outputs']] == ['sample_df']
@@ -391,7 +391,7 @@ def test_graph_patch_accepts_inline_notebook_source(tmp_path) -> None:
     app = create_app(project_path=project_root)
     client = TestClient(app)
 
-    opened = client.post('/api/v1/projects/open', json={'path': str(project_root)})
+    opened = client.get('/api/v1/project/snapshot')
     project_id = opened.json()['project']['project_id']
     graph_version = opened.json()['graph']['meta']['graph_version']
 
@@ -420,7 +420,7 @@ if __name__ == '__main__':
 """.strip() + '\n'
 
     created = client.patch(
-        f'/api/v1/projects/{project_id}/graph',
+        '/api/v1/graph',
         json={
             'graph_version': graph_version,
             'operations': [
@@ -444,12 +444,12 @@ def test_snapshot_includes_pipeline_templates(tmp_path) -> None:
     app = create_app(project_path=project_root)
     client = TestClient(app)
 
-    opened = client.post('/api/v1/projects/open', json={'path': str(project_root)})
+    opened = client.get('/api/v1/project/snapshot')
 
     assert opened.status_code == 200
     templates = opened.json()['templates']
     pipeline = next(item for item in templates if item['kind'] == 'pipeline')
-    assert pipeline['ref'] == 'example_iris_pipeline.json'
+    assert pipeline['ref'] == 'builtin/example_iris_pipeline'
     assert pipeline['definition']['nodes']
 
 
@@ -458,18 +458,18 @@ def test_graph_patch_can_add_pipeline_template(tmp_path) -> None:
     app = create_app(project_path=project_root)
     client = TestClient(app)
 
-    opened = client.post('/api/v1/projects/open', json={'path': str(project_root)})
+    opened = client.get('/api/v1/project/snapshot')
     project_id = opened.json()['project']['project_id']
     graph_version = opened.json()['graph']['meta']['graph_version']
 
     created = client.patch(
-        f'/api/v1/projects/{project_id}/graph',
+        '/api/v1/graph',
         json={
             'graph_version': graph_version,
             'operations': [
                 {
                     'type': 'add_pipeline_template',
-                    'template_ref': 'example_iris_pipeline.json',
+                    'template_ref': 'builtin/example_iris_pipeline',
                     'x': 200,
                     'y': 240,
                 }
@@ -478,7 +478,7 @@ def test_graph_patch_can_add_pipeline_template(tmp_path) -> None:
     )
 
     assert created.status_code == 200
-    snapshot = client.get(f'/api/v1/projects/{project_id}/snapshot').json()
+    snapshot = client.get('/api/v1/project/snapshot').json()
     node_ids = {node['id'] for node in snapshot['graph']['nodes']}
     assert {'file', 'example_1', 'example_2', 'example_3', 'example_4'} <= node_ids
     edge_ids = {edge['id'] for edge in snapshot['graph']['edges']}
@@ -494,18 +494,18 @@ def test_graph_patch_requires_prefix_when_pipeline_template_collides(tmp_path) -
     app = create_app(project_path=project_root)
     client = TestClient(app)
 
-    opened = client.post('/api/v1/projects/open', json={'path': str(project_root)})
+    opened = client.get('/api/v1/project/snapshot')
     project_id = opened.json()['project']['project_id']
     graph_version = opened.json()['graph']['meta']['graph_version']
 
     created = client.patch(
-        f'/api/v1/projects/{project_id}/graph',
+        '/api/v1/graph',
         json={
             'graph_version': graph_version,
             'operations': [
                 {
                     'type': 'add_pipeline_template',
-                    'template_ref': 'example_iris_pipeline.json',
+                    'template_ref': 'builtin/example_iris_pipeline',
                 }
             ],
         },
@@ -513,13 +513,13 @@ def test_graph_patch_requires_prefix_when_pipeline_template_collides(tmp_path) -
     assert created.status_code == 200
 
     duplicate = client.patch(
-        f'/api/v1/projects/{project_id}/graph',
+        '/api/v1/graph',
         json={
             'graph_version': created.json()['meta']['graph_version'],
             'operations': [
                 {
                     'type': 'add_pipeline_template',
-                    'template_ref': 'example_iris_pipeline.json',
+                    'template_ref': 'builtin/example_iris_pipeline',
                 }
             ],
         },
@@ -534,18 +534,18 @@ def test_graph_patch_accepts_prefixed_pipeline_template(tmp_path) -> None:
     app = create_app(project_path=project_root)
     client = TestClient(app)
 
-    opened = client.post('/api/v1/projects/open', json={'path': str(project_root)})
+    opened = client.get('/api/v1/project/snapshot')
     project_id = opened.json()['project']['project_id']
     graph_version = opened.json()['graph']['meta']['graph_version']
 
     first = client.patch(
-        f'/api/v1/projects/{project_id}/graph',
+        '/api/v1/graph',
         json={
             'graph_version': graph_version,
             'operations': [
                 {
                     'type': 'add_pipeline_template',
-                    'template_ref': 'example_iris_pipeline.json',
+                    'template_ref': 'builtin/example_iris_pipeline',
                 }
             ],
         },
@@ -553,13 +553,13 @@ def test_graph_patch_accepts_prefixed_pipeline_template(tmp_path) -> None:
     assert first.status_code == 200
 
     second = client.patch(
-        f'/api/v1/projects/{project_id}/graph',
+        '/api/v1/graph',
         json={
             'graph_version': first.json()['meta']['graph_version'],
             'operations': [
                 {
                     'type': 'add_pipeline_template',
-                    'template_ref': 'example_iris_pipeline.json',
+                    'template_ref': 'builtin/example_iris_pipeline',
                     'node_id_prefix': 'study_b',
                 }
             ],
@@ -567,7 +567,7 @@ def test_graph_patch_accepts_prefixed_pipeline_template(tmp_path) -> None:
     )
 
     assert second.status_code == 200
-    snapshot = client.get(f'/api/v1/projects/{project_id}/snapshot').json()
+    snapshot = client.get('/api/v1/project/snapshot').json()
     node_ids = {node['id'] for node in snapshot['graph']['nodes']}
     assert {'study_b_file', 'study_b_example_1', 'study_b_example_2', 'study_b_example_3', 'study_b_example_4'} <= node_ids
 
@@ -577,12 +577,12 @@ def test_file_input_node_can_use_custom_artifact_name(tmp_path) -> None:
     app = create_app(project_path=project_root)
     client = TestClient(app)
 
-    opened = client.post('/api/v1/projects/open', json={'path': str(project_root)})
+    opened = client.get('/api/v1/project/snapshot')
     project_id = opened.json()['project']['project_id']
     graph_version = opened.json()['graph']['meta']['graph_version']
 
     created = client.patch(
-        f'/api/v1/projects/{project_id}/graph',
+        '/api/v1/graph',
         json={
             'graph_version': graph_version,
             'operations': [
@@ -597,7 +597,7 @@ def test_file_input_node_can_use_custom_artifact_name(tmp_path) -> None:
     )
 
     assert created.status_code == 200
-    snapshot = client.get(f'/api/v1/projects/{project_id}/snapshot')
+    snapshot = client.get('/api/v1/project/snapshot')
     node = next(item for item in snapshot.json()['graph']['nodes'] if item['id'] == 'source_file')
     assert node['interface']['outputs'][0]['name'] == 'dataset'
 
@@ -607,12 +607,12 @@ def test_artifact_download_uses_artifact_name_and_extension(tmp_path) -> None:
     app = create_app(project_path=project_root)
     client = TestClient(app)
 
-    opened = client.post('/api/v1/projects/open', json={'path': str(project_root)})
+    opened = client.get('/api/v1/project/snapshot')
     project_id = opened.json()['project']['project_id']
     graph_version = opened.json()['graph']['meta']['graph_version']
 
     created = client.patch(
-        f'/api/v1/projects/{project_id}/graph',
+        '/api/v1/graph',
         json={
             'graph_version': graph_version,
             'operations': [
@@ -627,13 +627,13 @@ def test_artifact_download_uses_artifact_name_and_extension(tmp_path) -> None:
     assert created.status_code == 200
 
     run = client.post(
-        f'/api/v1/projects/{project_id}/nodes/sample_node/run',
+        '/api/v1/nodes/sample_node/run',
         json={'mode': 'run_stale', 'action': 'use_stale'},
     )
     assert run.status_code == 200
     assert run.json()['status'] == 'succeeded'
 
-    response = client.get(f'/api/v1/projects/{project_id}/artifacts/sample_node/sample_df/download')
+    response = client.get('/api/v1/artifacts/sample_node/sample_df/download')
 
     assert response.status_code == 200
     assert response.headers['content-disposition'].startswith('attachment;')
@@ -646,12 +646,12 @@ def test_dataframe_csv_download_returns_attachment(tmp_path) -> None:
     app = create_app(project_path=project_root)
     client = TestClient(app)
 
-    opened = client.post('/api/v1/projects/open', json={'path': str(project_root)})
+    opened = client.get('/api/v1/project/snapshot')
     project_id = opened.json()['project']['project_id']
     graph_version = opened.json()['graph']['meta']['graph_version']
 
     created = client.patch(
-        f'/api/v1/projects/{project_id}/graph',
+        '/api/v1/graph',
         json={
             'graph_version': graph_version,
             'operations': [
@@ -666,13 +666,13 @@ def test_dataframe_csv_download_returns_attachment(tmp_path) -> None:
     assert created.status_code == 200
 
     run = client.post(
-        f'/api/v1/projects/{project_id}/nodes/sample_node/run',
+        '/api/v1/nodes/sample_node/run',
         json={'mode': 'run_stale', 'action': 'use_stale'},
     )
     assert run.status_code == 200
     assert run.json()['status'] == 'succeeded'
 
-    response = client.get(f'/api/v1/projects/{project_id}/artifacts/sample_node/sample_df/download?format=csv')
+    response = client.get('/api/v1/artifacts/sample_node/sample_df/download?format=csv')
 
     assert response.status_code == 200
     assert response.headers['content-type'].startswith('text/csv')
@@ -688,12 +688,12 @@ def test_dataframe_csv_download_rejects_large_artifacts(tmp_path, monkeypatch) -
 
     monkeypatch.setattr(artifact_service_module, 'DATAFRAME_CSV_DOWNLOAD_MAX_BYTES', 1)
 
-    opened = client.post('/api/v1/projects/open', json={'path': str(project_root)})
+    opened = client.get('/api/v1/project/snapshot')
     project_id = opened.json()['project']['project_id']
     graph_version = opened.json()['graph']['meta']['graph_version']
 
     created = client.patch(
-        f'/api/v1/projects/{project_id}/graph',
+        '/api/v1/graph',
         json={
             'graph_version': graph_version,
             'operations': [
@@ -708,13 +708,13 @@ def test_dataframe_csv_download_rejects_large_artifacts(tmp_path, monkeypatch) -
     assert created.status_code == 200
 
     run = client.post(
-        f'/api/v1/projects/{project_id}/nodes/sample_node/run',
+        '/api/v1/nodes/sample_node/run',
         json={'mode': 'run_stale', 'action': 'use_stale'},
     )
     assert run.status_code == 200
     assert run.json()['status'] == 'succeeded'
 
-    response = client.get(f'/api/v1/projects/{project_id}/artifacts/sample_node/sample_df/download?format=csv')
+    response = client.get('/api/v1/artifacts/sample_node/sample_df/download?format=csv')
 
     assert response.status_code == 400
     assert '100 MB' in response.text
@@ -725,12 +725,12 @@ def test_file_artifact_content_endpoint_renders_inline_image(tmp_path) -> None:
     app = create_app(project_path=project_root)
     client = TestClient(app)
 
-    opened = client.post('/api/v1/projects/open', json={'path': str(project_root)})
+    opened = client.get('/api/v1/project/snapshot')
     project_id = opened.json()['project']['project_id']
     graph_version = opened.json()['graph']['meta']['graph_version']
 
     created = client.patch(
-        f'/api/v1/projects/{project_id}/graph',
+        '/api/v1/graph',
         json={
             'graph_version': graph_version,
             'operations': [
@@ -755,7 +755,7 @@ def test_file_artifact_content_endpoint_renders_inline_image(tmp_path) -> None:
         b'\x00\x00\x00\x00IEND\xaeB`\x82'
     )
     upload = client.post(
-        f'/api/v1/projects/{project_id}/file-inputs/image_source/upload',
+        '/api/v1/file-inputs/image_source/upload',
         content=png_bytes,
         headers={
             'X-Filename': 'chart upload.png',
@@ -764,14 +764,14 @@ def test_file_artifact_content_endpoint_renders_inline_image(tmp_path) -> None:
     )
     assert upload.status_code == 200
 
-    artifact = client.get(f'/api/v1/projects/{project_id}/artifacts/image_source/preview_image')
+    artifact = client.get('/api/v1/artifacts/image_source/preview_image')
     assert artifact.status_code == 200
     preview = artifact.json()['preview']
     assert preview['kind'] == 'file'
     assert preview['image_inline'] is True
     assert preview['mime_type'] == 'image/png'
 
-    content = client.get(f'/api/v1/projects/{project_id}/artifacts/image_source/preview_image/content')
+    content = client.get('/api/v1/artifacts/image_source/preview_image/content')
 
     assert content.status_code == 200
     assert content.headers['content-type'].startswith('image/png')

@@ -111,7 +111,19 @@ class GraphStore:
     @staticmethod
     def _node_from_dict(data: dict[str, Any]) -> Node:
         template_data = data.get('template')
-        template = TemplateRef(**template_data) if isinstance(template_data, dict) else None
+        template = None
+        if isinstance(template_data, dict):
+            ref = str(template_data.get('ref') or '')
+            provider = str(template_data.get('provider') or 'builtin')
+            name = str(template_data.get('name') or ref)
+            kind = str(template_data.get('kind') or 'notebook')
+            template = TemplateRef(
+                kind=kind,
+                provider=provider,
+                name=name,
+                ref=ref,
+                origin_revision=None if template_data.get('origin_revision') is None else str(template_data.get('origin_revision')),
+            )
         path_value = data.get('path')
         resolved_path = str(path_value) if isinstance(path_value, str) else None
         ui_value = data.get('ui')

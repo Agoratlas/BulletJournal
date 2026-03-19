@@ -20,12 +20,12 @@ class MarimoSession:
     port: int
     token: str
     base_url: str
+    public_url: str
     process: Popen[str]
 
     @property
     def url(self) -> str:
-        query = urlencode({'access_token': self.token})
-        return f'http://{self.host}:{self.port}{self.base_url}?{query}'
+        return self.public_url
 
 
 class SessionManager:
@@ -38,6 +38,7 @@ class SessionManager:
         notebook_path: Path,
         *,
         run_id: str,
+        public_base_url: str,
         runtime_env: dict[str, str] | None = None,
     ) -> MarimoSession:
         existing = self.get_by_node(node_id)
@@ -46,7 +47,8 @@ class SessionManager:
         session_id = secrets.token_hex(8)
         token = secrets.token_urlsafe(16)
         port = _free_port()
-        base_url = f'/sessions/{session_id}'
+        base_url = f'/api/v1/edit/sessions/{session_id}'
+        public_url = f'{public_base_url}{base_url}?{urlencode({"access_token": token})}'
         process = launch_editor(
             notebook_path,
             host='127.0.0.1',
@@ -64,6 +66,7 @@ class SessionManager:
             port=port,
             token=token,
             base_url=base_url,
+            public_url=public_url,
             process=process,
         )
         self._sessions[session_id] = session

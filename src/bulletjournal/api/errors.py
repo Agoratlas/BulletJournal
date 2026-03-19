@@ -3,7 +3,15 @@ from __future__ import annotations
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
-from bulletjournal.domain.errors import ArtifactError, GraphValidationError, InvalidRequestError, NotFoundError, RunConflictError
+from bulletjournal.domain.errors import (
+    ArtifactError,
+    GraphValidationError,
+    InvalidRequestError,
+    NotFoundError,
+    ProjectValidationError,
+    RunConflictError,
+    UnauthorizedError,
+)
 
 
 def install_error_handlers(app: FastAPI) -> None:
@@ -26,6 +34,14 @@ def install_error_handlers(app: FastAPI) -> None:
     @app.exception_handler(NotFoundError)
     async def not_found_handler(_: Request, exc: NotFoundError) -> JSONResponse:
         return JSONResponse(status_code=404, content={'detail': str(exc)})
+
+    @app.exception_handler(ProjectValidationError)
+    async def project_validation_handler(_: Request, exc: ProjectValidationError) -> JSONResponse:
+        return JSONResponse(status_code=400, content={'detail': str(exc)})
+
+    @app.exception_handler(UnauthorizedError)
+    async def unauthorized_handler(_: Request, exc: UnauthorizedError) -> JSONResponse:
+        return JSONResponse(status_code=401, content={'detail': str(exc)})
 
     @app.exception_handler(FileNotFoundError)
     async def missing_handler(_: Request, exc: FileNotFoundError) -> JSONResponse:

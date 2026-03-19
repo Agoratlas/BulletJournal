@@ -40,3 +40,11 @@ class RunCancelledError(BulletJournalError):
 
 class NotebookSessionError(BulletJournalError):
     pass
+
+
+class ProjectValidationError(BulletJournalError):
+    pass
+
+
+class UnauthorizedError(BulletJournalError):
+    pass

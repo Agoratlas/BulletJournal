@@ -7,7 +7,7 @@ from pathlib import Path
 from bulletjournal.cli.start import start_server
 
 
-def dev_server(path: str | None, *, open_browser: bool = False) -> None:
+def dev_server(path: str | None, *, open_browser: bool = False, base_path: str = '') -> None:
     vite_command = None
     if shutil.which('pnpm'):
         vite_command = ['pnpm', 'dev', '--host', '127.0.0.1', '--port', '5173']
@@ -22,6 +22,7 @@ def dev_server(path: str | None, *, open_browser: bool = False) -> None:
         start_server(
             path,
             open_browser=open_browser,
+            base_path=base_path,
             reload=True,
             dev_frontend_url='http://127.0.0.1:5173',
         )

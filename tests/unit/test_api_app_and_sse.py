@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import socket
+import threading
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
+from websockets.sync.server import serve
 
 import bulletjournal.api.app as api_app_module
 import bulletjournal.api.sse as sse_module
@@ -45,6 +49,7 @@ class FakeProjectService:
 class FakeRunService:
     def __init__(self) -> None:
         self.stop_calls = 0
+        self.session_manager = SimpleNamespace(get=lambda session_id: None)
 
     def stop(self) -> None:
         self.stop_calls += 1
@@ -80,20 +85,20 @@ def test_create_app_opens_project_on_startup_and_stops_services(monkeypatch, tmp
     assert container.project_service.stop_calls == 1
 
 
-def test_create_app_ignores_missing_project_file_on_startup(monkeypatch, tmp_path: Path) -> None:
+def test_create_app_fails_startup_when_project_open_fails(monkeypatch, tmp_path: Path) -> None:
     web_root = tmp_path / 'web'
     web_root.mkdir()
     project_root = tmp_path / 'project'
     project_root.mkdir()
     container = FakeContainer(project_error=FileNotFoundError('gone'))
-    app, container = _make_app(monkeypatch, web_root, project_path=project_root, container=container)
-
-    with TestClient(app):
+    try:
+        _make_app(monkeypatch, web_root, project_path=project_root, container=container)
+    except FileNotFoundError:
         pass
+    else:
+        raise AssertionError('expected app creation to fail')
 
     assert container.project_service.opened == [project_root]
-    assert container.run_service.stop_calls == 1
-    assert container.project_service.stop_calls == 1
 
 
 def test_create_app_serves_assets_files_index_and_503(monkeypatch, tmp_path: Path) -> None:
@@ -114,7 +119,8 @@ def test_create_app_serves_assets_files_index_and_503(monkeypatch, tmp_path: Pat
     assert asset.status_code == 200
     assert asset.text == 'console.log(1);'
     assert file_response.text == 'guide'
-    assert fallback.text == 'index'
+    assert 'index' in fallback.text
+    assert '__BULLETJOURNAL_BASE_PATH__' in fallback.text
 
     empty_root = tmp_path / 'empty-web'
     empty_root.mkdir()
@@ -141,6 +147,166 @@ def test_create_app_redirects_to_dev_frontend(monkeypatch, tmp_path: Path) -> No
 
     assert root.headers['location'] == 'http://127.0.0.1:5173/app/'
     assert nested.headers['location'] == 'http://127.0.0.1:5173/app/nested/page'
+
+
+def test_edit_session_proxy_rewrites_upstream_redirect_location(monkeypatch, tmp_path: Path) -> None:
+    web_root = tmp_path / 'web'
+    web_root.mkdir()
+
+    class FakeProcess:
+        def poll(self):
+            return None
+
+    session = SimpleNamespace(
+        host='127.0.0.1',
+        port=52012,
+        token='secret-token',
+        base_url='/api/v1/edit/sessions/demo',
+        process=FakeProcess(),
+    )
+    container = FakeContainer()
+    container.run_service.session_manager = SimpleNamespace(get=lambda session_id: session if session_id == 'demo' else None)
+
+    class FakeResponse:
+        def __init__(self):
+            self.content = b''
+            self.status_code = 307
+            self.headers = {
+                'location': 'http://127.0.0.1:52012/api/v1/edit/sessions/demo/?access_token=secret-token',
+            }
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def request(self, *args, **kwargs):
+            return FakeResponse()
+
+    monkeypatch.setattr(api_app_module.httpx, 'AsyncClient', FakeClient)
+    app, _ = _make_app(monkeypatch, web_root, container=container)
+
+    with TestClient(app) as client:
+        response = client.get('/api/v1/edit/sessions/demo?access_token=secret-token', follow_redirects=False)
+
+    assert response.status_code == 307
+    assert response.headers['location'] == 'http://testserver/api/v1/edit/sessions/demo/?access_token=secret-token'
+
+
+def test_edit_session_proxy_accepts_upstream_session_cookie(monkeypatch, tmp_path: Path) -> None:
+    web_root = tmp_path / 'web'
+    web_root.mkdir()
+
+    class FakeProcess:
+        def poll(self):
+            return None
+
+    session = SimpleNamespace(
+        host='127.0.0.1',
+        port=52012,
+        token='secret-token',
+        base_url='/api/v1/edit/sessions/demo',
+        process=FakeProcess(),
+    )
+    container = FakeContainer()
+    container.run_service.session_manager = SimpleNamespace(get=lambda session_id: session if session_id == 'demo' else None)
+
+    class FakeResponse:
+        def __init__(self):
+            self.content = b'ok'
+            self.status_code = 200
+            self.headers = {'content-type': 'text/plain'}
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def request(self, *args, **kwargs):
+            return FakeResponse()
+
+    monkeypatch.setattr(api_app_module.httpx, 'AsyncClient', FakeClient)
+    app, _ = _make_app(monkeypatch, web_root, container=container)
+
+    with TestClient(app) as client:
+        client.cookies.set('session_52012', 'cookie-value')
+        response = client.get('/api/v1/edit/sessions/demo/assets/useNonce.js')
+
+    assert response.status_code == 200
+    assert response.text == 'ok'
+
+
+def test_create_app_serves_assets_and_api_under_base_path(monkeypatch, tmp_path: Path) -> None:
+    web_root = tmp_path / 'web'
+    assets_dir = web_root / 'assets'
+    assets_dir.mkdir(parents=True)
+    (assets_dir / 'app.js').write_text('console.log(1);', encoding='utf-8')
+    (web_root / 'index.html').write_text('index', encoding='utf-8')
+
+    app, _ = _make_app(monkeypatch, web_root, server_config=ServerConfig(base_path='/p/demo'))
+
+    with TestClient(app) as client:
+        asset = client.get('/p/demo/assets/app.js')
+        health = client.get('/p/demo/healthz')
+        root_health = client.get('/healthz')
+        fallback = client.get('/p/demo/missing-route')
+
+    assert asset.status_code == 200
+    assert health.json() == {'status': 'ok'}
+    assert root_health.json() == {'status': 'ok'}
+    assert "'/p/demo'" in fallback.text
+
+
+def test_create_app_proxies_editor_websocket(monkeypatch, tmp_path: Path) -> None:
+    web_root = tmp_path / 'web'
+    web_root.mkdir()
+    listener = socket.socket()
+    listener.bind(('127.0.0.1', 0))
+    port = int(listener.getsockname()[1])
+    listener.close()
+
+    def echo(connection) -> None:
+        message = connection.recv()
+        connection.send(f'echo:{message}')
+
+    server = serve(echo, '127.0.0.1', port)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    time.sleep(0.1)
+
+    class FakeProcess:
+        def poll(self):
+            return None
+
+    session = SimpleNamespace(
+        host='127.0.0.1',
+        port=port,
+        token='secret-token',
+        base_url='/api/v1/edit/sessions/demo',
+        process=FakeProcess(),
+    )
+    container = FakeContainer()
+    container.run_service.session_manager = SimpleNamespace(get=lambda session_id: session if session_id == 'demo' else None)
+
+    app, _ = _make_app(monkeypatch, web_root, container=container)
+
+    try:
+        with TestClient(app) as client, client.websocket_connect('/api/v1/edit/sessions/demo/ws?access_token=secret-token') as websocket:
+            websocket.send_text('hello')
+            assert websocket.receive_text() == 'echo:hello'
+    finally:
+        server.shutdown()
+        thread.join(timeout=2)
 
 
 def test_cors_allowed_origins_include_valid_dev_frontend_only() -> None:

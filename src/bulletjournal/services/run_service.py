@@ -16,6 +16,7 @@ from bulletjournal.execution.runner import WorkerRunner
 from bulletjournal.execution.sessions import SessionManager
 from bulletjournal.parser.validation import build_issue_id
 from bulletjournal.parser.source_hash import compute_source_hash
+from bulletjournal.config import ServerConfig, normalize_base_path
 from bulletjournal.utils import utc_now_iso
 
 
@@ -45,9 +46,14 @@ class RunService:
         self.project_service = project_service
         self.worker_runner = WorkerRunner()
         self.session_manager = SessionManager()
+        self.server_config: ServerConfig | None = None
         self._lock = Lock()
         self._active_run: ActiveRun | None = None
         self._orchestrator_node_states: dict[str, OrchestratorNodeState] = {}
+
+    def has_active_run(self) -> bool:
+        with self._lock:
+            return self._active_run is not None
 
     def start_node_run(
         self,
@@ -578,6 +584,7 @@ class RunService:
             node_id,
             notebook_path,
             run_id=run_id,
+            public_base_url=normalize_base_path(getattr(self.server_config, 'base_path', '')),
             runtime_env=runtime_env,
         )
         return {

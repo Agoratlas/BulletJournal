@@ -1,17 +1,19 @@
 # BulletJournal
 
-BulletJournal is a local-first notebook orchestration platform for reproducible data science.
+BulletJournal is a single-project notebook orchestration platform for reproducible data science.
 It layers explicit artifact passing, persistent graph state, stale detection, checkpoints,
-and managed execution on top of Marimo notebooks.
+and managed execution on top of Marimo notebooks, and it can run standalone or behind
+`BulletJournal-Controller`.
 
 ## What the MVP includes
 
 - FastAPI backend with REST + SSE updates
-- Project format rooted in `graph/`, `notebooks/`, `artifacts/`, `metadata/`, and `checkpoints/`
+- Project format rooted in `graph/`, `notebooks/`, `artifacts/`, `metadata/`, `checkpoints/`, `pyproject.toml`, and `uv.lock`
 - Strict AST parsing for notebook inputs, outputs, assets, and notebook docs
 - Managed notebook execution in subprocesses with persisted artifact lineage and stale propagation
-- File input nodes plus built-in notebook and pipeline templates
+- File input nodes plus built-in and provider-discovered notebook and pipeline templates
 - Checkpoint create/list/restore flows
+- Zip import and export flows
 - A bundled ReactFlow-based web UI for browsing projects, nodes, artifacts, issues, and events
 
 ## Requirements
@@ -26,9 +28,9 @@ python3 -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"
 
-bulletjournal init my-study
+bulletjournal init my-study --project-id my-study
 cd my-study
-bulletjournal start --open
+bulletjournal start . --open
 ```
 
 If you are already inside a project root, running `bulletjournal` with no subcommand starts the app.
@@ -36,12 +38,15 @@ If you are already inside a project root, running `bulletjournal` with no subcom
 ## Common commands
 
 ```bash
-bulletjournal init my-study
+bulletjournal init my-study --project-id my-study
 bulletjournal start .
 bulletjournal dev . --open
 bulletjournal doctor .
 bulletjournal validate-templates
 bulletjournal rebuild-state .
+bulletjournal mark-environment-changed . --reason "dependencies updated"
+bulletjournal export . my-study.zip
+bulletjournal import my-study.zip restored-study
 ```
 
 ## Project layout
@@ -58,11 +63,12 @@ project_root/
 │  └─ objects/
 ├─ metadata/
 │  ├─ project.json
-│  ├─ environment.json
 │  └─ state.db
 ├─ checkpoints/
-└─ uploads/
-   └─ temp/
+├─ uploads/
+│  └─ temp/
+├─ pyproject.toml
+└─ uv.lock
 ```
 
 ## Docs
@@ -86,12 +92,14 @@ PYTHONPATH=src python -m pytest
 
 This repository now contains a functional MVP with tested core flows for:
 
-- project init/open
+- single-project startup
 - interface parsing
 - graph persistence and validation
 - managed notebook runs
 - artifact state transitions
 - checkpoints and restore
+- controller-facing status and environment invalidation hooks
+- zip import/export
 - SSE event streaming and API-driven UI updates
 
 Known MVP constraints remain around deployment hardening and background execution semantics, but the repository is no longer just a skeleton.

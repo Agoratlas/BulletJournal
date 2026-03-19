@@ -1,13 +1,31 @@
 import type {
   GraphPatchResponse,
   GraphPatchOperation,
-  ProjectOpenResponse,
   ProjectSnapshot,
   SessionRecord,
 } from './types'
 
+declare global {
+  interface Window {
+    __BULLETJOURNAL_BASE_PATH__?: string
+  }
+}
+
+export function appBasePath(): string {
+  const value = window.__BULLETJOURNAL_BASE_PATH__ || ''
+  if (!value || value === '/') {
+    return ''
+  }
+  return value.endsWith('/') ? value.slice(0, -1) : value
+}
+
+export function appUrl(path: string): string {
+  const normalizedPath = path.startsWith('/') ? path : `/${path}`
+  return `${appBasePath()}${normalizedPath}`
+}
+
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(url, {
+  const response = await fetch(appUrl(url), {
     ...init,
     headers: {
       'Content-Type': 'application/json',
@@ -55,75 +73,61 @@ function formatErrorDetail(detail: unknown): string {
   return String(detail)
 }
 
-export async function openProject(path: string): Promise<ProjectOpenResponse> {
-  return request('/api/v1/projects/open', {
-    method: 'POST',
-    body: JSON.stringify({ path }),
-  })
-}
-
-export async function initProject(path: string, title?: string): Promise<ProjectOpenResponse> {
-  return request('/api/v1/projects/init', {
-    method: 'POST',
-    body: JSON.stringify({ path, title: title || null }),
-  })
-}
-
 export async function currentProject(): Promise<ProjectSnapshot> {
-  return request('/api/v1/projects/current')
+  return request('/api/v1/project/snapshot')
 }
 
-export async function getSnapshot(projectId: string): Promise<ProjectSnapshot> {
-  return request(`/api/v1/projects/${projectId}/snapshot`)
+export async function getSnapshot(): Promise<ProjectSnapshot> {
+  return request('/api/v1/project/snapshot')
 }
 
-export async function patchGraph(projectId: string, graphVersion: number, operations: GraphPatchOperation[]): Promise<GraphPatchResponse> {
-  return request(`/api/v1/projects/${projectId}/graph`, {
+export async function patchGraph(graphVersion: number, operations: GraphPatchOperation[]): Promise<GraphPatchResponse> {
+  return request('/api/v1/graph', {
     method: 'PATCH',
     body: JSON.stringify({ graph_version: graphVersion, operations }),
   })
 }
 
-export async function dismissNotice(projectId: string, issueId: string) {
-  return request<Record<string, unknown>>(`/api/v1/projects/${projectId}/notices/${issueId}/dismiss`, {
+export async function dismissNotice(issueId: string) {
+  return request<Record<string, unknown>>(`/api/v1/notices/${issueId}/dismiss`, {
     method: 'POST',
   })
 }
 
-export async function runNode(projectId: string, nodeId: string, mode: string, action: string | null = null) {
-  return request<Record<string, unknown>>(`/api/v1/projects/${projectId}/nodes/${nodeId}/run`, {
+export async function runNode(nodeId: string, mode: string, action: string | null = null) {
+  return request<Record<string, unknown>>(`/api/v1/nodes/${nodeId}/run`, {
     method: 'POST',
     body: JSON.stringify({ mode, action }),
   })
 }
 
-export async function runAll(projectId: string) {
-  return request<Record<string, unknown>>(`/api/v1/projects/${projectId}/runs/run-all`, {
+export async function runAll() {
+  return request<Record<string, unknown>>('/api/v1/runs/run-all', {
     method: 'POST',
     body: JSON.stringify({ mode: 'run_stale' }),
   })
 }
 
-export async function cancelRun(projectId: string, runId: string) {
-  return request<Record<string, unknown>>(`/api/v1/projects/${projectId}/runs/${runId}/cancel`, {
+export async function cancelRun(runId: string) {
+  return request<Record<string, unknown>>(`/api/v1/runs/${runId}/cancel`, {
     method: 'POST',
   })
 }
 
-export async function createCheckpoint(projectId: string) {
-  return request<Record<string, unknown>>(`/api/v1/projects/${projectId}/checkpoints`, {
+export async function createCheckpoint() {
+  return request<Record<string, unknown>>('/api/v1/checkpoints', {
     method: 'POST',
   })
 }
 
-export async function restoreCheckpoint(projectId: string, checkpointId: string) {
-  return request<Record<string, unknown>>(`/api/v1/projects/${projectId}/checkpoints/${checkpointId}/restore`, {
+export async function restoreCheckpoint(checkpointId: string) {
+  return request<Record<string, unknown>>(`/api/v1/checkpoints/${checkpointId}/restore`, {
     method: 'POST',
   })
 }
 
-export async function uploadFile(projectId: string, nodeId: string, file: File) {
-  const response = await fetch(`/api/v1/projects/${projectId}/file-inputs/${nodeId}/upload`, {
+export async function uploadFile(nodeId: string, file: File) {
+  const response = await fetch(appUrl(`/api/v1/file-inputs/${nodeId}/upload`), {
     method: 'POST',
     headers: {
       'X-Filename': file.name,
@@ -138,17 +142,12 @@ export async function uploadFile(projectId: string, nodeId: string, file: File) 
   return response.json() as Promise<Record<string, unknown>>
 }
 
-export async function listSessions(projectId: string): Promise<SessionRecord[]> {
-  return request(`/api/v1/projects/${projectId}/sessions`)
+export async function listSessions(): Promise<SessionRecord[]> {
+  return request('/api/v1/sessions')
 }
 
-export async function stopSession(projectId: string, sessionId: string) {
-  return request<Record<string, unknown>>(`/api/v1/projects/${projectId}/sessions/${sessionId}/stop`, {
+export async function stopSession(sessionId: string) {
+  return request<Record<string, unknown>>(`/api/v1/sessions/${sessionId}/stop`, {
     method: 'POST',
   })
-}
-
-export function makeEditSessionLoadingUrl(projectId: string, sessionId: string): string {
-  const params = new URLSearchParams({ project_id: projectId, session_id: sessionId })
-  return `/?${params.toString()}`
 }

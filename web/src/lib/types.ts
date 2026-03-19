@@ -26,7 +26,9 @@ export type NoticeRecord = {
 export type ValidationIssue = NoticeRecord
 
 export type TemplateRef = {
-  kind: string
+  kind: 'notebook' | 'pipeline'
+  provider: string
+  name: string
   ref: string
   origin_revision: string | null
 }
@@ -146,8 +148,11 @@ export type CheckpointRecord = {
 }
 
 export type TemplateRecord = {
-  kind: 'template' | 'pipeline'
+  provider: string
+  kind: 'notebook' | 'pipeline'
+  name: string
   ref: string
+  origin_revision: string
   title: string
   source: string
   description?: string
@@ -186,9 +191,10 @@ export type ProjectSnapshot = {
   server_time: string
   project: {
     project_id: string
-    title: string
+    title: string | null
     created_at: string
     root: string
+    project_root: string
   }
   graph: {
     meta: {

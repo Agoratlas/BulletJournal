@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import logging
 import threading
 import time
 from pathlib import Path
 
 from bulletjournal.config import WATCH_INTERVAL_SECONDS
+
+
+logger = logging.getLogger(__name__)
 
 
 class NotebookWatcher:
@@ -31,13 +35,20 @@ class NotebookWatcher:
             try:
                 self._scan()
             except Exception:  # noqa: BLE001
-                pass
+                logger.exception('Notebook watcher scan failed.')
             time.sleep(WATCH_INTERVAL_SECONDS)
 
     def _scan(self) -> None:
-        project = self.project_service.current_project
+        project = self.project_service.project
         if project is None:
+            self._mtimes.clear()
             return
+        current_paths = {str(path) for path in project.paths.notebooks_dir.glob('*.py')}
+        self._mtimes = {
+            key: value
+            for key, value in self._mtimes.items()
+            if key in current_paths
+        }
         for notebook_path in sorted(project.paths.notebooks_dir.glob('*.py')):
             mtime = notebook_path.stat().st_mtime
             key = str(notebook_path)

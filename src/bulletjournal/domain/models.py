@@ -9,12 +9,16 @@ from bulletjournal.domain.enums import ArtifactRole, NodeKind, ValidationSeverit
 @dataclass(slots=True)
 class TemplateRef:
     kind: str
+    provider: str
+    name: str
     ref: str
     origin_revision: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
             'kind': self.kind,
+            'provider': self.provider,
+            'name': self.name,
             'ref': self.ref,
             'origin_revision': self.origin_revision,
         }
@@ -153,11 +157,8 @@ class GraphData:
 @dataclass(slots=True)
 class ProjectMetadata:
     project_id: str
-    title: str
     created_at: str
-    artifact_cache_limit_bytes: int
-    tracked_env_vars: list[str]
-    default_open_browser: bool
+    title: str | None = None
 
 
 @dataclass(slots=True)

@@ -11,7 +11,7 @@ from bulletjournal.domain.state_machine import derive_node_state
 from bulletjournal.execution.watcher import NotebookWatcher
 from bulletjournal.storage.graph_store import GraphStore
 from bulletjournal.storage.object_store import ObjectStore
-from bulletjournal.storage.project_fs import ProjectPaths, init_project_root, is_project_root, load_project_json
+from bulletjournal.storage.project_fs import ProjectPaths, init_project_root, load_project_json, require_project_root
 from bulletjournal.storage.state_db import StateDB
 from bulletjournal.utils import utc_now_iso
 
@@ -29,42 +29,39 @@ class ProjectService:
     def __init__(self, event_service, template_service) -> None:
         self.event_service = event_service
         self.template_service = template_service
-        self.current_project: OpenProject | None = None
+        self.project: OpenProject | None = None
         self.run_service = None
         self.watcher = NotebookWatcher(self)
 
-    def init_project(self, path: Path, *, title: str | None = None) -> dict[str, Any]:
-        paths = init_project_root(path, title=title)
+    def init_project(self, path: Path, *, title: str | None = None, project_id: str | None = None) -> dict[str, Any]:
+        paths = init_project_root(path, title=title, project_id=project_id)
         self._open_paths(paths)
         self.reparse_all_notebooks()
         return self.snapshot()
 
     def open_project(self, path: Path) -> dict[str, Any]:
-        resolved = path.resolve()
-        if not is_project_root(resolved):
-            raise FileNotFoundError(f'{resolved} is not an BulletJournal project root.')
-        self._open_paths(ProjectPaths(resolved))
+        self._open_paths(require_project_root(path))
         self.reparse_all_notebooks()
         return self.snapshot()
 
     def _open_paths(self, paths: ProjectPaths) -> OpenProject:
+        if self.project is not None and self.project.paths.root != paths.root:
+            raise InvalidRequestError('This process is already bound to a different project root.')
         project_json = load_project_json(paths)
         metadata = ProjectMetadata(
             project_id=_as_str(project_json['project_id']),
-            title=_as_str(project_json['title']),
             created_at=_as_str(project_json['created_at']),
-            artifact_cache_limit_bytes=_as_int(project_json['artifact_cache_limit_bytes']) if 'artifact_cache_limit_bytes' in project_json else 0,
-            tracked_env_vars=_as_str_list(project_json['tracked_env_vars']) if 'tracked_env_vars' in project_json else [],
-            default_open_browser=bool(project_json.get('default_open_browser', True)),
+            title=_optional_str(project_json.get('title')),
         )
         graph_store = GraphStore(paths)
         state_db = StateDB(paths.state_db_path)
         object_store = ObjectStore(paths)
         project = OpenProject(paths=paths, metadata=metadata, graph_store=graph_store, state_db=state_db, object_store=object_store)
         state_db.abort_inflight_runs()
-        self.current_project = project
+        self.project = project
         self.watcher.start()
         graph = graph_store.read()
+        self._ensure_activity_meta(project, graph.meta.get('updated_at'))
         self.event_service.publish(
             'project.opened',
             project_id=metadata.project_id,
@@ -74,15 +71,9 @@ class ProjectService:
         return project
 
     def require_project(self) -> OpenProject:
-        if self.current_project is None:
+        if self.project is None:
             raise InvalidRequestError('No project is currently open.')
-        return self.current_project
-
-    def require_project_id(self, project_id: str) -> OpenProject:
-        project = self.require_project()
-        if project.metadata.project_id != project_id:
-            raise NotFoundError(f'Unknown project `{project_id}`.')
-        return project
+        return self.project
 
     def graph(self) -> GraphData:
         return self.require_project().graph_store.read()
@@ -90,6 +81,7 @@ class ProjectService:
     def write_graph(self, graph: GraphData, *, increment_version: bool = True) -> GraphData:
         project = self.require_project()
         graph = project.graph_store.write(graph, increment_version=increment_version)
+        self.record_graph_activity(str(graph.meta.get('updated_at') or utc_now_iso()))
         self.event_service.publish(
             'graph.updated',
             project_id=project.metadata.project_id,
@@ -285,6 +277,7 @@ class ProjectService:
                 'title': project.metadata.title,
                 'created_at': project.metadata.created_at,
                 'root': str(project.paths.root),
+                'project_root': str(project.paths.root),
             },
             'graph': {
                 'meta': graph.meta,
@@ -298,6 +291,80 @@ class ProjectService:
             'runs': runs,
             'checkpoints': [asdict(checkpoint) for checkpoint in project.state_db.list_checkpoints()],
             'templates': self.template_service.list_templates(),
+        }
+
+    def project_metadata_payload(self) -> dict[str, Any]:
+        project = self.require_project()
+        return {
+            'project_id': project.metadata.project_id,
+            'created_at': project.metadata.created_at,
+            'root': str(project.paths.root),
+            'project_root': str(project.paths.root),
+            'title': project.metadata.title,
+        }
+
+    def project_status(self) -> dict[str, Any]:
+        project = self.require_project()
+        meta = project.state_db.list_project_meta()
+        has_active_run = bool(self.run_service.has_active_run()) if self.run_service is not None else False
+        last_graph_edit_at = meta.get('last_graph_edit_at')
+        last_notebook_edit_at = meta.get('last_notebook_edit_at')
+        last_run_started_at = project.state_db.latest_run_started_at()
+        last_run_finished_at = project.state_db.latest_run_finished_at()
+        relevant = [timestamp for timestamp in [last_graph_edit_at, last_notebook_edit_at, last_run_finished_at, last_run_started_at] if timestamp]
+        idle_since = max(relevant) if relevant else project.metadata.created_at
+        idle_eligible = not has_active_run
+        return {
+            'project_id': project.metadata.project_id,
+            'server_status': 'ok',
+            'has_active_run': has_active_run,
+            'last_graph_edit_at': last_graph_edit_at,
+            'last_notebook_edit_at': last_notebook_edit_at,
+            'last_run_started_at': last_run_started_at,
+            'last_run_finished_at': last_run_finished_at,
+            'idle_shutdown_eligible': idle_eligible,
+            'idle_shutdown_eligible_since': idle_since if idle_eligible else None,
+        }
+
+    def record_graph_activity(self, timestamp: str | None = None) -> None:
+        self.require_project().state_db.set_project_meta('last_graph_edit_at', timestamp or utc_now_iso())
+
+    def record_notebook_activity(self, timestamp: str | None = None) -> None:
+        self.require_project().state_db.set_project_meta('last_notebook_edit_at', timestamp or utc_now_iso())
+
+    def mark_environment_changed(self, *, reason: str, mark_all_artifacts_stale: bool = True) -> dict[str, Any]:
+        project = self.require_project()
+        stale_count = 0
+        if mark_all_artifacts_stale:
+            notebook_ids = {node.id for node in self.graph().nodes if node.kind == NodeKind.NOTEBOOK}
+            for head in project.state_db.list_artifact_heads():
+                if head['node_id'] not in notebook_ids:
+                    continue
+                if head['current_version_id'] is None or head['state'] == ArtifactState.STALE.value:
+                    continue
+                project.state_db.set_artifact_head_state(head['node_id'], head['artifact_name'], ArtifactState.STALE)
+                stale_count += 1
+            graph_version = int(self.graph().meta['graph_version'])
+            self.event_service.publish(
+                'project.environment_changed',
+                project_id=project.metadata.project_id,
+                graph_version=graph_version,
+                payload={'reason': reason, 'mark_all_artifacts_stale': True, 'stale_count': stale_count},
+            )
+        notice = self.record_notice(
+            issue_id='environment_changed',
+            node_id=None,
+            severity=ValidationSeverity.WARNING,
+            code='environment_changed',
+            message='Project outputs were marked stale because the environment changed.',
+            details={'reason': reason, 'mark_all_artifacts_stale': mark_all_artifacts_stale},
+        )
+        return {
+            'project_id': project.metadata.project_id,
+            'reason': reason,
+            'mark_all_artifacts_stale': mark_all_artifacts_stale,
+            'stale_count': stale_count,
+            'notice': notice,
         }
 
     def reparse_all_notebooks(self) -> None:
@@ -327,19 +394,21 @@ class ProjectService:
     def stop(self) -> None:
         self.watcher.stop()
 
+    def _ensure_activity_meta(self, project: OpenProject, graph_updated_at: object) -> None:
+        graph_timestamp = str(graph_updated_at or project.metadata.created_at)
+        if project.state_db.get_project_meta('last_graph_edit_at') is None:
+            project.state_db.set_project_meta('last_graph_edit_at', graph_timestamp)
+        if project.state_db.get_project_meta('last_notebook_edit_at') is None:
+            project.state_db.set_project_meta('last_notebook_edit_at', project.metadata.created_at)
+
 
 def _as_str(value: object) -> str:
     return str(value)
-
-
-def _as_int(value: object) -> int:
-    return int(str(value))
-
-
-def _as_str_list(value: object) -> list[str]:
-    if not isinstance(value, list):
-        return []
-    return [str(item) for item in value]
+def _optional_str(value: object | None) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
 
 
 def _notice_sort_key(notice: dict[str, Any]) -> tuple[int, str, str]:

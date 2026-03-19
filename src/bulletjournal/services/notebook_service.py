@@ -42,6 +42,9 @@ class NotebookService:
                     details=warning.details,
                 )
             changed = previous is not None and previous.get('source_hash') != interface.source_hash
+            first_parse = previous is None
+            if changed or first_parse:
+                self.project_service.record_notebook_activity()
             if changed:
                 if self.project_service.run_service is not None:
                     self.project_service.run_service.interrupt_active_run_if_nodes_affected(

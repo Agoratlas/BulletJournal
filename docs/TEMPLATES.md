@@ -1,27 +1,30 @@
 # Templates
 
-BulletJournal ships two kinds of built-in templates:
+BulletJournal supports built-in templates and dynamically discovered external template providers.
 
-- Notebook templates in `src/bulletjournal/templates/builtin/`
-- Pipeline templates in `src/bulletjournal/templates/pipelines/`
+## Provider model
 
-Notebook templates are copied into project notebooks when instantiated.
+- built-ins ship from `src/bulletjournal/templates/`
+- external providers are discovered from Python entry points in the `bulletjournal.templates` group
+- BulletJournal does not import any private template package directly
 
-Pipeline templates describe a small graph made of notebook-template and file-input nodes. Instantiating one creates all referenced nodes, layouts, and edges in a single graph operation. File input nodes start pending and uninitialized.
+## Template refs
 
-Built-ins include:
+Template refs are globally namespaced:
 
-- `empty_notebook.py`
-- `value_input.py`
-- `example_1.py` to `example_4.py`
-- `example_iris_pipeline.json`
-
-If a pipeline template would reuse an existing node ID, the frontend asks for a prefix and the backend enforces that requirement.
-
-Template validation is available through:
-
-```bash
-bulletjournal validate-templates
+```text
+{provider}/{name}
 ```
 
-The validator now checks notebook templates recursively and verifies pipeline-template graph integrity, referenced notebook templates, edge ports, edge type compatibility, and DAG validity.
+Examples:
+
+- `builtin/empty_notebook`
+- `builtin/example_iris_pipeline`
+- `external/team_default`
+
+## Template kinds
+
+- notebook templates are copied into `project_root/notebooks/` when instantiated
+- pipeline templates expand into graph operations when instantiated
+
+Template metadata exposed by the API includes `provider`, `kind`, `name`, `ref`, and `origin_revision`.

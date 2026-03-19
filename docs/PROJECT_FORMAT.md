@@ -1,55 +1,41 @@
 # Project Format
 
-BulletJournal projects are portable directories.
+BulletJournal projects are portable directories with a canonical locked environment definition.
 
-## Directories
+## Canonical layout
 
 ```text
 project_root/
-├─ graph/
-├─ notebooks/
-├─ artifacts/objects/
-├─ metadata/
-├─ checkpoints/
-└─ uploads/temp/
+|- graph/
+|- notebooks/
+|- artifacts/
+|  `- objects/
+|- metadata/
+|  |- project.json
+|  `- state.db
+|- checkpoints/
+|- uploads/
+|  `- temp/
+|- pyproject.toml
+`- uv.lock
 ```
 
-## Graph files
+## Stable metadata
 
-- `graph/meta.json`: schema version, project id, graph version, updated timestamp
-- `graph/nodes.json`: notebook and file input node definitions
-- `graph/edges.json`: visible artifact connections
-- `graph/layout.json`: node positions and sizes
-- graph writes are directory-atomic: all four files are replaced as one graph snapshot
+`metadata/project.json` stores project-owned metadata, including:
 
-## SQLite tables
+- `schema_version`
+- `project_id`
+- `created_at`
 
-`metadata/state.db` contains:
+`project_id` is stable across export/import and must match `^[a-z0-9][a-z0-9_-]{1,62}$`.
 
-- notebook revisions and validation issues
-- artifact objects, versions, heads, and cache index
-- run records, run inputs, run outputs
-- checkpoints
+## Environment definition
 
-Important table roles:
+- `pyproject.toml` and `uv.lock` at the project root are authoritative
+- `metadata/environment.json` is no longer part of the canonical format
+- `metadata/environment_packages.txt` is no longer part of the canonical format
 
-- `notebook_revisions`: parsed interfaces keyed by `(node_id, source_hash)`
-- `validation_issues`: durable parser and graph-facing warnings
-- `artifact_objects`: content-addressed metadata for stored blobs
-- `artifact_versions`: immutable lineage records per produced artifact version
-- `artifact_heads`: current visible version and state (`pending`, `ready`, `stale`)
-- `cache_index`: upstream-data-hash lookup and nondeterminism tracking
-- `run_records`, `run_inputs`, `run_outputs`: run lifecycle plus loaded/produced lineage
+## SQLite state
 
-## Checkpoints
-
-Checkpoints copy `graph/` and `notebooks/` only.
-Artifact objects remain in the shared cache and are reconciled on restore.
-
-On restore the backend:
-
-- restores graph and notebook files
-- reparses notebooks
-- removes state for nodes/artifacts no longer present
-- recreates missing artifact heads for restored interfaces
-- marks restored notebook outputs stale so users can rerun against the restored graph
+`metadata/state.db` stores mutable execution metadata such as notebook revisions, notices, artifacts, runs, checkpoints, and controller-facing activity timestamps.

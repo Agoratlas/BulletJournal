@@ -1,13 +1,21 @@
 from __future__ import annotations
 
-import importlib.metadata
 import json
+import shutil
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path
+import re
+import textwrap
 
-from bulletjournal.config import ENVIRONMENT_SCHEMA_VERSION, GRAPH_SCHEMA_VERSION, PROJECT_SCHEMA_VERSION
+from bulletjournal.config import GRAPH_SCHEMA_VERSION, PROJECT_SCHEMA_VERSION, package_root
+from bulletjournal.domain.errors import ProjectValidationError
 from bulletjournal.storage.atomic_write import atomic_write_text
-from bulletjournal.utils import ensure_directory, json_dumps, python_version_string, slugify, utc_now_iso
+from bulletjournal.storage.state_db import StateDB
+from bulletjournal.utils import ensure_directory, json_dumps, slugify, utc_now_iso
+
+
+PROJECT_ID_PATTERN = re.compile(r'^[a-z0-9][a-z0-9_-]{1,62}$')
 
 
 @dataclass(slots=True, frozen=True)
@@ -43,8 +51,12 @@ class ProjectPaths:
         return self.metadata_dir / 'project.json'
 
     @property
-    def environment_json_path(self) -> Path:
-        return self.metadata_dir / 'environment.json'
+    def pyproject_path(self) -> Path:
+        return self.root / 'pyproject.toml'
+
+    @property
+    def uv_lock_path(self) -> Path:
+        return self.root / 'uv.lock'
 
     @property
     def checkpoints_dir(self) -> Path:
@@ -63,14 +75,35 @@ class ProjectPaths:
 
 def is_project_root(path: Path) -> bool:
     paths = ProjectPaths(path.resolve())
-    return paths.graph_dir.exists() and paths.metadata_dir.exists() and paths.notebooks_dir.exists()
+    required_directories = [
+        paths.graph_dir,
+        paths.notebooks_dir,
+        paths.artifacts_dir,
+        paths.object_store_dir,
+        paths.metadata_dir,
+        paths.checkpoints_dir,
+        paths.uploads_temp_dir,
+    ]
+    required_files = [
+        paths.graph_dir / 'meta.json',
+        paths.graph_dir / 'nodes.json',
+        paths.graph_dir / 'edges.json',
+        paths.graph_dir / 'layout.json',
+        paths.project_json_path,
+        paths.state_db_path,
+        paths.pyproject_path,
+        paths.uv_lock_path,
+    ]
+    return all(directory.is_dir() for directory in required_directories) and all(file_path.is_file() for file_path in required_files)
 
 
-def _bulletjournal_version() -> str:
-    try:
-        return importlib.metadata.version('bulletjournal')
-    except importlib.metadata.PackageNotFoundError:
-        return '0.1.0'
+def validate_project_id(project_id: str) -> str:
+    candidate = project_id.strip()
+    if not PROJECT_ID_PATTERN.fullmatch(candidate):
+        raise ProjectValidationError(
+            'Project id must match ^[a-z0-9][a-z0-9_-]{1,62}$.',
+        )
+    return candidate
 
 
 def init_project_root(path: Path, title: str | None = None, project_id: str | None = None) -> ProjectPaths:
@@ -85,8 +118,7 @@ def init_project_root(path: Path, title: str | None = None, project_id: str | No
     ensure_directory(paths.uploads_temp_dir)
 
     now = utc_now_iso()
-    resolved_title = title or root.name.replace('_', ' ').replace('-', ' ').title()
-    resolved_project_id = project_id or slugify(root.name)
+    resolved_project_id = validate_project_id(project_id or slugify(root.name))
 
     meta = {
         'schema_version': GRAPH_SCHEMA_VERSION,
@@ -105,34 +137,90 @@ def init_project_root(path: Path, title: str | None = None, project_id: str | No
     project_json = {
         'schema_version': PROJECT_SCHEMA_VERSION,
         'project_id': resolved_project_id,
-        'title': resolved_title,
         'created_at': now,
-        'artifact_cache_limit_bytes': 20_000_000_000,
-        'tracked_env_vars': [],
-        'default_open_browser': True,
     }
+    if title is not None and title.strip():
+        project_json['title'] = title.strip()
     atomic_write_text(paths.project_json_path, json_dumps(project_json, pretty=True) + '\n')
 
-    environment_json = {
-        'schema_version': ENVIRONMENT_SCHEMA_VERSION,
-        'python_version': python_version_string(),
-        'bulletjournal_version': _bulletjournal_version(),
-        'marimo_version': _safe_dependency_version('marimo'),
-        'package_snapshot_format': 'pip_freeze_text',
-        'package_snapshot_path': 'metadata/environment_packages.txt',
-        'tracked_env_vars': [],
-    }
-    atomic_write_text(paths.environment_json_path, json_dumps(environment_json, pretty=True) + '\n')
-    atomic_write_text(paths.metadata_dir / 'environment_packages.txt', '')
+    atomic_write_text(paths.pyproject_path, _default_project_pyproject(project_id=resolved_project_id))
+    _initialize_project_uv_lock(paths, project_id=resolved_project_id)
+    StateDB(paths.state_db_path)
     return paths
-
-
-def _safe_dependency_version(package_name: str) -> str | None:
-    try:
-        return importlib.metadata.version(package_name)
-    except importlib.metadata.PackageNotFoundError:
-        return None
 
 
 def load_project_json(paths: ProjectPaths) -> dict[str, object]:
     return json.loads(paths.project_json_path.read_text(encoding='utf-8'))
+
+
+def require_project_root(path: Path) -> ProjectPaths:
+    paths = ProjectPaths(path.resolve())
+    if not is_project_root(paths.root):
+        raise ProjectValidationError(f'{paths.root} is not a valid BulletJournal project root.')
+    project_json = load_project_json(paths)
+    validate_project_id(str(project_json.get('project_id') or ''))
+    return paths
+
+
+def _default_project_pyproject(*, project_id: str) -> str:
+    package_name = project_id.replace('_', '-').lower()
+    bulletjournal_source = _local_bulletjournal_source()
+    lines = [
+        '[project]',
+        f'name = "{package_name}"',
+        'version = "0.1.0"',
+        'description = "BulletJournal project environment"',
+        'requires-python = ">=3.11"',
+        'dependencies = [',
+        '  "bulletjournal",',
+        ']',
+    ]
+    if bulletjournal_source is not None:
+        lines.extend(
+            [
+                '',
+                '[tool.uv.sources]',
+                f'bulletjournal = {{ path = "{bulletjournal_source.as_posix()}", editable = true }}',
+            ]
+        )
+    return '\n'.join(lines) + '\n'
+
+
+def _default_project_uv_lock(*, project_id: str) -> str:
+    return textwrap.dedent(
+        f"""
+        version = 1
+        revision = 1
+        requires-python = ">=3.11"
+
+        [[package]]
+        name = "{project_id.replace('_', '-').lower()}"
+        version = "0.1.0"
+        source = {{ editable = "." }}
+        dependencies = [
+          {{ name = "bulletjournal" }},
+        ]
+        """
+    ).lstrip()
+
+
+def _initialize_project_uv_lock(paths: ProjectPaths, *, project_id: str) -> None:
+    uv_executable = shutil.which('uv')
+    if uv_executable is not None:
+        completed = subprocess.run(
+            [uv_executable, 'lock', '--project', str(paths.root)],
+            capture_output=True,
+            text=True,
+            timeout=120,
+            check=False,
+        )
+        if completed.returncode == 0 and paths.uv_lock_path.exists():
+            return
+    atomic_write_text(paths.uv_lock_path, _default_project_uv_lock(project_id=project_id))
+
+
+def _local_bulletjournal_source() -> Path | None:
+    candidate = package_root().parent.parent
+    if (candidate / 'pyproject.toml').is_file():
+        return candidate
+    return None

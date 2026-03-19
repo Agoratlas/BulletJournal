@@ -15,6 +15,10 @@ def test_project_init_and_graph_roundtrip(tmp_path) -> None:
 
     assert graph.meta['graph_version'] == 1
     assert graph.nodes == []
+    assert paths.pyproject_path.is_file()
+    assert paths.uv_lock_path.is_file()
+    assert (paths.metadata_dir / 'environment.json').exists() is False
+    assert (paths.metadata_dir / 'environment_packages.txt').exists() is False
 
 
 def test_object_store_persists_dataframe(tmp_path) -> None:

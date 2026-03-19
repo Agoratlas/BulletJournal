@@ -70,6 +70,25 @@ class StateDB:
             row = connection.execute('SELECT value FROM project_meta WHERE key = ?', (key,)).fetchone()
         return None if row is None else str(row['value'])
 
+    def list_project_meta(self) -> dict[str, str]:
+        with self._connect() as connection:
+            rows = connection.execute('SELECT key, value FROM project_meta ORDER BY key').fetchall()
+        return {str(row['key']): str(row['value']) for row in rows}
+
+    def latest_run_started_at(self) -> str | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                'SELECT started_at FROM run_records WHERE started_at IS NOT NULL ORDER BY started_at DESC LIMIT 1'
+            ).fetchone()
+        return None if row is None else str(row['started_at'])
+
+    def latest_run_finished_at(self) -> str | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                'SELECT ended_at FROM run_records WHERE ended_at IS NOT NULL ORDER BY ended_at DESC LIMIT 1'
+            ).fetchone()
+        return None if row is None else str(row['ended_at'])
+
     def save_notebook_revision(self, node_id: str, source_hash: str, docs: str | None, interface_json: dict[str, Any]) -> None:
         with self._connect() as connection:
             connection.execute(

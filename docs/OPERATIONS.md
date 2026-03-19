@@ -6,6 +6,8 @@
 bulletjournal start .
 ```
 
+`bulletjournal start` fails fast unless the path is already a valid BulletJournal project root.
+
 ## Development mode
 
 ```bash
@@ -26,6 +28,29 @@ bulletjournal rebuild-state .
 
 This reparses notebooks and rebuilds derived interface/validation state from the project root.
 
+## Environment changes
+
+When dependencies change outside the app, mark notebook outputs stale offline:
+
+```bash
+bulletjournal mark-environment-changed . --reason "dependencies updated"
+```
+
+## Import and export
+
+```bash
+bulletjournal export . my-project.zip
+bulletjournal import my-project.zip restored-project
+```
+
+Exports omit local virtual environments and other transient runtime files.
+
+## Reverse proxy deployment
+
+- configure `base_path` when serving the app under a prefix such as `/p/study-a`
+- `/controller/*` endpoints should be protected with `BULLETJOURNAL_CONTROLLER_TOKEN`
+- editor sessions are proxied through the main app origin, not exposed as raw localhost URLs
+
 ## Restart behavior
 
 - managed runs execute in subprocesses
@@ -37,7 +62,7 @@ This reparses notebooks and rebuilds derived interface/validation state from the
 
 - check `metadata/state.db` for persisted run, artifact, and validation state
 - inspect `graph/*.json` if graph operations behave unexpectedly
-- inspect notebook source hashes and validation issues through `/api/v1/projects/{project_id}/snapshot`
+- inspect notebook source hashes and validation issues through `/api/v1/project/snapshot`
 - rerun with `PYTHONPATH=src python -m pytest` for reproducible failures in this repo
 
 ## Notes

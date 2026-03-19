@@ -9,12 +9,12 @@ def test_checkpoint_restore_recovers_graph_state(tmp_path) -> None:
     app = create_app(project_path=project_root)
     client = TestClient(app)
 
-    opened = client.post('/api/v1/projects/open', json={'path': str(project_root)})
+    opened = client.get('/api/v1/project/snapshot')
     project_id = opened.json()['project']['project_id']
     graph_version = opened.json()['graph']['meta']['graph_version']
 
     patch = client.patch(
-        f'/api/v1/projects/{project_id}/graph',
+        '/api/v1/graph',
         json={
             'graph_version': graph_version,
             'operations': [
@@ -24,13 +24,13 @@ def test_checkpoint_restore_recovers_graph_state(tmp_path) -> None:
     )
     assert patch.status_code == 200
 
-    checkpoint = client.post(f'/api/v1/projects/{project_id}/checkpoints')
+    checkpoint = client.post('/api/v1/checkpoints')
     assert checkpoint.status_code == 200
     checkpoint_id = checkpoint.json()['checkpoint_id']
 
-    graph_version = client.get(f'/api/v1/projects/{project_id}/graph').json()['meta']['graph_version']
+    graph_version = client.get('/api/v1/graph').json()['meta']['graph_version']
     retitle = client.patch(
-        f'/api/v1/projects/{project_id}/graph',
+        '/api/v1/graph',
         json={
             'graph_version': graph_version,
             'operations': [
@@ -40,10 +40,10 @@ def test_checkpoint_restore_recovers_graph_state(tmp_path) -> None:
     )
     assert retitle.status_code == 200
 
-    restored = client.post(f'/api/v1/projects/{project_id}/checkpoints/{checkpoint_id}/restore')
+    restored = client.post(f'/api/v1/checkpoints/{checkpoint_id}/restore')
     assert restored.status_code == 200
 
-    snapshot = client.get(f'/api/v1/projects/{project_id}/snapshot').json()
+    snapshot = client.get('/api/v1/project/snapshot').json()
     node = next(item for item in snapshot['graph']['nodes'] if item['id'] == 'checkpointed')
     assert node['title'] == 'Original Title'
 
@@ -53,12 +53,12 @@ def test_checkpoint_restore_removes_post_checkpoint_nodes_and_artifacts(tmp_path
     app = create_app(project_path=project_root)
     client = TestClient(app)
 
-    opened = client.post('/api/v1/projects/open', json={'path': str(project_root)})
+    opened = client.get('/api/v1/project/snapshot')
     project_id = opened.json()['project']['project_id']
     graph_version = opened.json()['graph']['meta']['graph_version']
 
     base = client.patch(
-        f'/api/v1/projects/{project_id}/graph',
+        '/api/v1/graph',
         json={
             'graph_version': graph_version,
             'operations': [
@@ -72,12 +72,12 @@ def test_checkpoint_restore_removes_post_checkpoint_nodes_and_artifacts(tmp_path
     )
     assert base.status_code == 200
 
-    checkpoint = client.post(f'/api/v1/projects/{project_id}/checkpoints')
+    checkpoint = client.post('/api/v1/checkpoints')
     assert checkpoint.status_code == 200
     checkpoint_id = checkpoint.json()['checkpoint_id']
 
     added = client.patch(
-        f'/api/v1/projects/{project_id}/graph',
+        '/api/v1/graph',
         json={
             'graph_version': base.json()['meta']['graph_version'],
             'operations': [
@@ -85,7 +85,7 @@ def test_checkpoint_restore_removes_post_checkpoint_nodes_and_artifacts(tmp_path
                     'type': 'add_notebook_node',
                     'node_id': 'after_checkpoint',
                     'title': 'After Checkpoint',
-                    'template_ref': 'value_input.py',
+                    'template_ref': 'builtin/value_input',
                 }
             ],
         },
@@ -93,25 +93,25 @@ def test_checkpoint_restore_removes_post_checkpoint_nodes_and_artifacts(tmp_path
     assert added.status_code == 200
 
     run = client.post(
-        f'/api/v1/projects/{project_id}/nodes/after_checkpoint/run',
+        '/api/v1/nodes/after_checkpoint/run',
         json={'mode': 'run_stale', 'action': 'use_stale'},
     )
     assert run.status_code == 200
     assert run.json()['status'] == 'succeeded'
 
-    artifact = client.get(f'/api/v1/projects/{project_id}/artifacts/after_checkpoint/value')
+    artifact = client.get('/api/v1/artifacts/after_checkpoint/value')
     assert artifact.status_code == 200
     assert artifact.json()['state'] == 'ready'
 
-    restored = client.post(f'/api/v1/projects/{project_id}/checkpoints/{checkpoint_id}/restore')
+    restored = client.post(f'/api/v1/checkpoints/{checkpoint_id}/restore')
     assert restored.status_code == 200
 
-    snapshot = client.get(f'/api/v1/projects/{project_id}/snapshot').json()
+    snapshot = client.get('/api/v1/project/snapshot').json()
     assert {node['id'] for node in snapshot['graph']['nodes']} == {'baseline'}
     assert all(artifact['node_id'] != 'after_checkpoint' for artifact in snapshot['artifacts'])
     assert not (project_root / 'notebooks' / 'after_checkpoint.py').exists()
 
-    missing = client.get(f'/api/v1/projects/{project_id}/artifacts/after_checkpoint/value')
+    missing = client.get('/api/v1/artifacts/after_checkpoint/value')
     assert missing.status_code == 404
 
 
@@ -120,12 +120,12 @@ def test_checkpoint_restore_marks_restored_outputs_stale(tmp_path) -> None:
     app = create_app(project_path=project_root)
     client = TestClient(app)
 
-    opened = client.post('/api/v1/projects/open', json={'path': str(project_root)})
+    opened = client.get('/api/v1/project/snapshot')
     project_id = opened.json()['project']['project_id']
     graph_version = opened.json()['graph']['meta']['graph_version']
 
     patch = client.patch(
-        f'/api/v1/projects/{project_id}/graph',
+        '/api/v1/graph',
         json={
             'graph_version': graph_version,
             'operations': [
@@ -133,13 +133,13 @@ def test_checkpoint_restore_marks_restored_outputs_stale(tmp_path) -> None:
                     'type': 'add_notebook_node',
                     'node_id': 'value_source',
                     'title': 'Value Source',
-                    'template_ref': 'value_input.py',
+                    'template_ref': 'builtin/value_input',
                 },
                 {
                     'type': 'add_notebook_node',
                     'node_id': 'table_sink',
                     'title': 'Table Sink',
-                    'template_ref': 'empty_notebook.py',
+                    'template_ref': 'builtin/empty_notebook',
                     'x': 420,
                     'y': 80,
                 },
@@ -149,7 +149,7 @@ def test_checkpoint_restore_marks_restored_outputs_stale(tmp_path) -> None:
     assert patch.status_code == 200
 
     connected = client.patch(
-        f'/api/v1/projects/{project_id}/graph',
+        '/api/v1/graph',
         json={
             'graph_version': patch.json()['meta']['graph_version'],
             'operations': [
@@ -166,23 +166,23 @@ def test_checkpoint_restore_marks_restored_outputs_stale(tmp_path) -> None:
     assert connected.status_code == 200
 
     run = client.post(
-        f'/api/v1/projects/{project_id}/nodes/table_sink/run',
+        '/api/v1/nodes/table_sink/run',
         json={'mode': 'run_stale', 'action': 'run_upstream'},
     )
     assert run.status_code == 200
     assert run.json()['status'] == 'succeeded'
 
-    ready = client.get(f'/api/v1/projects/{project_id}/artifacts/table_sink/sample_df')
+    ready = client.get('/api/v1/artifacts/table_sink/sample_df')
     assert ready.status_code == 200
     assert ready.json()['state'] == 'ready'
     assert ready.json()['preview']['rows'] == 42
 
-    checkpoint = client.post(f'/api/v1/projects/{project_id}/checkpoints')
+    checkpoint = client.post('/api/v1/checkpoints')
     assert checkpoint.status_code == 200
     checkpoint_id = checkpoint.json()['checkpoint_id']
 
     disconnected = client.patch(
-        f'/api/v1/projects/{project_id}/graph',
+        '/api/v1/graph',
         json={
             'graph_version': connected.json()['meta']['graph_version'],
             'operations': [
@@ -196,21 +196,21 @@ def test_checkpoint_restore_marks_restored_outputs_stale(tmp_path) -> None:
     assert disconnected.status_code == 200
 
     rerun = client.post(
-        f'/api/v1/projects/{project_id}/nodes/table_sink/run',
+        '/api/v1/nodes/table_sink/run',
         json={'mode': 'run_stale', 'action': 'use_stale'},
     )
     assert rerun.status_code == 200
     assert rerun.json()['status'] == 'succeeded'
 
-    defaulted = client.get(f'/api/v1/projects/{project_id}/artifacts/table_sink/sample_df')
+    defaulted = client.get('/api/v1/artifacts/table_sink/sample_df')
     assert defaulted.status_code == 200
     assert defaulted.json()['state'] == 'ready'
     assert defaulted.json()['preview']['rows'] == 10
 
-    restored = client.post(f'/api/v1/projects/{project_id}/checkpoints/{checkpoint_id}/restore')
+    restored = client.post(f'/api/v1/checkpoints/{checkpoint_id}/restore')
     assert restored.status_code == 200
 
-    restored_artifact = client.get(f'/api/v1/projects/{project_id}/artifacts/table_sink/sample_df')
+    restored_artifact = client.get('/api/v1/artifacts/table_sink/sample_df')
     assert restored_artifact.status_code == 200
     assert restored_artifact.json()['state'] == 'stale'
     assert restored_artifact.json()['preview']['rows'] == 10

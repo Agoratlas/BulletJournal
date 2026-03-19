@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from bulletjournal.templates.registry import builtin_pipeline_templates, builtin_templates
+from bulletjournal.templates.registry import BUILTIN_PROVIDER, builtin_pipeline_templates, builtin_templates
 from bulletjournal.templates.validator import BUILTIN_NOTEBOOK_TEMPLATE_ROOT, validate_template
 
 
@@ -10,9 +10,12 @@ def validate_templates(path: str | None = None) -> list[dict[str, object]]:
     if path is None:
         template_paths = [*builtin_templates(), *builtin_pipeline_templates()]
         notebook_paths_by_ref = {
-            template_path.relative_to(BUILTIN_NOTEBOOK_TEMPLATE_ROOT).as_posix(): template_path
+            f'{BUILTIN_PROVIDER}/{template_path.relative_to(BUILTIN_NOTEBOOK_TEMPLATE_ROOT).with_suffix("").as_posix()}': template_path
             for template_path in builtin_templates()
         }
+        for template_path in builtin_templates():
+            notebook_paths_by_ref[template_path.relative_to(BUILTIN_NOTEBOOK_TEMPLATE_ROOT).with_suffix('').as_posix()] = template_path
+            notebook_paths_by_ref[template_path.relative_to(BUILTIN_NOTEBOOK_TEMPLATE_ROOT).as_posix()] = template_path
     else:
         root = Path(path)
         if (root / 'builtin').exists() or (root / 'pipelines').exists():

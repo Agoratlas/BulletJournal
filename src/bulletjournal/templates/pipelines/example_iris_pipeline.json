@@ -12,25 +12,25 @@
       "id": "example_1",
       "kind": "notebook",
       "title": "Example 1",
-      "template_ref": "example_1.py"
+      "template_ref": "builtin/example_1"
     },
     {
       "id": "example_2",
       "kind": "notebook",
       "title": "Example 2",
-      "template_ref": "example_2.py"
+      "template_ref": "builtin/example_2"
     },
     {
       "id": "example_3",
       "kind": "notebook",
       "title": "Example 3",
-      "template_ref": "example_3.py"
+      "template_ref": "builtin/example_3"
     },
     {
       "id": "example_4",
       "kind": "notebook",
       "title": "Example 4",
-      "template_ref": "example_4.py"
+      "template_ref": "builtin/example_4"
     }
   ],
   "edges": [

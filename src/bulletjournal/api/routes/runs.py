@@ -4,42 +4,47 @@ from fastapi import APIRouter, Request
 
 from bulletjournal.api.schemas import RunAllRequest, RunNodeRequest
 
-router = APIRouter(prefix='/projects/{project_id}', tags=['runs'])
+router = APIRouter(tags=['runs'])
 
 
 @router.post('/nodes/{node_id}/run')
-def run_node(project_id: str, node_id: str, payload: RunNodeRequest, request: Request):
+def run_node(node_id: str, payload: RunNodeRequest, request: Request):
     container = request.app.state.container
-    container.project_service.require_project_id(project_id)
     mode = payload.mode.value
     action = None if payload.action is None else payload.action.value
-    return container.run_service.start_node_run(node_id, mode=mode, action=action)
+    result = container.run_service.start_node_run(node_id, mode=mode, action=action)
+    if isinstance(result, dict) and isinstance(result.get('url'), str) and str(result['url']).startswith('/'):
+        result = dict(result)
+        result['url'] = str(request.base_url).rstrip('/') + str(result['url'])
+    return result
 
 
 @router.post('/runs/run-all')
-def run_all(project_id: str, payload: RunAllRequest, request: Request):
+def run_all(payload: RunAllRequest, request: Request):
     container = request.app.state.container
-    container.project_service.require_project_id(project_id)
     _ = payload
     return container.run_service.run_all_stale()
 
 
 @router.post('/runs/{run_id}/cancel')
-def cancel_run(project_id: str, run_id: str, request: Request):
+def cancel_run(run_id: str, request: Request):
     container = request.app.state.container
-    container.project_service.require_project_id(project_id)
     return container.run_service.cancel_run(run_id)
 
 
 @router.get('/sessions')
-def list_sessions(project_id: str, request: Request):
+def list_sessions(request: Request):
     container = request.app.state.container
-    container.project_service.require_project_id(project_id)
-    return container.run_service.list_sessions()
+    sessions = []
+    for session in container.run_service.list_sessions():
+        resolved = dict(session)
+        if isinstance(resolved.get('url'), str) and str(resolved['url']).startswith('/'):
+            resolved['url'] = str(request.base_url).rstrip('/') + str(resolved['url'])
+        sessions.append(resolved)
+    return sessions
 
 
 @router.post('/sessions/{session_id}/stop')
-def stop_session(project_id: str, session_id: str, request: Request):
+def stop_session(session_id: str, request: Request):
     container = request.app.state.container
-    container.project_service.require_project_id(project_id)
     return container.run_service.stop_session(session_id)

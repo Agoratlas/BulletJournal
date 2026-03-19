@@ -11,7 +11,7 @@ from bulletjournal.domain.models import Edge, Node, Port
 from bulletjournal.domain.type_system import types_compatible
 from bulletjournal.parser.interface_parser import parse_notebook_interface
 from bulletjournal.parser.validation import build_issue
-from bulletjournal.templates.registry import builtin_templates
+from bulletjournal.templates.registry import BUILTIN_PROVIDER, builtin_templates
 
 
 BUILTIN_NOTEBOOK_TEMPLATE_ROOT = Path(__file__).resolve().parent / 'builtin'
@@ -72,9 +72,16 @@ def validate_pipeline_template(path: Path, *, notebook_paths_by_ref: dict[str, P
         ]
 
     resolved_notebooks = notebook_paths_by_ref or {
-        template_path.relative_to(BUILTIN_NOTEBOOK_TEMPLATE_ROOT).as_posix(): template_path
+        f'{BUILTIN_PROVIDER}/{template_path.relative_to(BUILTIN_NOTEBOOK_TEMPLATE_ROOT).with_suffix("" ).as_posix()}': template_path
         for template_path in builtin_templates()
     }
+    if notebook_paths_by_ref is None:
+        for template_path in builtin_templates():
+            canonical_ref = template_path.relative_to(BUILTIN_NOTEBOOK_TEMPLATE_ROOT).with_suffix('').as_posix()
+            legacy_ref = template_path.relative_to(BUILTIN_NOTEBOOK_TEMPLATE_ROOT).as_posix()
+            resolved_notebooks[f'{BUILTIN_PROVIDER}/{canonical_ref}'] = template_path
+            resolved_notebooks[legacy_ref] = template_path
+            resolved_notebooks[canonical_ref] = template_path
 
     graph_nodes: list[Node] = []
     graph_edges: list[Edge] = []
