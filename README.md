@@ -5,6 +5,8 @@ It layers explicit artifact passing, persistent graph state, stale detection, ch
 and managed execution on top of Marimo notebooks, and it can run standalone or behind
 `BulletJournal-Controller`.
 
+**DISCLAIMER**: This project is part of an experiment to evaluate the potential of AI tooling for software engineering. Most of the code in this repo was produced by an LLM and may not offer the same security or robustness as human-written code. Please don't deploy it in a critical production environment without isolation, especially given that the project was made to run user-provided Python code.
+
 ## What the MVP includes
 
 - FastAPI backend with REST + SSE updates
