@@ -153,6 +153,7 @@ export type TemplateRecord = {
   name: string
   ref: string
   origin_revision: string
+  hidden?: boolean
   title: string
   source: string
   description?: string

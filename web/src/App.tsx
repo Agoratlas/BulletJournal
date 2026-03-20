@@ -756,7 +756,7 @@ function App() {
       },
     ]
     const templateEntries = (liveSnapshot?.templates ?? [])
-      .filter((template) => template.kind === 'notebook' && template.ref !== 'builtin/value_input')
+      .filter((template) => template.kind === 'notebook' && template.ref !== 'builtin/value_input' && !template.hidden)
       .map<PaletteEntry>((template) => ({
         key: `template:${template.ref}`,
         title: template.title,

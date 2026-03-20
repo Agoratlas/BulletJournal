@@ -4,6 +4,7 @@ import ast
 import json
 from pathlib import Path
 from textwrap import dedent
+from typing import TYPE_CHECKING
 
 from bulletjournal.domain.enums import ArtifactRole, ValidationSeverity
 from bulletjournal.domain.models import NotebookInterface, Port
@@ -14,15 +15,21 @@ from bulletjournal.parser.marimo_loader import iter_app_cells
 from bulletjournal.parser.source_hash import normalized_source_hash_text
 from bulletjournal.parser.validation import build_issue
 
+if TYPE_CHECKING:
+    from bulletjournal.templates.provider import TemplateAsset
+    NotebookSource = Path | TemplateAsset
+else:
+    NotebookSource = Path | object
+
 
 ARTIFACT_CALLS = {'pull', 'pull_file', 'push', 'push_file'}
 
 
-def parse_notebook_interface(path: Path, node_id: str) -> NotebookInterface:
-    source_text = path.read_text(encoding='utf-8')
+def parse_notebook_interface(path: NotebookSource, node_id: str) -> NotebookInterface:
+    source_text, filename = _notebook_source(path)
     source_hash = normalized_source_hash_text(source_text)
     try:
-        module = ast.parse(source_text, filename=str(path))
+        module = ast.parse(source_text, filename=filename)
     except SyntaxError as exc:
         return NotebookInterface(
             node_id=node_id,
@@ -59,10 +66,10 @@ def parse_notebook_interface(path: Path, node_id: str) -> NotebookInterface:
             issues.append(unparsable_issue)
     if not _has_runtime_import(module):
         issues.append(
-            build_issue(
-                node_id=node_id,
-                severity=ValidationSeverity.ERROR,
-                code='missing_runtime_import',
+                build_issue(
+                    node_id=node_id,
+                    severity=ValidationSeverity.ERROR,
+                    code='missing_runtime_import',
                 message='Notebook must import artifacts via `from bulletjournal.runtime import artifacts`.',
             )
         )
@@ -122,6 +129,13 @@ def parse_notebook_interface(path: Path, node_id: str) -> NotebookInterface:
         docs=docs,
         issues=issues,
     )
+
+
+def _notebook_source(path: NotebookSource) -> tuple[str, str]:
+    if isinstance(path, Path):
+        return path.read_text(encoding='utf-8'), str(path)
+    filename = str(path.path) if path.path is not None else path.ref
+    return path.read_text(), filename
 
 
 def _syntax_error_message(exc: SyntaxError) -> str:

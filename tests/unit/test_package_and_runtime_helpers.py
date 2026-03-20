@@ -15,9 +15,11 @@ import bulletjournal.runtime.artifacts as runtime_artifacts
 import bulletjournal.runtime.file_artifacts as file_artifacts
 import bulletjournal.storage as bulletjournal_storage
 import bulletjournal.templates as bulletjournal_templates
+import bulletjournal.templates.builtin_provider as builtin_template_provider
 import bulletjournal.templates.registry as template_registry
 from bulletjournal.domain.enums import ArtifactRole
 from bulletjournal.execution import marimo_adapter
+from bulletjournal.templates.builtin_provider import FilesystemTemplateProvider
 
 
 def test_lazy_package_exports_and_attribute_errors() -> None:
@@ -64,10 +66,41 @@ def test_template_registry_discovers_builtin_and_pipeline_files(monkeypatch: pyt
 
     fake_registry = package_dir / 'registry.py'
     fake_registry.write_text('', encoding='utf-8')
-    monkeypatch.setattr(template_registry, '__file__', str(fake_registry))
+    monkeypatch.setattr(
+        template_registry,
+        'builtin_provider',
+        lambda: FilesystemTemplateProvider(
+            provider_name='builtin',
+            notebook_root=builtin_dir,
+            pipeline_root=pipeline_dir,
+            origin_revision='builtin@0.1.0',
+        ),
+    )
 
     assert template_registry.builtin_templates() == [builtin_file]
     assert template_registry.builtin_pipeline_templates() == [pipeline_file]
+
+
+def test_filesystem_template_provider_supports_loader_api(tmp_path: Path) -> None:
+    notebook_root = tmp_path / 'builtin'
+    pipeline_root = tmp_path / 'pipelines'
+    notebook_root.mkdir(parents=True)
+    pipeline_root.mkdir(parents=True)
+    notebook = notebook_root / 'sample.py'
+    pipeline = pipeline_root / 'flow.json'
+    notebook.write_text('import marimo\napp = marimo.App()\n', encoding='utf-8')
+    pipeline.write_text('{"nodes": [], "edges": [], "layout": []}\n', encoding='utf-8')
+
+    provider = builtin_template_provider.FilesystemTemplateProvider(
+        provider_name='builtin',
+        notebook_root=notebook_root,
+        pipeline_root=pipeline_root,
+        origin_revision='builtin@0.1.0',
+    )
+
+    assert provider.provider_revision == 'builtin@0.1.0'
+    assert provider.load_notebook_template('sample') == 'import marimo\napp = marimo.App()\n'
+    assert provider.load_pipeline_template('flow') == '{"nodes": [], "edges": [], "layout": []}\n'
 
 
 def test_artifacts_api_delegates_to_runtime_context(monkeypatch: pytest.MonkeyPatch) -> None:

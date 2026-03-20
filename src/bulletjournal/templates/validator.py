@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -11,7 +12,9 @@ from bulletjournal.domain.models import Edge, Node, Port
 from bulletjournal.domain.type_system import types_compatible
 from bulletjournal.parser.interface_parser import parse_notebook_interface
 from bulletjournal.parser.validation import build_issue
-from bulletjournal.templates.registry import BUILTIN_PROVIDER, builtin_templates
+from bulletjournal.templates.builtin_provider import BUILTIN_PROVIDER
+from bulletjournal.templates.provider import TemplateAsset
+from bulletjournal.templates.registry import builtin_templates
 
 
 BUILTIN_NOTEBOOK_TEMPLATE_ROOT = Path(__file__).resolve().parent / 'builtin'
@@ -263,13 +266,17 @@ def validate_pipeline_template(path: Path, *, notebook_paths_by_ref: dict[str, P
 
 
 def load_pipeline_template_definition(path: Path) -> dict[str, Any]:
-    definition = json.loads(path.read_text(encoding='utf-8'))
+    return load_pipeline_template_definition_text(path.read_text(encoding='utf-8'))
+
+
+def load_pipeline_template_definition_text(source_text: str) -> dict[str, Any]:
+    definition = json.loads(source_text)
     if not isinstance(definition, dict):
         raise ValueError('Pipeline template root must be a JSON object.')
     return definition
 
 
-def _pipeline_node_interface(raw_node: dict[str, Any], *, notebook_paths_by_ref: dict[str, Path]) -> dict[str, Any]:
+def _pipeline_node_interface(raw_node: dict[str, Any], *, notebook_paths_by_ref: Mapping[str, Path | TemplateAsset]) -> dict[str, Any]:
     kind_value = str(raw_node.get('kind'))
     if kind_value == NodeKind.FILE_INPUT.value:
         artifact_name = _pipeline_file_input_name(raw_node)
@@ -286,7 +293,9 @@ def _pipeline_node_interface(raw_node: dict[str, Any], *, notebook_paths_by_ref:
     template_path = notebook_paths_by_ref.get(template_ref)
     if template_path is None:
         raise FileNotFoundError(template_ref)
-    return parse_notebook_interface(template_path, node_id=str(raw_node.get('id') or template_path.stem)).to_dict()
+    fallback_node_id = template_path.stem if isinstance(template_path, Path) else template_path.name
+    resolved_node_id = str(raw_node.get('id') or fallback_node_id)
+    return parse_notebook_interface(template_path, node_id=resolved_node_id).to_dict()
 
 
 def _pipeline_file_input_name(raw_node: dict[str, Any]) -> str:

@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from bulletjournal.templates.registry import BUILTIN_PROVIDER, builtin_pipeline_templates, builtin_templates
+from bulletjournal.templates.builtin_provider import BUILTIN_PROVIDER
+from bulletjournal.templates.registry import builtin_pipeline_templates, builtin_templates
 from bulletjournal.templates.validator import BUILTIN_NOTEBOOK_TEMPLATE_ROOT, validate_template
 
 
