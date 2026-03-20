@@ -40,7 +40,6 @@ def launch_editor(
     host: str,
     port: int,
     base_url: str,
-    token: str,
     environment: dict[str, str] | None = None,
 ) -> subprocess.Popen[str]:
     env = os.environ.copy()
@@ -60,8 +59,7 @@ def launch_editor(
             str(port),
             '--base-url',
             base_url,
-            '--token-password',
-            token,
+            '--no-token',
         ],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,

@@ -1157,9 +1157,8 @@ def test_edit_run_url_authenticates_marimo_session(tmp_path) -> None:
 
         data = run.json()
         parsed = urllib.parse.urlparse(data['url'])
-        params = urllib.parse.parse_qs(parsed.query)
         assert data['mode'] == 'edit_run'
-        assert params.get('access_token')
+        assert parsed.query == ''
 
         body = ''
         session_url = parsed.path
@@ -1181,7 +1180,7 @@ def test_edit_run_url_authenticates_marimo_session(tmp_path) -> None:
         if not session_base.endswith('/'):
             session_base = f'{session_base}/'
         status_url = urllib.parse.urljoin(session_base, 'api/status')
-        status_response = client.get(f'{status_url}?{parsed.query}')
+        status_response = client.get(status_url)
         assert status_response.status_code == 200
         status = status_response.text
         assert '"mode":"edit"' in status

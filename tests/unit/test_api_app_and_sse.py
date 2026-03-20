@@ -6,8 +6,11 @@ import threading
 import time
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any, cast
 
+import pytest
 from fastapi.testclient import TestClient
+from starlette.websockets import WebSocketDisconnect
 from websockets.sync.server import serve
 
 import bulletjournal.api.app as api_app_module
@@ -160,7 +163,6 @@ def test_edit_session_proxy_rewrites_upstream_redirect_location(monkeypatch, tmp
     session = SimpleNamespace(
         host='127.0.0.1',
         port=52012,
-        token='secret-token',
         base_url='/api/v1/edit/sessions/demo',
         process=FakeProcess(),
     )
@@ -172,7 +174,7 @@ def test_edit_session_proxy_rewrites_upstream_redirect_location(monkeypatch, tmp
             self.content = b''
             self.status_code = 307
             self.headers = {
-                'location': 'http://127.0.0.1:52012/api/v1/edit/sessions/demo/?access_token=secret-token',
+                'location': 'http://127.0.0.1:52012/api/v1/edit/sessions/demo/',
             }
 
     class FakeClient:
@@ -192,10 +194,10 @@ def test_edit_session_proxy_rewrites_upstream_redirect_location(monkeypatch, tmp
     app, _ = _make_app(monkeypatch, web_root, container=container)
 
     with TestClient(app) as client:
-        response = client.get('/api/v1/edit/sessions/demo?access_token=secret-token', follow_redirects=False)
+        response = client.get('/api/v1/edit/sessions/demo', follow_redirects=False)
 
     assert response.status_code == 307
-    assert response.headers['location'] == 'http://testserver/api/v1/edit/sessions/demo/?access_token=secret-token'
+    assert response.headers['location'] == 'http://testserver/api/v1/edit/sessions/demo/'
 
 
 def test_edit_session_proxy_accepts_upstream_session_cookie(monkeypatch, tmp_path: Path) -> None:
@@ -209,7 +211,6 @@ def test_edit_session_proxy_accepts_upstream_session_cookie(monkeypatch, tmp_pat
     session = SimpleNamespace(
         host='127.0.0.1',
         port=52012,
-        token='secret-token',
         base_url='/api/v1/edit/sessions/demo',
         process=FakeProcess(),
     )
@@ -291,7 +292,6 @@ def test_create_app_proxies_editor_websocket(monkeypatch, tmp_path: Path) -> Non
     session = SimpleNamespace(
         host='127.0.0.1',
         port=port,
-        token='secret-token',
         base_url='/api/v1/edit/sessions/demo',
         process=FakeProcess(),
     )
@@ -301,12 +301,55 @@ def test_create_app_proxies_editor_websocket(monkeypatch, tmp_path: Path) -> Non
     app, _ = _make_app(monkeypatch, web_root, container=container)
 
     try:
-        with TestClient(app) as client, client.websocket_connect('/api/v1/edit/sessions/demo/ws?access_token=secret-token') as websocket:
+        with TestClient(app) as client, client.websocket_connect('/api/v1/edit/sessions/demo/ws') as websocket:
             websocket.send_text('hello')
             assert websocket.receive_text() == 'echo:hello'
     finally:
         server.shutdown()
         thread.join(timeout=2)
+
+
+def test_create_app_preserves_upstream_websocket_close_reason(monkeypatch, tmp_path: Path) -> None:
+    web_root = tmp_path / 'web'
+    web_root.mkdir()
+    listener = socket.socket()
+    listener.bind(('127.0.0.1', 0))
+    port = int(listener.getsockname()[1])
+    listener.close()
+
+    def close_immediately(connection) -> None:
+        connection.close(code=1000, reason='MARIMO_NO_SESSION_ID')
+
+    server = serve(close_immediately, '127.0.0.1', port)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    time.sleep(0.1)
+
+    class FakeProcess:
+        def poll(self):
+            return None
+
+    session = SimpleNamespace(
+        host='127.0.0.1',
+        port=port,
+        base_url='/api/v1/edit/sessions/demo',
+        process=FakeProcess(),
+    )
+    container = FakeContainer()
+    container.run_service.session_manager = SimpleNamespace(get=lambda session_id: session if session_id == 'demo' else None)
+
+    app, _ = _make_app(monkeypatch, web_root, container=container)
+
+    try:
+        with TestClient(app) as client, client.websocket_connect('/api/v1/edit/sessions/demo/ws?session_id=s_demo') as websocket:
+            with pytest.raises(WebSocketDisconnect) as excinfo:
+                websocket.receive_text()
+    finally:
+        server.shutdown()
+        thread.join(timeout=2)
+
+    assert excinfo.value.code == 1000
+    assert excinfo.value.reason == 'MARIMO_NO_SESSION_ID'
 
 
 def test_cors_allowed_origins_include_valid_dev_frontend_only() -> None:
@@ -327,7 +370,7 @@ def test_sse_response_emits_reset_event_from_header_cursor(monkeypatch) -> None:
             calls.append(last_event_id)
             return {'events': [], 'reset_required': True, 'earliest_available_id': 12}
 
-    request = FakeRequest([False, True], headers={'last-event-id': '9'})
+    request: Any = FakeRequest([False, True], headers={'last-event-id': '9'})
     response = sse_module.sse_response(SimpleNamespace(event_service=FakeEventService()), 'demo', request, last_event_id=1)
 
     chunks = asyncio.run(_collect_chunks(response))
@@ -361,7 +404,7 @@ def test_sse_response_filters_projects_and_emits_keepalive(monkeypatch) -> None:
         return None
 
     monkeypatch.setattr(sse_module.asyncio, 'sleep', fake_sleep)
-    request = FakeRequest([False, False, True])
+    request: Any = FakeRequest([False, False, True])
     response = sse_module.sse_response(SimpleNamespace(event_service=FakeEventService()), 'demo', request, last_event_id=0)
 
     chunks = asyncio.run(_collect_chunks(response))

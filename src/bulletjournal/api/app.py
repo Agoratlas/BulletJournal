@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Container
 from contextlib import asynccontextmanager
 from pathlib import Path
 from urllib.parse import urlencode, urlsplit
@@ -76,13 +75,6 @@ def create_app(*, project_path: Path | None = None, server_config: ServerConfig 
         session = _editor_session_or_response(app, session_id)
         if not isinstance(session, dict):
             return session
-        if not _editor_session_authorized(
-            request.query_params.get('access_token'),
-            request.headers.get('authorization', ''),
-            request.cookies,
-            session,
-        ):
-            return JSONResponse(status_code=401, content={'detail': 'Missing or invalid editor session token.'})
         target_path = _editor_target_path(session['base_url'], request.url.path, path)
         query_string = urlencode(list(request.query_params.multi_items()))
         target_url = f'http://{session["host"]}:{session["port"]}{target_path}'
@@ -112,14 +104,6 @@ def create_app(*, project_path: Path | None = None, server_config: ServerConfig 
         session = _editor_session_or_response(app, session_id)
         if not isinstance(session, dict):
             await websocket.close(code=4404)
-            return
-        if not _editor_session_authorized(
-            websocket.query_params.get('access_token'),
-            websocket.headers.get('authorization', ''),
-            websocket.cookies,
-            session,
-        ):
-            await websocket.close(code=4401)
             return
         target_path = _editor_target_path(session['base_url'], str(websocket.url.path), path)
         query_string = urlencode(list(websocket.query_params.multi_items()))
@@ -221,32 +205,8 @@ def _editor_session_or_response(app: FastAPI, session_id: str) -> dict[str, obje
     return {
         'host': session.host,
         'port': session.port,
-        'token': session.token,
         'base_url': session.base_url,
     }
-
-
-def _editor_session_authorized(
-    token: str | None,
-    authorization: str,
-    cookies: dict[str, str] | object,
-    session: dict[str, object],
-) -> bool:
-    resolved_token = str(session['token'])
-    if token == resolved_token or authorization == f'Bearer {resolved_token}':
-        return True
-    cookie_name = f"session_{session['port']}"
-    if isinstance(cookies, dict):
-        return cookie_name in cookies
-    if isinstance(cookies, dict):
-        return cookie_name in cookies
-    if isinstance(cookies, Container):
-        try:
-            container = cookies
-            return bool(container.__contains__(cookie_name))
-        except TypeError:
-            return False
-    return False
 
 
 def _editor_target_path(base_url: object, request_path: str, path: str) -> str:
@@ -306,6 +266,8 @@ async def _bridge_websocket(websocket: WebSocket, upstream) -> None:
                 pass
 
     async def upstream_to_client() -> None:
+        close_code = 1000
+        close_reason = ''
         try:
             while True:
                 message = await upstream.recv()
@@ -313,10 +275,16 @@ async def _bridge_websocket(websocket: WebSocket, upstream) -> None:
                     await websocket.send_bytes(message)
                 else:
                     await websocket.send_text(message)
-        except ConnectionClosed:
+        except ConnectionClosed as exc:
+            if exc.rcvd is not None:
+                close_code = exc.rcvd.code
+                close_reason = exc.rcvd.reason
+            elif exc.sent is not None:
+                close_code = exc.sent.code
+                close_reason = exc.sent.reason
             pass
         finally:
-            await _safe_close_websocket(websocket)
+            await _safe_close_websocket(websocket, code=close_code, reason=close_reason)
 
     client_task = asyncio.create_task(client_to_upstream())
     upstream_task = asyncio.create_task(upstream_to_client())
@@ -327,12 +295,12 @@ async def _bridge_websocket(websocket: WebSocket, upstream) -> None:
         await task
 
 
-async def _safe_close_websocket(websocket: WebSocket, code: int = 1000) -> None:
+async def _safe_close_websocket(websocket: WebSocket, code: int = 1000, reason: str = '') -> None:
     if websocket.client_state is WebSocketState.DISCONNECTED:
         return
     if websocket.application_state is WebSocketState.DISCONNECTED:
         return
     try:
-        await websocket.close(code=code)
+        await websocket.close(code=code, reason=reason)
     except RuntimeError:
         return

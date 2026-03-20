@@ -5,7 +5,6 @@ import socket
 from dataclasses import dataclass
 from pathlib import Path
 from subprocess import Popen
-from urllib.parse import urlencode
 
 from bulletjournal.execution.marimo_adapter import launch_editor
 
@@ -18,7 +17,6 @@ class MarimoSession:
     notebook_path: str
     host: str
     port: int
-    token: str
     base_url: str
     public_url: str
     process: Popen[str]
@@ -45,16 +43,14 @@ class SessionManager:
         if existing is not None and existing.process.poll() is None:
             return existing
         session_id = secrets.token_hex(8)
-        token = secrets.token_urlsafe(16)
         port = _free_port()
         base_url = f'/api/v1/edit/sessions/{session_id}'
-        public_url = f'{public_base_url}{base_url}?{urlencode({"access_token": token})}'
+        public_url = f'{public_base_url}{base_url}'
         process = launch_editor(
             notebook_path,
             host='127.0.0.1',
             port=port,
             base_url=base_url,
-            token=token,
             environment=runtime_env,
         )
         session = MarimoSession(
@@ -64,7 +60,6 @@ class SessionManager:
             notebook_path=str(notebook_path),
             host='127.0.0.1',
             port=port,
-            token=token,
             base_url=base_url,
             public_url=public_url,
             process=process,

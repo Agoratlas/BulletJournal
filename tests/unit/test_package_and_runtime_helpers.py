@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib
 from pathlib import Path
 from types import SimpleNamespace
+from typing import cast
 
 import pandas as pd
 import pytest
@@ -247,7 +248,6 @@ def test_launch_editor_invokes_marimo_with_expected_command(monkeypatch: pytest.
         host='127.0.0.1',
         port=2718,
         base_url='/editor',
-        token='secret',
         environment={'EXTRA_FLAG': '1'},
     )
 
@@ -265,8 +265,8 @@ def test_launch_editor_invokes_marimo_with_expected_command(monkeypatch: pytest.
         '2718',
         '--base-url',
         '/editor',
-        '--token-password',
-        'secret',
+        '--no-token',
     ]
     assert popen_calls[0]['text'] is True
-    assert popen_calls[0]['env']['EXTRA_FLAG'] == '1'
+    env = cast(dict[str, str], popen_calls[0]['env'])
+    assert env['EXTRA_FLAG'] == '1'
