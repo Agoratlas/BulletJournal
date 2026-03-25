@@ -243,3 +243,41 @@ def test_runtime_context_rejects_output_type_mismatch(tmp_path) -> None:
         assert 'expected int, got str' in str(exc)
     else:
         raise AssertionError('Expected output type mismatch to raise TypeError')
+
+
+def test_runtime_context_refreshes_interactive_output_contracts_from_notebook(tmp_path) -> None:
+    project_root = init_project_root(tmp_path / 'project').root
+    notebook_path = project_root / 'notebooks' / 'producer.py'
+    notebook_path.write_text(
+        """import marimo
+
+app = marimo.App()
+
+with app.setup:
+    from bulletjournal.runtime import artifacts
+
+
+@app.cell
+def _():
+    value = 1
+    artifacts.push(value, name='fresh_output', data_type=int, is_output=True)
+    return
+""",
+        encoding='utf-8',
+    )
+    context = RuntimeContext(
+        project_root=project_root,
+        node_id='producer',
+        run_id='run-interactive-refresh',
+        source_hash='stale-source-hash',
+        lineage_mode=LineageMode.INTERACTIVE_HEURISTIC,
+        bindings={},
+        outputs={'old_output': Port(name='old_output', data_type='int', role=ArtifactRole.OUTPUT)},
+    )
+
+    pushed = context.finalize_value_push(name='fresh_output', value=1, data_type='int', role=ArtifactRole.OUTPUT)
+
+    assert pushed['artifact_name'] == 'fresh_output'
+    assert 'fresh_output' in context.outputs
+    assert 'old_output' not in context.outputs
+    assert context.source_hash != 'stale-source-hash'

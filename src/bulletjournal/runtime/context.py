@@ -10,9 +10,10 @@ from pathlib import Path
 from typing import Any
 
 from bulletjournal.config import EDIT_STABILIZATION_SECONDS
-from bulletjournal.domain.enums import ArtifactRole, ArtifactState, LineageMode
+from bulletjournal.domain.enums import ArtifactRole, ArtifactState, LineageMode, ValidationSeverity
 from bulletjournal.domain.hashing import combine_hashes, hash_json
 from bulletjournal.domain.models import Port
+from bulletjournal.parser.interface_parser import parse_notebook_interface
 from bulletjournal.parser.source_hash import compute_source_hash
 from bulletjournal.runtime.warnings import interactive_lineage_warning, stale_input_warning
 from bulletjournal.storage.object_store import ObjectStore
@@ -126,8 +127,8 @@ class RuntimeContext:
         self.db.record_run_input(self.run_id, f'{self.node_id}/{name}', metadata['artifact_hash'], metadata['state'])
 
     def finalize_value_push(self, *, name: str, value: Any, data_type: str, role: ArtifactRole) -> dict[str, Any]:
+        self._refresh_interactive_contracts()
         self._validate_output_contract(name=name, data_type=data_type, role=role, kind='value')
-        self._stabilize_if_interactive()
         persisted = self.object_store.persist_value(value, data_type)
         self.db.upsert_artifact_object(
             persisted['artifact_hash'],
@@ -141,8 +142,8 @@ class RuntimeContext:
         return self._create_version(name=name, persisted=persisted, role=role)
 
     def finalize_file_push(self, *, name: str, temp_path: Path, role: ArtifactRole) -> dict[str, Any]:
+        self._refresh_interactive_contracts()
         self._validate_output_contract(name=name, data_type='file', role=role, kind='file')
-        self._stabilize_if_interactive()
         persisted = self.object_store.persist_file(temp_path)
         self.db.upsert_artifact_object(
             persisted['artifact_hash'],
@@ -224,6 +225,19 @@ class RuntimeContext:
                 stable_for = 0.0
         if notebook_path.exists():
             self.source_hash = compute_source_hash(notebook_path)
+
+    def _refresh_interactive_contracts(self) -> None:
+        if self.lineage_mode != LineageMode.INTERACTIVE_HEURISTIC:
+            return
+        self._stabilize_if_interactive()
+        notebook_path = self.paths.notebook_path(self.node_id)
+        if not notebook_path.exists():
+            return
+        interface = parse_notebook_interface(notebook_path, node_id=self.node_id)
+        if any(issue.severity == ValidationSeverity.ERROR for issue in interface.issues):
+            return
+        self.source_hash = interface.source_hash
+        self.outputs = {port.name: port for port in [*interface.outputs, *interface.assets]}
 
 
 _RUNTIME_CONTEXT: contextvars.ContextVar[RuntimeContext | None] = contextvars.ContextVar(
