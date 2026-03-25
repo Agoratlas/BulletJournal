@@ -725,6 +725,30 @@ def test_run_stale_noops_when_outputs_are_already_ready(tmp_path) -> None:
     project_root = init_project_root(tmp_path / 'project').root
     app = create_app(project_path=project_root)
     client = TestClient(app)
+    notebook_source = (
+        """
+import marimo
+
+app = marimo.App()
+
+with app.setup:
+    from bulletjournal.runtime import artifacts
+
+
+@app.cell
+def _():
+    value = 7
+    artifacts.push(value, name='value', data_type=int, is_output=True)
+    return
+
+
+if __name__ == '__main__':
+    from bulletjournal.runtime.standalone import run_notebook_app
+
+    run_notebook_app(app, __file__)
+""".strip()
+        + '\n'
+    )
 
     opened = client.get('/api/v1/project/snapshot')
     project_id = opened.json()['project']['project_id']
@@ -739,6 +763,7 @@ def test_run_stale_noops_when_outputs_are_already_ready(tmp_path) -> None:
                     'type': 'add_notebook_node',
                     'node_id': 'sample_node',
                     'title': 'Sample Node',
+                    'source_text': notebook_source,
                 }
             ],
         },
@@ -763,6 +788,30 @@ def test_run_stale_noops_when_outputs_are_already_ready(tmp_path) -> None:
 def test_run_stale_succeeds_while_edit_session_for_same_node_is_open(tmp_path) -> None:
     project_root = init_project_root(tmp_path / 'project').root
     app = create_app(project_path=project_root)
+    notebook_source = (
+        """
+import marimo
+
+app = marimo.App()
+
+with app.setup:
+    from bulletjournal.runtime import artifacts
+
+
+@app.cell
+def _():
+    value = 7
+    artifacts.push(value, name='value', data_type=int, is_output=True)
+    return
+
+
+if __name__ == '__main__':
+    from bulletjournal.runtime.standalone import run_notebook_app
+
+    run_notebook_app(app, __file__)
+""".strip()
+        + '\n'
+    )
 
     with TestClient(app) as client:
         opened = client.get('/api/v1/project/snapshot')
@@ -778,6 +827,7 @@ def test_run_stale_succeeds_while_edit_session_for_same_node_is_open(tmp_path) -
                         'type': 'add_notebook_node',
                         'node_id': 'sample_node',
                         'title': 'Sample Node',
+                        'source_text': notebook_source,
                     }
                 ],
             },
