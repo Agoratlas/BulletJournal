@@ -7,50 +7,50 @@ from bulletjournal.runtime.context import current_runtime_context
 from bulletjournal.runtime.file_artifacts import FilePushHandle
 
 
-class _ArtifactsAPI:
-    def pull(self, *, name: str, data_type: Any, default: Any = None, description: str | None = None) -> Any:
-        del description
-        del default
-        context = current_runtime_context()
-        context.validate_pull_contract(name=name, data_type=_normalize_runtime_type(data_type))
-        metadata = context.resolve_pull(name)
-        context.record_pull(name, metadata)
-        return metadata['value']
+def pull(*, name: str, data_type: Any, default: Any = None, description: str | None = None) -> Any:
+    del description
+    del default
+    context = current_runtime_context()
+    context.validate_pull_contract(name=name, data_type=_normalize_runtime_type(data_type))
+    metadata = context.resolve_pull(name)
+    context.record_pull(name, metadata)
+    return metadata['value']
 
-    def pull_file(self, *, name: str, allow_missing: bool = False, description: str | None = None):
-        del description
-        context = current_runtime_context()
-        metadata = context.resolve_pull_file(name=name, allow_missing=allow_missing)
-        context.record_pull(name, metadata)
-        path = metadata['path']
-        return None if path is None else str(path)
 
-    def push(
-        self,
-        value: Any,
-        *,
-        name: str,
-        data_type: Any,
-        is_output: bool = False,
-        description: str | None = None,
-    ) -> None:
-        del description
-        context = current_runtime_context()
-        role = ArtifactRole.OUTPUT if is_output else ArtifactRole.ASSET
-        normalized = _normalize_runtime_type(data_type)
-        context.finalize_value_push(name=name, value=value, data_type=normalized, role=role)
+def pull_file(*, name: str, allow_missing: bool = False, description: str | None = None):
+    del description
+    context = current_runtime_context()
+    metadata = context.resolve_pull_file(name=name, allow_missing=allow_missing)
+    context.record_pull(name, metadata)
+    path = metadata['path']
+    return None if path is None else str(path)
 
-    def push_file(
-        self,
-        *,
-        name: str,
-        extension: str | None = None,
-        is_output: bool = False,
-        description: str | None = None,
-    ) -> FilePushHandle:
-        del description
-        role = ArtifactRole.OUTPUT if is_output else ArtifactRole.ASSET
-        return FilePushHandle(name=name, role=role, extension=extension)
+
+def push(
+    value: Any,
+    *,
+    name: str,
+    data_type: Any,
+    is_output: bool = False,
+    description: str | None = None,
+) -> None:
+    del description
+    context = current_runtime_context()
+    role = ArtifactRole.OUTPUT if is_output else ArtifactRole.ASSET
+    normalized = _normalize_runtime_type(data_type)
+    context.finalize_value_push(name=name, value=value, data_type=normalized, role=role)
+
+
+def push_file(
+    *,
+    name: str,
+    extension: str | None = None,
+    is_output: bool = False,
+    description: str | None = None,
+) -> FilePushHandle:
+    del description
+    role = ArtifactRole.OUTPUT if is_output else ArtifactRole.ASSET
+    return FilePushHandle(name=name, role=role, extension=extension)
 
 
 def _normalize_runtime_type(data_type: Any) -> str:
@@ -69,6 +69,3 @@ def _normalize_runtime_type(data_type: Any) -> str:
     if module.startswith('networkx') and name in {'Graph', 'DiGraph'}:
         return f'networkx.{name}'
     return 'object'
-
-
-artifacts = _ArtifactsAPI()

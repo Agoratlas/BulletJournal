@@ -28,6 +28,8 @@ def test_lazy_package_exports_and_attribute_errors() -> None:
     import bulletjournal.storage.object_store as object_store_module
     import bulletjournal.storage.project_fs as project_fs_module
     import bulletjournal.storage.state_db as state_db_module
+    import bulletjournal.runtime as runtime_package
+    import bulletjournal.runtime.artifacts as runtime_artifacts_module
 
     assert bulletjournal.create_app is api_app_module.create_app
     assert bulletjournal_api.create_app is api_app_module.create_app
@@ -40,6 +42,7 @@ def test_lazy_package_exports_and_attribute_errors() -> None:
     assert bulletjournal_storage.StateDB is state_db_module.StateDB
     assert bulletjournal_storage.init_project_root is project_fs_module.init_project_root
     assert bulletjournal_storage.is_project_root is project_fs_module.is_project_root
+    assert runtime_package.artifacts is runtime_artifacts_module
 
     with pytest.raises(AttributeError):
         getattr(bulletjournal, 'missing')
@@ -47,6 +50,19 @@ def test_lazy_package_exports_and_attribute_errors() -> None:
         getattr(bulletjournal_api, 'missing')
     with pytest.raises(AttributeError):
         getattr(bulletjournal_storage, 'missing')
+
+
+def test_runtime_artifacts_module_exposes_helper_functions_after_submodule_import() -> None:
+    runtime_package = importlib.import_module('bulletjournal.runtime')
+    runtime_module = importlib.import_module('bulletjournal.runtime.artifacts')
+
+    imported = getattr(runtime_package, 'artifacts')
+
+    assert callable(runtime_module.pull)
+    assert callable(runtime_module.pull_file)
+    assert callable(runtime_module.push)
+    assert callable(runtime_module.push_file)
+    assert imported is runtime_module
 
 
 def test_template_registry_discovers_builtin_and_pipeline_files(
@@ -137,10 +153,10 @@ def test_artifacts_api_delegates_to_runtime_context(monkeypatch: pytest.MonkeyPa
     context = FakeContext()
     monkeypatch.setattr(runtime_artifacts, 'current_runtime_context', lambda: context)
 
-    value = runtime_artifacts.artifacts.pull(name='count', data_type=int, default=10, description='ignored')
-    file_path = runtime_artifacts.artifacts.pull_file(name='dataset', allow_missing=True, description='ignored')
-    runtime_artifacts.artifacts.push(42, name='result', data_type=int, is_output=True, description='ignored')
-    handle = runtime_artifacts.artifacts.push_file(name='report', extension='.txt', is_output=False)
+    value = runtime_artifacts.pull(name='count', data_type=int, default=10, description='ignored')
+    file_path = runtime_artifacts.pull_file(name='dataset', allow_missing=True, description='ignored')
+    runtime_artifacts.push(42, name='result', data_type=int, is_output=True, description='ignored')
+    handle = runtime_artifacts.push_file(name='report', extension='.txt', is_output=False)
 
     assert value == 7
     assert file_path == '/tmp/data.csv'
@@ -177,7 +193,7 @@ def test_artifacts_pull_file_returns_none_for_optional_missing_binding(monkeypat
 
     monkeypatch.setattr(runtime_artifacts, 'current_runtime_context', lambda: FakeContext())
 
-    file_path = runtime_artifacts.artifacts.pull_file(name='dataset', allow_missing=True)
+    file_path = runtime_artifacts.pull_file(name='dataset', allow_missing=True)
 
     assert file_path is None
     assert calls == [
