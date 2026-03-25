@@ -49,7 +49,9 @@ def test_lazy_package_exports_and_attribute_errors() -> None:
         getattr(bulletjournal_storage, 'missing')
 
 
-def test_template_registry_discovers_builtin_and_pipeline_files(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_template_registry_discovers_builtin_and_pipeline_files(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     package_dir = tmp_path / 'templates'
     builtin_dir = package_dir / 'builtin'
     pipeline_dir = package_dir / 'pipelines'
@@ -105,7 +107,13 @@ def test_filesystem_template_provider_supports_loader_api(tmp_path: Path) -> Non
 
 def test_artifacts_api_delegates_to_runtime_context(monkeypatch: pytest.MonkeyPatch) -> None:
     metadata = {'value': 7, 'artifact_hash': 'abc', 'state': 'ready', 'warnings': [], 'upstream_code_hash': 'upstream'}
-    file_metadata = {'path': Path('/tmp/data.csv'), 'artifact_hash': 'file', 'state': 'ready', 'warnings': [], 'upstream_code_hash': 'upstream'}
+    file_metadata = {
+        'path': Path('/tmp/data.csv'),
+        'artifact_hash': 'file',
+        'state': 'ready',
+        'warnings': [],
+        'upstream_code_hash': 'upstream',
+    }
     calls: list[tuple[str, object]] = []
 
     class FakeContext:
@@ -116,8 +124,8 @@ def test_artifacts_api_delegates_to_runtime_context(monkeypatch: pytest.MonkeyPa
             calls.append(('resolve_pull', name))
             return metadata
 
-        def resolve_pull_file(self, name: str) -> dict[str, object]:
-            calls.append(('resolve_pull_file', name))
+        def resolve_pull_file(self, *, name: str, allow_missing: bool = False) -> dict[str, object]:
+            calls.append(('resolve_pull_file', (name, allow_missing)))
             return file_metadata
 
         def record_pull(self, name: str, payload: dict[str, object]) -> None:
@@ -130,7 +138,7 @@ def test_artifacts_api_delegates_to_runtime_context(monkeypatch: pytest.MonkeyPa
     monkeypatch.setattr(runtime_artifacts, 'current_runtime_context', lambda: context)
 
     value = runtime_artifacts.artifacts.pull(name='count', data_type=int, default=10, description='ignored')
-    file_path = runtime_artifacts.artifacts.pull_file(name='dataset', description='ignored')
+    file_path = runtime_artifacts.artifacts.pull_file(name='dataset', allow_missing=True, description='ignored')
     runtime_artifacts.artifacts.push(42, name='result', data_type=int, is_output=True, description='ignored')
     handle = runtime_artifacts.artifacts.push_file(name='report', extension='.txt', is_output=False)
 
@@ -143,9 +151,38 @@ def test_artifacts_api_delegates_to_runtime_context(monkeypatch: pytest.MonkeyPa
         ('validate', ('count', 'int')),
         ('resolve_pull', 'count'),
         ('record_pull', ('count', metadata)),
-        ('resolve_pull_file', 'dataset'),
+        ('resolve_pull_file', ('dataset', True)),
         ('record_pull', ('dataset', file_metadata)),
         ('push', ('result', 42, 'int', ArtifactRole.OUTPUT)),
+    ]
+
+
+def test_artifacts_pull_file_returns_none_for_optional_missing_binding(monkeypatch: pytest.MonkeyPatch) -> None:
+    metadata = {
+        'path': None,
+        'artifact_hash': 'missing',
+        'state': 'ready',
+        'warnings': [],
+        'upstream_code_hash': 'default',
+    }
+    calls: list[tuple[str, object]] = []
+
+    class FakeContext:
+        def resolve_pull_file(self, *, name: str, allow_missing: bool = False) -> dict[str, object]:
+            calls.append(('resolve_pull_file', (name, allow_missing)))
+            return metadata
+
+        def record_pull(self, name: str, payload: dict[str, object]) -> None:
+            calls.append(('record_pull', (name, payload)))
+
+    monkeypatch.setattr(runtime_artifacts, 'current_runtime_context', lambda: FakeContext())
+
+    file_path = runtime_artifacts.artifacts.pull_file(name='dataset', allow_missing=True)
+
+    assert file_path is None
+    assert calls == [
+        ('resolve_pull_file', ('dataset', True)),
+        ('record_pull', ('dataset', metadata)),
     ]
 
 
@@ -265,15 +302,18 @@ def test_launch_editor_invokes_marimo_with_expected_command(monkeypatch: pytest.
     monkeypatch.setattr(
         marimo_adapter.subprocess,
         'Popen',
-        lambda command, stdout, stderr, text, env: popen_calls.append(
-            {
-                'command': command,
-                'stdout': stdout,
-                'stderr': stderr,
-                'text': text,
-                'env': env,
-            }
-        ) or 'process',
+        lambda command, stdout, stderr, text, env: (
+            popen_calls.append(
+                {
+                    'command': command,
+                    'stdout': stdout,
+                    'stderr': stderr,
+                    'text': text,
+                    'env': env,
+                }
+            )
+            or 'process'
+        ),
     )
 
     process = marimo_adapter.launch_editor(

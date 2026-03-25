@@ -88,17 +88,23 @@ class RuntimeContext:
         if binding is None:
             raise KeyError(f'No binding configured for input `{name}`.')
         if binding.data_type != data_type:
-            raise TypeError(
-                f'Input contract mismatch for `{name}`: expected {binding.data_type}, got {data_type}.'
-            )
+            raise TypeError(f'Input contract mismatch for `{name}`: expected {binding.data_type}, got {data_type}.')
 
-    def resolve_pull_file(self, name: str) -> dict[str, Any]:
+    def resolve_pull_file(self, name: str, allow_missing: bool = False) -> dict[str, Any]:
         binding = self.bindings.get(name)
         if binding is None:
             raise KeyError(f'No binding configured for file input `{name}`.')
         if binding.data_type != 'file':
             raise TypeError(f'Input contract mismatch for `{name}`: expected {binding.data_type}, got file.')
         if not binding.source_node:
+            if binding.has_default or allow_missing:
+                return {
+                    'path': None,
+                    'artifact_hash': hash_json(binding.default),
+                    'upstream_code_hash': 'default',
+                    'state': ArtifactState.READY.value,
+                    'warnings': [],
+                }
             raise FileNotFoundError(f'Artifact binding for `{name}` is missing.')
         head = self.db.get_artifact_head(binding.source_node, binding.source_artifact)
         if head is None or head['current_version_id'] is None:
@@ -191,14 +197,13 @@ class RuntimeContext:
         expected = self.outputs.get(name)
         if expected is None:
             raise KeyError(f'Output `{name}` is not declared in the parsed notebook interface.')
-        if expected.role != role:
-            raise TypeError(
-                f'Output role mismatch for `{name}`: expected {expected.role.value}, got {role.value}.'
-            )
+        expected_role = expected.role
+        if expected_role is None:
+            raise TypeError(f'Output `{name}` is missing a declared role in the parsed notebook interface.')
+        if expected_role != role:
+            raise TypeError(f'Output role mismatch for `{name}`: expected {expected_role.value}, got {role.value}.')
         if expected.data_type != data_type:
-            raise TypeError(
-                f'Output type mismatch for `{name}`: expected {expected.data_type}, got {data_type}.'
-            )
+            raise TypeError(f'Output type mismatch for `{name}`: expected {expected.data_type}, got {data_type}.')
         expected_kind = expected.kind or 'value'
         if expected_kind != kind:
             raise TypeError(f'Output kind mismatch for `{name}`: expected {expected_kind}, got {kind}.')
@@ -221,7 +226,9 @@ class RuntimeContext:
             self.source_hash = compute_source_hash(notebook_path)
 
 
-_RUNTIME_CONTEXT: contextvars.ContextVar[RuntimeContext | None] = contextvars.ContextVar('bulletjournal_runtime_context', default=None)
+_RUNTIME_CONTEXT: contextvars.ContextVar[RuntimeContext | None] = contextvars.ContextVar(
+    'bulletjournal_runtime_context', default=None
+)
 
 
 @contextlib.contextmanager

@@ -17,12 +17,13 @@ class _ArtifactsAPI:
         context.record_pull(name, metadata)
         return metadata['value']
 
-    def pull_file(self, *, name: str, description: str | None = None):
+    def pull_file(self, *, name: str, allow_missing: bool = False, description: str | None = None):
         del description
         context = current_runtime_context()
-        metadata = context.resolve_pull_file(name)
+        metadata = context.resolve_pull_file(name=name, allow_missing=allow_missing)
         context.record_pull(name, metadata)
-        return str(metadata['path'])
+        path = metadata['path']
+        return None if path is None else str(path)
 
     def push(
         self,

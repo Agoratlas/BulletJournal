@@ -20,6 +20,61 @@ def test_parser_extracts_interface_and_docs() -> None:
     assert extract_notebook_docs(notebook) == '# Notebook docs'
 
 
+def test_parser_marks_pull_file_allow_missing_as_optional(tmp_path) -> None:
+    notebook = tmp_path / 'optional_file.py'
+    notebook.write_text(
+        """
+import marimo
+
+app = marimo.App()
+
+with app.setup:
+    from bulletjournal.runtime import artifacts
+
+@app.cell
+def _():
+    dataset = artifacts.pull_file(name='dataset', allow_missing=True)
+    return dataset
+""".strip()
+        + '\n',
+        encoding='utf-8',
+    )
+
+    interface = parse_notebook_interface(notebook, node_id='optional_file')
+
+    assert interface.inputs[0].name == 'dataset'
+    assert interface.inputs[0].data_type == 'file'
+    assert interface.inputs[0].has_default is True
+    assert interface.inputs[0].default is None
+
+
+def test_parser_rejects_non_literal_pull_file_allow_missing(tmp_path) -> None:
+    notebook = tmp_path / 'invalid_optional_file.py'
+    notebook.write_text(
+        """
+import marimo
+
+app = marimo.App()
+
+with app.setup:
+    from bulletjournal.runtime import artifacts
+
+FLAG = True
+
+@app.cell
+def _():
+    dataset = artifacts.pull_file(name='dataset', allow_missing=FLAG)
+    return dataset
+""".strip()
+        + '\n',
+        encoding='utf-8',
+    )
+
+    interface = parse_notebook_interface(notebook, node_id='invalid_optional_file')
+
+    assert any(issue.code == 'invalid_allow_missing' for issue in interface.issues)
+
+
 def test_parser_rejects_alias_calls() -> None:
     notebook = FIXTURES / 'bad_notebook_alias.py'
     interface = parse_notebook_interface(notebook, node_id='bad_notebook_alias')

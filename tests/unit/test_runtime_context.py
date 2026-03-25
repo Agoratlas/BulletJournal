@@ -36,6 +36,35 @@ def test_runtime_context_uses_defaults_without_recording_stale_warning(tmp_path)
     assert metadata['warnings'] == []
 
 
+def test_runtime_context_resolves_optional_missing_file_input(tmp_path) -> None:
+    project_root = init_project_root(tmp_path / 'project').root
+    context = RuntimeContext(
+        project_root=project_root,
+        node_id='consumer',
+        run_id='run-default-file',
+        source_hash='source-hash',
+        lineage_mode=LineageMode.MANAGED,
+        bindings={
+            'dataset': Binding(
+                source_node='',
+                source_artifact='',
+                data_type='file',
+                default=None,
+                has_default=True,
+            )
+        },
+        outputs={},
+    )
+
+    metadata = context.resolve_pull_file('dataset')
+
+    assert metadata['path'] is None
+    assert metadata['artifact_hash'] == hash_json(None)
+    assert metadata['upstream_code_hash'] == 'default'
+    assert metadata['state'] == ArtifactState.READY.value
+    assert metadata['warnings'] == []
+
+
 def test_runtime_context_resolves_stale_upstream_with_warning_and_hashes(tmp_path) -> None:
     project_root = init_project_root(tmp_path / 'project').root
     context = RuntimeContext(
@@ -51,9 +80,7 @@ def test_runtime_context_resolves_stale_upstream_with_warning_and_hashes(tmp_pat
                 data_type='int',
             )
         },
-        outputs={
-            'result': Port(name='result', data_type='int', role=ArtifactRole.OUTPUT)
-        },
+        outputs={'result': Port(name='result', data_type='int', role=ArtifactRole.OUTPUT)},
     )
 
     persisted = context.object_store.persist_value(42, 'int')
@@ -101,7 +128,9 @@ def test_runtime_context_resolves_stale_upstream_with_warning_and_hashes(tmp_pat
     assert head['state'] == ArtifactState.STALE.value
     assert head['warnings'] == metadata['warnings']
     assert head['upstream_code_hash'] == combine_hashes(['consumer-source', 'consumer/result', 'producer-code'])
-    assert head['upstream_data_hash'] == combine_hashes(['consumer-source', 'consumer/result', persisted['artifact_hash']])
+    assert head['upstream_data_hash'] == combine_hashes(
+        ['consumer-source', 'consumer/result', persisted['artifact_hash']]
+    )
 
 
 def test_runtime_context_rejects_type_mismatch_for_bound_input(tmp_path) -> None:
@@ -162,9 +191,7 @@ def test_runtime_context_finalize_value_push_persists_dataframe_preview(tmp_path
         source_hash='producer-source',
         lineage_mode=LineageMode.MANAGED,
         bindings={},
-        outputs={
-            'sample_df': Port(name='sample_df', data_type='pandas.DataFrame', role=ArtifactRole.OUTPUT)
-        },
+        outputs={'sample_df': Port(name='sample_df', data_type='pandas.DataFrame', role=ArtifactRole.OUTPUT)},
     )
     frame = pd.DataFrame({'value': [1, 2, 3]})
 
@@ -207,9 +234,7 @@ def test_runtime_context_rejects_output_type_mismatch(tmp_path) -> None:
         source_hash='producer-source',
         lineage_mode=LineageMode.MANAGED,
         bindings={},
-        outputs={
-            'result': Port(name='result', data_type='int', role=ArtifactRole.OUTPUT)
-        },
+        outputs={'result': Port(name='result', data_type='int', role=ArtifactRole.OUTPUT)},
     )
 
     try:

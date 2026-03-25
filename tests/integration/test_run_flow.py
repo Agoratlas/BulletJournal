@@ -78,7 +78,8 @@ def test_run_upstream_executes_dependency_chain(tmp_path) -> None:
     )
     assert patch.status_code == 200
 
-    producer_source = """
+    producer_source = (
+        """
 import marimo
 
 app = marimo.App()
@@ -95,8 +96,11 @@ if __name__ == '__main__':
     from bulletjournal.runtime.standalone import run_notebook_app
 
     run_notebook_app(app, __file__)
-""".strip() + '\n'
-    consumer_source = """
+""".strip()
+        + '\n'
+    )
+    consumer_source = (
+        """
 import marimo
 
 app = marimo.App()
@@ -118,7 +122,9 @@ if __name__ == '__main__':
     from bulletjournal.runtime.standalone import run_notebook_app
 
     run_notebook_app(app, __file__)
-""".strip() + '\n'
+""".strip()
+        + '\n'
+    )
 
     producer_path = project_root / 'notebooks' / 'producer.py'
     consumer_path = project_root / 'notebooks' / 'consumer.py'
@@ -561,7 +567,8 @@ if __name__ == '__main__':
     from bulletjournal.runtime.standalone import run_notebook_app
 
     run_notebook_app(app, __file__)
-""".strip() + '\n',
+""".strip()
+        + '\n',
         encoding='utf-8',
     )
     container.project_service.reparse_notebook_by_path(notebook_path)
@@ -606,7 +613,7 @@ if __name__ == '__main__':
     warning = next(notice for notice in snapshot['notices'] if notice['code'] == 'run_interrupted_by_graph_edit')
     assert warning['severity'] == 'warning'
 
-    dismissed = client.post(f"/api/v1/notices/{warning['issue_id']}/dismiss")
+    dismissed = client.post(f'/api/v1/notices/{warning["issue_id"]}/dismiss')
     assert dismissed.status_code == 200
 
     refreshed = client.get('/api/v1/project/snapshot').json()
@@ -661,7 +668,8 @@ if __name__ == '__main__':
     from bulletjournal.runtime.standalone import run_notebook_app
 
     run_notebook_app(app, __file__)
-""".strip() + '\n',
+""".strip()
+        + '\n',
         encoding='utf-8',
     )
     container.project_service.reparse_notebook_by_path(notebook_path)
@@ -838,7 +846,8 @@ if __name__ == '__main__':
     from bulletjournal.runtime.standalone import run_notebook_app
 
     run_notebook_app(app, __file__)
-""".strip() + '\n',
+""".strip()
+        + '\n',
         encoding='utf-8',
     )
     container.project_service.reparse_notebook_by_path(notebook_path)
@@ -889,7 +898,8 @@ def test_run_all_is_blocked_by_pending_file_input(tmp_path) -> None:
     assert patch.status_code == 200
 
     consumer_path = project_root / 'notebooks' / 'consumer.py'
-    consumer_source = """
+    consumer_source = (
+        """
 import marimo
 
 app = marimo.App()
@@ -911,7 +921,9 @@ if __name__ == '__main__':
     from bulletjournal.runtime.standalone import run_notebook_app
 
     run_notebook_app(app, __file__)
-""".strip() + '\n'
+""".strip()
+        + '\n'
+    )
     consumer_path.write_text(consumer_source, encoding='utf-8')
     container.project_service.reparse_notebook_by_path(consumer_path)
 
@@ -956,7 +968,8 @@ def test_inline_constant_value_notebook_can_run_immediately(tmp_path) -> None:
     project_id = opened.json()['project']['project_id']
     graph_version = opened.json()['graph']['meta']['graph_version']
 
-    constant_source = """
+    constant_source = (
+        """
 import marimo
 
 app = marimo.App(width='medium', app_title='Constant Value')
@@ -978,7 +991,9 @@ if __name__ == '__main__':
     from bulletjournal.runtime.standalone import run_notebook_app
 
     run_notebook_app(app, __file__)
-""".strip() + '\n'
+""".strip()
+        + '\n'
+    )
 
     patch = client.patch(
         '/api/v1/graph',
@@ -1031,7 +1046,8 @@ def test_use_stale_blocks_pending_file_inputs(tmp_path) -> None:
     )
     assert patch.status_code == 200
 
-    consumer_source = """
+    consumer_source = (
+        """
 import marimo
 
 app = marimo.App()
@@ -1053,7 +1069,9 @@ if __name__ == '__main__':
     from bulletjournal.runtime.standalone import run_notebook_app
 
     run_notebook_app(app, __file__)
-""".strip() + '\n'
+""".strip()
+        + '\n'
+    )
 
     consumer_path = project_root / 'notebooks' / 'consumer.py'
     consumer_path.write_text(consumer_source, encoding='utf-8')
@@ -1083,6 +1101,74 @@ if __name__ == '__main__':
     assert blocked.status_code == 200
     assert blocked.json()['status'] == 'blocked'
     assert blocked.json()['blocked_inputs'][0]['source'] == 'uploaded_file/file'
+
+
+def test_optional_missing_file_input_does_not_block_run(tmp_path) -> None:
+    project_root = init_project_root(tmp_path / 'project').root
+    app = create_app(project_path=project_root)
+    client = TestClient(app)
+    container = app.state.container
+
+    opened = client.get('/api/v1/project/snapshot')
+    graph_version = opened.json()['graph']['meta']['graph_version']
+
+    patch = client.patch(
+        '/api/v1/graph',
+        json={
+            'graph_version': graph_version,
+            'operations': [
+                {
+                    'type': 'add_notebook_node',
+                    'node_id': 'consumer',
+                    'title': 'Consumer',
+                }
+            ],
+        },
+    )
+    assert patch.status_code == 200
+
+    consumer_source = (
+        """
+import marimo
+
+app = marimo.App()
+
+with app.setup:
+    from bulletjournal.runtime import artifacts
+
+@app.cell
+def _():
+    file_path = artifacts.pull_file(name='incoming', allow_missing=True)
+    return file_path
+
+@app.cell
+def _(file_path):
+    artifacts.push(0 if file_path is None else len(file_path), name='path_length', data_type=int, is_output=True)
+    return
+
+if __name__ == '__main__':
+    from bulletjournal.runtime.standalone import run_notebook_app
+
+    run_notebook_app(app, __file__)
+""".strip()
+        + '\n'
+    )
+
+    consumer_path = project_root / 'notebooks' / 'consumer.py'
+    consumer_path.write_text(consumer_source, encoding='utf-8')
+    container.project_service.reparse_notebook_by_path(consumer_path)
+
+    run = client.post(
+        '/api/v1/nodes/consumer/run',
+        json={'mode': 'run_stale', 'action': 'use_stale'},
+    )
+    assert run.status_code == 200
+    assert run.json()['status'] == 'succeeded'
+
+    artifact = client.get('/api/v1/artifacts/consumer/path_length')
+    assert artifact.status_code == 200
+    assert artifact.json()['state'] == 'ready'
+    assert artifact.json()['preview']['repr'] == '0'
 
 
 def test_hidden_inputs_require_existing_defaulted_ports(tmp_path) -> None:
@@ -1235,8 +1321,6 @@ def test_standalone_notebook_script_run_persists_artifacts(tmp_path) -> None:
         )
         assert completed.returncode == 0, completed.stderr
 
-        artifact = client.get(
-            '/api/v1/artifacts/sample_node/sample_df'
-        )
+        artifact = client.get('/api/v1/artifacts/sample_node/sample_df')
         assert artifact.status_code == 200
         assert artifact.json()['state'] == 'ready'

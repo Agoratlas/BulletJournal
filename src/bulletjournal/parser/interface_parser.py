@@ -17,6 +17,7 @@ from bulletjournal.parser.validation import build_issue
 
 if TYPE_CHECKING:
     from bulletjournal.templates.provider import TemplateAsset
+
     NotebookSource = Path | TemplateAsset
 else:
     NotebookSource = Path | object
@@ -66,10 +67,10 @@ def parse_notebook_interface(path: NotebookSource, node_id: str) -> NotebookInte
             issues.append(unparsable_issue)
     if not _has_runtime_import(module):
         issues.append(
-                build_issue(
-                    node_id=node_id,
-                    severity=ValidationSeverity.ERROR,
-                    code='missing_runtime_import',
+            build_issue(
+                node_id=node_id,
+                severity=ValidationSeverity.ERROR,
+                code='missing_runtime_import',
                 message='Notebook must import artifacts via `from bulletjournal.runtime import artifacts`.',
             )
         )
@@ -273,11 +274,7 @@ def _app_setup_block(node: ast.stmt) -> ast.With | None:
         return None
     context_expr = node.items[0].context_expr
     if isinstance(context_expr, ast.Attribute):
-        if (
-            isinstance(context_expr.value, ast.Name)
-            and context_expr.value.id == 'app'
-            and context_expr.attr == 'setup'
-        ):
+        if isinstance(context_expr.value, ast.Name) and context_expr.value.id == 'app' and context_expr.attr == 'setup':
             return node
         return None
     if isinstance(context_expr, ast.Call) and isinstance(context_expr.func, ast.Attribute):
@@ -307,7 +304,9 @@ def _is_top_level_artifact_statement(statement: ast.stmt) -> bool:
     if isinstance(statement, ast.Expr) and isinstance(statement.value, ast.Call):
         return _is_artifact_call(statement.value)
     if isinstance(statement, ast.With) and len(statement.items) == 1:
-        return isinstance(statement.items[0].context_expr, ast.Call) and _is_artifact_call(statement.items[0].context_expr)
+        return isinstance(statement.items[0].context_expr, ast.Call) and _is_artifact_call(
+            statement.items[0].context_expr
+        )
     return False
 
 
@@ -344,7 +343,11 @@ def _is_artifact_attribute(node: ast.AST) -> bool:
 
 def _parse_statement(statement: ast.stmt, *, node_id: str) -> tuple[list[Port], list[ValidationIssue]] | None:
     issues: list[ValidationIssue] = []
-    if isinstance(statement, ast.Assign) and isinstance(statement.value, ast.Call) and _is_artifact_call(statement.value):
+    if (
+        isinstance(statement, ast.Assign)
+        and isinstance(statement.value, ast.Call)
+        and _is_artifact_call(statement.value)
+    ):
         call = statement.value
         call_name = _artifact_call_name(call)
         if call_name == 'pull':
@@ -431,7 +434,23 @@ def _parse_pull_file(call: ast.Call, *, node_id: str) -> tuple[Port | None, list
     issues: list[ValidationIssue] = []
     if 'description' in kwargs and description is None:
         issues.append(_literal_issue(node_id, 'description', 'Description must be a literal string.'))
-    return Port(name=name, data_type='file', role=None, description=description, kind='input', direction='input'), issues
+    allow_missing = _literal_bool(kwargs.get('allow_missing')) if 'allow_missing' in kwargs else False
+    if 'allow_missing' in kwargs and allow_missing is None:
+        issues.append(_literal_issue(node_id, 'allow_missing', 'allow_missing must be a literal boolean.'))
+        allow_missing = False
+    return (
+        Port(
+            name=name,
+            data_type='file',
+            role=None,
+            description=description,
+            default=None,
+            has_default=allow_missing,
+            kind='input',
+            direction='input',
+        ),
+        issues,
+    )
 
 
 def _parse_push(call: ast.Call, *, node_id: str) -> tuple[Port | None, list[ValidationIssue]]:
@@ -491,18 +510,26 @@ def _parse_default(node: ast.AST | None, *, node_id: str) -> tuple[object | None
         json.dumps(value)
         return value, True, None
     except (ValueError, SyntaxError):
-        return None, False, build_issue(
-            node_id=node_id,
-            severity=ValidationSeverity.ERROR,
-            code='invalid_default',
-            message='Default must be a literal JSON-serializable value.',
+        return (
+            None,
+            False,
+            build_issue(
+                node_id=node_id,
+                severity=ValidationSeverity.ERROR,
+                code='invalid_default',
+                message='Default must be a literal JSON-serializable value.',
+            ),
         )
     except TypeError:
-        return None, False, build_issue(
-            node_id=node_id,
-            severity=ValidationSeverity.ERROR,
-            code='invalid_default',
-            message='Default must be JSON-serializable.',
+        return (
+            None,
+            False,
+            build_issue(
+                node_id=node_id,
+                severity=ValidationSeverity.ERROR,
+                code='invalid_default',
+                message='Default must be JSON-serializable.',
+            ),
         )
 
 
