@@ -12,10 +12,11 @@ from typing import Any
 from bulletjournal.config import EDIT_STABILIZATION_SECONDS
 from bulletjournal.domain.enums import ArtifactRole, ArtifactState, LineageMode, ValidationSeverity
 from bulletjournal.domain.hashing import combine_hashes, hash_json
-from bulletjournal.domain.models import Port
+from bulletjournal.domain.models import Edge, Port
 from bulletjournal.parser.interface_parser import parse_notebook_interface
 from bulletjournal.parser.source_hash import compute_source_hash
 from bulletjournal.runtime.warnings import interactive_lineage_warning, stale_input_warning
+from bulletjournal.storage.graph_store import GraphStore
 from bulletjournal.storage.object_store import ObjectStore
 from bulletjournal.storage.project_fs import ProjectPaths
 from bulletjournal.storage.state_db import StateDB
@@ -44,6 +45,7 @@ class RuntimeContext:
     object_store: ObjectStore = field(init=False)
     loaded_inputs: dict[str, dict[str, Any]] = field(default_factory=dict)
     pushed_outputs: list[dict[str, Any]] = field(default_factory=list)
+    interactive_contract_key: tuple[float | None, str] | None = None
 
     def __post_init__(self) -> None:
         self.paths = ProjectPaths(self.project_root)
@@ -51,6 +53,7 @@ class RuntimeContext:
         self.object_store = ObjectStore(self.paths)
 
     def resolve_pull(self, name: str) -> dict[str, Any]:
+        self._refresh_interactive_contracts()
         binding = self.bindings.get(name)
         if binding is None:
             raise KeyError(f'No binding configured for input `{name}`.')
@@ -85,6 +88,7 @@ class RuntimeContext:
         }
 
     def validate_pull_contract(self, *, name: str, data_type: str) -> None:
+        self._refresh_interactive_contracts()
         binding = self.bindings.get(name)
         if binding is None:
             raise KeyError(f'No binding configured for input `{name}`.')
@@ -92,6 +96,7 @@ class RuntimeContext:
             raise TypeError(f'Input contract mismatch for `{name}`: expected {binding.data_type}, got {data_type}.')
 
     def resolve_pull_file(self, name: str, allow_missing: bool = False) -> dict[str, Any]:
+        self._refresh_interactive_contracts()
         binding = self.bindings.get(name)
         if binding is None:
             raise KeyError(f'No binding configured for file input `{name}`.')
@@ -229,15 +234,63 @@ class RuntimeContext:
     def _refresh_interactive_contracts(self) -> None:
         if self.lineage_mode != LineageMode.INTERACTIVE_HEURISTIC:
             return
+        current_key = self._interactive_contract_key_for_current_state()
+        if current_key == self.interactive_contract_key:
+            return
         self._stabilize_if_interactive()
         notebook_path = self.paths.notebook_path(self.node_id)
         if not notebook_path.exists():
+            return
+        graph = GraphStore(self.paths).read()
+        current_key = _interactive_contract_key(notebook_path, graph.meta)
+        if current_key == self.interactive_contract_key:
             return
         interface = parse_notebook_interface(notebook_path, node_id=self.node_id)
         if any(issue.severity == ValidationSeverity.ERROR for issue in interface.issues):
             return
         self.source_hash = interface.source_hash
+        self.bindings = _live_bindings_for_node(graph.edges, interface.inputs, node_id=self.node_id)
         self.outputs = {port.name: port for port in [*interface.outputs, *interface.assets]}
+        self.interactive_contract_key = current_key
+
+    def _interactive_contract_key_for_current_state(self) -> tuple[float | None, str]:
+        notebook_path = self.paths.notebook_path(self.node_id)
+        graph = GraphStore(self.paths).read()
+        return _interactive_contract_key(notebook_path, graph.meta)
+
+
+def _interactive_contract_key(notebook_path: Path, graph_meta: dict[str, Any]) -> tuple[float | None, str]:
+    notebook_mtime = notebook_path.stat().st_mtime if notebook_path.exists() else None
+    return (notebook_mtime, str(graph_meta.get('updated_at') or ''))
+
+
+def _live_bindings_for_node(
+    edges: list[Edge],
+    inputs: list[Port],
+    *,
+    node_id: str,
+) -> dict[str, Binding]:
+    bindings: dict[str, Binding] = {}
+    input_edges = {edge.target_port: edge for edge in edges if edge.target_node == node_id}
+    for port in inputs:
+        edge = input_edges.get(port.name)
+        if edge is None:
+            bindings[port.name] = Binding(
+                source_node='',
+                source_artifact='',
+                data_type=port.data_type,
+                default=port.default,
+                has_default=port.has_default,
+            )
+            continue
+        bindings[port.name] = Binding(
+            source_node=edge.source_node,
+            source_artifact=edge.source_port,
+            data_type=port.data_type,
+            default=port.default,
+            has_default=port.has_default,
+        )
+    return bindings
 
 
 _RUNTIME_CONTEXT: contextvars.ContextVar[RuntimeContext | None] = contextvars.ContextVar(

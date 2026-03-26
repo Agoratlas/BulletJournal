@@ -281,3 +281,55 @@ def _():
     assert 'fresh_output' in context.outputs
     assert 'old_output' not in context.outputs
     assert context.source_hash != 'stale-source-hash'
+
+
+def test_runtime_context_refreshes_interactive_bindings_from_live_graph(tmp_path) -> None:
+    project_root = init_project_root(tmp_path / 'project').root
+    notebook_path = project_root / 'notebooks' / 'consumer.py'
+    notebook_path.write_text(
+        """import marimo
+
+app = marimo.App()
+
+with app.setup:
+    from bulletjournal.runtime import artifacts
+
+
+@app.cell
+def _():
+    incoming = artifacts.pull(name='incoming', data_type=int)
+    return incoming
+""",
+        encoding='utf-8',
+    )
+    graph_dir = project_root / 'graph'
+    (graph_dir / 'meta.json').write_text(
+        '{\n  "schema_version": 1,\n  "project_id": "project",\n  "graph_version": 2,\n  "updated_at": "2026-03-26T00:00:00Z"\n}\n',
+        encoding='utf-8',
+    )
+    (graph_dir / 'nodes.json').write_text(
+        '[\n  {"id": "producer", "kind": "notebook", "title": "Producer", "path": "notebooks/producer.py", "template": null, "ui": {"hidden_inputs": []}},\n  {"id": "consumer", "kind": "notebook", "title": "Consumer", "path": "notebooks/consumer.py", "template": null, "ui": {"hidden_inputs": []}}\n]\n',
+        encoding='utf-8',
+    )
+    (graph_dir / 'edges.json').write_text(
+        '[\n  {"id": "edge-1", "source_node": "producer", "source_port": "value", "target_node": "consumer", "target_port": "incoming"}\n]\n',
+        encoding='utf-8',
+    )
+    context = RuntimeContext(
+        project_root=project_root,
+        node_id='consumer',
+        run_id='run-interactive-bindings',
+        source_hash='stale-source-hash',
+        lineage_mode=LineageMode.INTERACTIVE_HEURISTIC,
+        bindings={},
+        outputs={},
+    )
+
+    try:
+        context.validate_pull_contract(name='incoming', data_type='int')
+    except Exception as exc:  # noqa: BLE001
+        raise AssertionError(f'Expected live binding refresh to succeed, got: {exc}') from exc
+
+    binding = context.bindings['incoming']
+    assert binding.source_node == 'producer'
+    assert binding.source_artifact == 'value'

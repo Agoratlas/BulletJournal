@@ -11,7 +11,12 @@ from bulletjournal.domain.enums import ArtifactState, LineageMode, NodeKind, Run
 from bulletjournal.domain.errors import InvalidRequestError, NotFoundError, RunConflictError
 from bulletjournal.domain.models import GraphData
 from bulletjournal.execution.manifests import RunManifest
-from bulletjournal.execution.planner import downstream_closure, run_plan_for_node, stale_or_pending_nodes, upstream_closure
+from bulletjournal.execution.planner import (
+    downstream_closure,
+    run_plan_for_node,
+    stale_or_pending_nodes,
+    upstream_closure,
+)
 from bulletjournal.execution.runner import WorkerRunner
 from bulletjournal.execution.sessions import SessionManager
 from bulletjournal.parser.validation import build_issue_id
@@ -98,7 +103,9 @@ class RunService:
             self._active_run.cancel_event.set()
         return {'run_id': run_id, 'status': 'cancelling'}
 
-    def interrupt_active_run_if_nodes_affected(self, changed_node_ids: list[str], graph: GraphData) -> dict[str, Any] | None:
+    def interrupt_active_run_if_nodes_affected(
+        self, changed_node_ids: list[str], graph: GraphData
+    ) -> dict[str, Any] | None:
         with self._lock:
             active = self._active_run
             if active is None:
@@ -127,14 +134,16 @@ class RunService:
                     continue
                 blocked_inputs.append({'name': port['name'], 'state': ArtifactState.PENDING.value, 'source': None})
                 continue
-            head = self.project_service.require_project().state_db.get_artifact_head(binding['source_node'], binding['source_port'])
+            head = self.project_service.require_project().state_db.get_artifact_head(
+                binding['source_node'], binding['source_port']
+            )
             state = ArtifactState.PENDING.value if head is None else str(head['state'])
             if state != ArtifactState.READY.value:
                 blocked_inputs.append(
                     {
                         'name': port['name'],
                         'state': state,
-                        'source': f"{binding['source_node']}/{binding['source_port']}",
+                        'source': f'{binding["source_node"]}/{binding["source_port"]}',
                     }
                 )
         upstream_nodes = upstream_closure(self.project_service.graph(), node_id)
@@ -301,8 +310,7 @@ class RunService:
             active = ActiveRun(run_id=run_id, cancel_event=Event(), node_ids=plan)
             self._active_run = active
             self._orchestrator_node_states = {
-                node_id: OrchestratorNodeState(node_id=node_id, run_id=run_id, status='queued')
-                for node_id in plan
+                node_id: OrchestratorNodeState(node_id=node_id, run_id=run_id, status='queued') for node_id in plan
             }
         try:
             graph_version = int(self.project_service.graph().meta['graph_version'])
@@ -389,7 +397,9 @@ class RunService:
                         duration_seconds=self._elapsed_seconds(active.current_node_started_monotonic),
                         current_cell=cast(dict[str, Any], progress) if progress is not None else None,
                         total_cells=int(total_cells) if isinstance(total_cells, int) else None,
-                        last_completed_cell_number=int(current_cell_number) - 1 if isinstance(current_cell_number, int) and current_cell_number > 1 else None,
+                        last_completed_cell_number=int(current_cell_number) - 1
+                        if isinstance(current_cell_number, int) and current_cell_number > 1
+                        else None,
                     )
                     cancelled_by_graph_edit = active.cancel_reason == 'graph_edit'
                     project.state_db.update_run_status(run_id, RunStatus.CANCELLED)
@@ -399,7 +409,11 @@ class RunService:
                         'run.failed',
                         project_id=project.metadata.project_id,
                         graph_version=graph_version,
-                        payload={'run_id': run_id, 'status': 'cancelled', 'cancelled_by_graph_edit': cancelled_by_graph_edit},
+                        payload={
+                            'run_id': run_id,
+                            'status': 'cancelled',
+                            'cancelled_by_graph_edit': cancelled_by_graph_edit,
+                        },
                     )
                     return {'run_id': run_id, 'status': 'cancelled', 'node_results': result}
                 if result['status'] != 'ok':
@@ -421,7 +435,9 @@ class RunService:
                         duration_seconds=self._elapsed_seconds(active.current_node_started_monotonic),
                         current_cell=cast(dict[str, Any], progress) if progress is not None else None,
                         total_cells=int(total_cells) if isinstance(total_cells, int) else None,
-                        last_completed_cell_number=int(current_cell_number) - 1 if isinstance(current_cell_number, int) and current_cell_number > 1 else None,
+                        last_completed_cell_number=int(current_cell_number) - 1
+                        if isinstance(current_cell_number, int) and current_cell_number > 1
+                        else None,
                     )
                     self._record_run_failure_notice(run_id=run_id, result=result)
                     project.state_db.update_run_status(run_id, RunStatus.FAILED, failure_json=result)
@@ -524,10 +540,7 @@ class RunService:
         interface = self.project_service.latest_interface(node_id)
         if interface is None:
             return True
-        output_names = [
-            str(port['name'])
-            for port in interface.get('outputs', []) + interface.get('assets', [])
-        ]
+        output_names = [str(port['name']) for port in interface.get('outputs', []) + interface.get('assets', [])]
         if not output_names:
             return False
         state_db = self.project_service.require_project().state_db
@@ -560,8 +573,6 @@ class RunService:
         project = self.project_service.require_project()
         notebook_path = project.paths.notebook_path(node_id)
         source_hash = compute_source_hash(notebook_path)
-        bindings = self._bindings_for_node(node_id)
-        outputs = self._outputs_for_node(node_id)
         run_id = f'edit-{uuid.uuid4()}'
         project.state_db.record_run(
             run_id,
@@ -577,8 +588,6 @@ class RunService:
             'BULLETJOURNAL_RUN_ID': run_id,
             'BULLETJOURNAL_SOURCE_HASH': source_hash,
             'BULLETJOURNAL_LINEAGE_MODE': LineageMode.INTERACTIVE_HEURISTIC.value,
-            'BULLETJOURNAL_BINDINGS_JSON': json.dumps(bindings, sort_keys=True),
-            'BULLETJOURNAL_OUTPUTS_JSON': json.dumps(outputs, sort_keys=True),
         }
         session = self.session_manager.create(
             node_id,
