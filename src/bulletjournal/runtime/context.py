@@ -18,7 +18,7 @@ from bulletjournal.parser.source_hash import compute_source_hash
 from bulletjournal.runtime.warnings import interactive_lineage_warning, stale_input_warning
 from bulletjournal.storage.graph_store import GraphStore
 from bulletjournal.storage.object_store import ObjectStore
-from bulletjournal.storage.project_fs import ProjectPaths
+from bulletjournal.storage.project_fs import ProjectPaths, load_project_json
 from bulletjournal.storage.state_db import StateDB
 
 
@@ -40,6 +40,7 @@ class RuntimeContext:
     lineage_mode: LineageMode
     bindings: dict[str, Binding]
     outputs: dict[str, Port]
+    project_id: str | None = None
     db: StateDB = field(init=False)
     paths: ProjectPaths = field(init=False)
     object_store: ObjectStore = field(init=False)
@@ -51,6 +52,8 @@ class RuntimeContext:
         self.paths = ProjectPaths(self.project_root)
         self.db = StateDB(self.paths.state_db_path)
         self.object_store = ObjectStore(self.paths)
+        if self.project_id is None:
+            self.project_id = str(load_project_json(self.paths)['project_id'])
 
     def resolve_pull(self, name: str) -> dict[str, Any]:
         self._refresh_interactive_contracts()
@@ -353,3 +356,13 @@ def current_runtime_context() -> RuntimeContext:
     )
     _RUNTIME_CONTEXT.set(context)
     return context
+
+
+def get_node_id() -> str:
+    return current_runtime_context().node_id
+
+
+def get_project_id() -> str:
+    project_id = current_runtime_context().project_id
+    assert project_id is not None
+    return project_id

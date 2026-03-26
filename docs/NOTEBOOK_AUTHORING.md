@@ -23,6 +23,23 @@ with artifacts.push_file(name='plot', extension='.png', is_output=True) as path:
     plt.savefig(path)
 ```
 
+## Runtime helpers
+
+Notebook code can also access the active node and project ids through
+`bulletjournal.runtime`:
+
+```python
+with app.setup:
+    from bulletjournal.runtime import artifacts, get_node_id, get_project_id
+
+
+node_id = get_node_id()
+project_id = get_project_id()
+```
+
+These helpers only work while the notebook is running inside an active
+BulletJournal runtime context.
+
 ## Parser rules
 
 - artifact calls must be direct top-level calls

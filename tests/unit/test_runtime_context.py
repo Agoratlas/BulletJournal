@@ -1,9 +1,10 @@
 import pandas as pd
+import pytest
 
 from bulletjournal.domain.enums import ArtifactRole, ArtifactState, LineageMode
 from bulletjournal.domain.hashing import combine_hashes, hash_json
 from bulletjournal.domain.models import Port
-from bulletjournal.runtime.context import Binding, RuntimeContext
+from bulletjournal.runtime.context import _RUNTIME_CONTEXT, Binding, RuntimeContext, current_runtime_context
 from bulletjournal.storage.project_fs import init_project_root
 
 
@@ -333,3 +334,25 @@ def _():
     binding = context.bindings['incoming']
     assert binding.source_node == 'producer'
     assert binding.source_artifact == 'value'
+
+
+def test_current_runtime_context_loads_project_id_from_project_metadata(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    project_root = init_project_root(tmp_path / 'project').root
+    token = _RUNTIME_CONTEXT.set(None)
+    monkeypatch.setenv('BULLETJOURNAL_PROJECT_ROOT', str(project_root))
+    monkeypatch.setenv('BULLETJOURNAL_NODE_ID', 'consumer')
+    monkeypatch.setenv('BULLETJOURNAL_RUN_ID', 'run-env')
+    monkeypatch.setenv('BULLETJOURNAL_SOURCE_HASH', 'source-hash')
+    monkeypatch.setenv('BULLETJOURNAL_LINEAGE_MODE', LineageMode.MANAGED.value)
+    monkeypatch.delenv('BULLETJOURNAL_BINDINGS_JSON', raising=False)
+    monkeypatch.delenv('BULLETJOURNAL_OUTPUTS_JSON', raising=False)
+
+    try:
+        context = current_runtime_context()
+    finally:
+        _RUNTIME_CONTEXT.reset(token)
+
+    assert context.node_id == 'consumer'
+    assert context.project_id == 'project'

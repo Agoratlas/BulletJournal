@@ -11,14 +11,16 @@ import pytest
 import bulletjournal
 import bulletjournal.api as bulletjournal_api
 import bulletjournal.cli as bulletjournal_cli
+import bulletjournal.runtime.context as runtime_context
 import bulletjournal.runtime.artifacts as runtime_artifacts
 import bulletjournal.runtime.file_artifacts as file_artifacts
 import bulletjournal.storage as bulletjournal_storage
 import bulletjournal.templates as bulletjournal_templates
 import bulletjournal.templates.builtin_provider as builtin_template_provider
 import bulletjournal.templates.registry as template_registry
-from bulletjournal.domain.enums import ArtifactRole
+from bulletjournal.domain.enums import ArtifactRole, LineageMode
 from bulletjournal.execution import marimo_adapter
+from bulletjournal.storage.project_fs import init_project_root
 from bulletjournal.templates.builtin_provider import FilesystemTemplateProvider
 
 
@@ -30,6 +32,7 @@ def test_lazy_package_exports_and_attribute_errors() -> None:
     import bulletjournal.storage.state_db as state_db_module
     import bulletjournal.runtime as runtime_package
     import bulletjournal.runtime.artifacts as runtime_artifacts_module
+    import bulletjournal.runtime.context as runtime_context_module
 
     assert bulletjournal.create_app is api_app_module.create_app
     assert bulletjournal_api.create_app is api_app_module.create_app
@@ -43,6 +46,8 @@ def test_lazy_package_exports_and_attribute_errors() -> None:
     assert bulletjournal_storage.init_project_root is project_fs_module.init_project_root
     assert bulletjournal_storage.is_project_root is project_fs_module.is_project_root
     assert runtime_package.artifacts is runtime_artifacts_module
+    assert runtime_package.get_node_id is runtime_context_module.get_node_id
+    assert runtime_package.get_project_id is runtime_context_module.get_project_id
 
     with pytest.raises(AttributeError):
         getattr(bulletjournal, 'missing')
@@ -63,6 +68,25 @@ def test_runtime_artifacts_module_exposes_helper_functions_after_submodule_impor
     assert callable(runtime_module.push)
     assert callable(runtime_module.push_file)
     assert imported is runtime_module
+
+
+def test_runtime_helpers_return_active_context_ids(tmp_path: Path) -> None:
+    import bulletjournal.runtime as runtime_package
+
+    project_root = init_project_root(tmp_path / 'project').root
+    context = runtime_context.RuntimeContext(
+        project_root=project_root,
+        node_id='sample_node',
+        run_id='run-123',
+        source_hash='source-hash',
+        lineage_mode=LineageMode.MANAGED,
+        bindings={},
+        outputs={},
+    )
+
+    with runtime_context.activate_runtime_context(context):
+        assert runtime_package.get_node_id() == 'sample_node'
+        assert runtime_package.get_project_id() == 'project'
 
 
 def test_template_registry_discovers_builtin_and_pipeline_files(

@@ -5,7 +5,7 @@ BulletJournal is a single-project application and is split into these layers:
 - `bulletjournal.domain`: enums, models, hashing, graph rules
 - `bulletjournal.storage`: project filesystem, object store, SQLite state
 - `bulletjournal.parser`: AST notebook interface extraction
-- `bulletjournal.runtime`: artifact SDK used inside Marimo notebooks
+- `bulletjournal.runtime`: notebook runtime SDK for artifact I/O and runtime context helpers
 - `bulletjournal.execution`: worker manifests, notebook execution, Marimo sessions
 - `bulletjournal.services`: project, graph, artifact, run, checkpoint orchestration
 - `bulletjournal.api`: REST, SSE, and bundled frontend serving
