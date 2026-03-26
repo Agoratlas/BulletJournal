@@ -63,12 +63,16 @@ class ProjectPaths:
         return self.root / 'checkpoints'
 
     @property
+    def temp_dir(self) -> Path:
+        return self.root / 'temp'
+
+    @property
     def uploads_temp_dir(self) -> Path:
-        return self.root / 'uploads' / 'temp'
+        return self.temp_dir / 'uploads'
 
     @property
     def execution_logs_dir(self) -> Path:
-        return self.uploads_temp_dir / 'execution_logs'
+        return self.temp_dir / 'execution_logs'
 
     def notebook_path(self, node_id: str) -> Path:
         return self.notebooks_dir / f'{node_id}.py'
@@ -86,8 +90,6 @@ def is_project_root(path: Path) -> bool:
         paths.object_store_dir,
         paths.metadata_dir,
         paths.checkpoints_dir,
-        paths.uploads_temp_dir,
-        paths.execution_logs_dir,
     ]
     required_files = [
         paths.graph_dir / 'meta.json',
@@ -122,6 +124,7 @@ def init_project_root(path: Path, title: str | None = None, project_id: str | No
     ensure_directory(paths.object_store_dir)
     ensure_directory(paths.metadata_dir)
     ensure_directory(paths.checkpoints_dir)
+    ensure_directory(paths.temp_dir)
     ensure_directory(paths.uploads_temp_dir)
     ensure_directory(paths.execution_logs_dir)
 
@@ -165,6 +168,9 @@ def require_project_root(path: Path) -> ProjectPaths:
     paths = ProjectPaths(path.resolve())
     if not is_project_root(paths.root):
         raise ProjectValidationError(f'{paths.root} is not a valid BulletJournal project root.')
+    ensure_directory(paths.temp_dir)
+    ensure_directory(paths.execution_logs_dir)
+    ensure_directory(paths.uploads_temp_dir)
     project_json = load_project_json(paths)
     validate_project_id(str(project_json.get('project_id') or ''))
     return paths
