@@ -17,6 +17,21 @@ from bulletjournal.parser.marimo_loader import iter_app_cells, load_module_ast
 from bulletjournal.runtime.context import Binding, RuntimeContext, activate_runtime_context
 
 
+class _TeeWriter:
+    def __init__(self, *targets) -> None:
+        self._targets = targets
+
+    def write(self, value: str) -> int:
+        written = 0
+        for target in self._targets:
+            written = target.write(value)
+        return written
+
+    def flush(self) -> None:
+        for target in self._targets:
+            target.flush()
+
+
 def _write_progress(
     progress_path: Path | None,
     payload: dict[str, object],
@@ -95,10 +110,22 @@ def main(argv: list[str] | None = None) -> int:
     context: RuntimeContext | None = None
     captured_stdout = io.StringIO()
     captured_stderr = io.StringIO()
+    stdout_log_handle = None
+    stderr_log_handle = None
     try:
-        with contextlib.redirect_stdout(captured_stdout), contextlib.redirect_stderr(captured_stderr):
-            manifest_path = Path(args[0])
-            manifest = RunManifest.from_dict(json.loads(manifest_path.read_text(encoding='utf-8')))
+        manifest_path = Path(args[0])
+        manifest = RunManifest.from_dict(json.loads(manifest_path.read_text(encoding='utf-8')))
+        stdout_log_path = Path(manifest.stdout_path) if manifest.stdout_path else None
+        stderr_log_path = Path(manifest.stderr_path) if manifest.stderr_path else None
+        if stdout_log_path is not None:
+            stdout_log_path.parent.mkdir(parents=True, exist_ok=True)
+            stdout_log_handle = stdout_log_path.open('w', encoding='utf-8')
+        if stderr_log_path is not None:
+            stderr_log_path.parent.mkdir(parents=True, exist_ok=True)
+            stderr_log_handle = stderr_log_path.open('w', encoding='utf-8')
+        stdout_target = captured_stdout if stdout_log_handle is None else _TeeWriter(captured_stdout, stdout_log_handle)
+        stderr_target = captured_stderr if stderr_log_handle is None else _TeeWriter(captured_stderr, stderr_log_handle)
+        with contextlib.redirect_stdout(stdout_target), contextlib.redirect_stderr(stderr_target):
             bindings = {
                 name: Binding(
                     source_node=value.get('source_node', ''),
@@ -151,6 +178,11 @@ def main(argv: list[str] | None = None) -> int:
             payload['stderr'] = stderr_text
         sys.stdout.write(json.dumps(payload))
         return 1
+    finally:
+        if stdout_log_handle is not None:
+            stdout_log_handle.close()
+        if stderr_log_handle is not None:
+            stderr_log_handle.close()
     payload = {'status': 'ok', 'outputs': context.pushed_outputs}
     stdout_text = captured_stdout.getvalue()
     stderr_text = captured_stderr.getvalue()

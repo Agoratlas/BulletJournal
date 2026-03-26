@@ -243,6 +243,10 @@ def test_state_db_preserves_persistent_notice_dismissal_across_updates(tmp_path)
 def test_state_db_persists_execution_logs(tmp_path) -> None:
     paths = init_project_root(tmp_path / 'project')
     db = StateDB(paths.state_db_path)
+    stdout_log = paths.execution_logs_dir / 'run-1_node_a.stdout.log'
+    stderr_log = paths.execution_logs_dir / 'run-1_node_a.stderr.log'
+    stdout_log.write_text('hello stdout\n', encoding='utf-8')
+    stderr_log.write_text('warning on stderr\n', encoding='utf-8')
 
     db.upsert_orchestrator_execution_meta(
         node_id='node_a',
@@ -254,11 +258,33 @@ def test_state_db_persists_execution_logs(tmp_path) -> None:
         current_cell=None,
         total_cells=3,
         last_completed_cell_number=3,
-        stdout='hello stdout\n',
-        stderr='warning on stderr\n',
+        stdout_path=str(stdout_log),
+        stderr_path=str(stderr_log),
     )
 
     records = db.list_orchestrator_execution_meta()
 
-    assert records['node_a']['stdout'] == 'hello stdout\n'
-    assert records['node_a']['stderr'] == 'warning on stderr\n'
+    assert records['node_a']['stdout'] == {'text': 'hello stdout\n', 'truncated': False}
+    assert records['node_a']['stderr'] == {'text': 'warning on stderr\n', 'truncated': False}
+
+
+def test_state_db_truncates_execution_log_previews(tmp_path) -> None:
+    paths = init_project_root(tmp_path / 'project')
+    db = StateDB(paths.state_db_path)
+    stdout_log = paths.execution_logs_dir / 'run-1_node_a.stdout.log'
+    long_log = ''.join(f'line {index}\n' for index in range(80))
+    stdout_log.write_text(long_log, encoding='utf-8')
+
+    db.upsert_orchestrator_execution_meta(
+        node_id='node_a',
+        run_id='run-1',
+        status='succeeded',
+        started_at='2026-03-26T00:00:00Z',
+        stdout_path=str(stdout_log),
+    )
+
+    records = db.list_orchestrator_execution_meta()
+
+    assert records['node_a']['stdout'] is not None
+    assert records['node_a']['stdout']['truncated'] is True
+    assert records['node_a']['stdout']['text'].count('\n') <= 49

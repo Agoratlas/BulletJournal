@@ -244,7 +244,6 @@ label span,
   background: var(--panel);
   border: 1px solid var(--line);
   box-shadow: var(--shadow);
-  backdrop-filter: blur(14px);
 }
 
 .floating-panel {
@@ -582,6 +581,7 @@ label span,
   padding-right: 4px;
   scrollbar-width: thin;
   scrollbar-color: rgba(98, 108, 108, 0.4) transparent;
+  contain: layout paint;
 }
 
 .sidebar.right .panel:first-child > .muted-copy::-webkit-scrollbar,
@@ -1678,14 +1678,13 @@ label span,
 }
 
 .artifact-explorer-grid {
-  display: block;
-  column-count: 2;
-  column-gap: 12px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: start;
 }
 
 .artifact-explorer-grid .artifact-card {
-  break-inside: avoid;
-  margin-bottom: 12px;
+  height: fit-content;
 }
 
 .artifact-empty-state {
@@ -2044,7 +2043,7 @@ input.invalid {
 
 @media (max-width: 1100px) {
   .artifact-explorer-grid {
-    column-count: 1;
+    grid-template-columns: 1fr;
   }
 }
 

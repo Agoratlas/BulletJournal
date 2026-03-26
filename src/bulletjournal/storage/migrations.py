@@ -162,8 +162,8 @@ MIGRATIONS: list[tuple[str, str]] = [
             current_cell_json TEXT NULL,
             total_cells INTEGER NULL,
             last_completed_cell_number INTEGER NULL,
-            stdout_text TEXT NULL,
-            stderr_text TEXT NULL,
+            stdout_path TEXT NULL,
+            stderr_path TEXT NULL,
             updated_at TEXT NOT NULL
         );
         """,

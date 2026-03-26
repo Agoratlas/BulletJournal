@@ -69,8 +69,14 @@ export type NodeRecord = {
       total_cells: number | null
       cell_code: string | null
     } | null
-    stdout: string | null
-    stderr: string | null
+    stdout: {
+      text: string
+      truncated: boolean
+    } | null
+    stderr: {
+      text: string
+      truncated: boolean
+    } | null
     updated_at: string
   } | null
   orchestrator_state?: {

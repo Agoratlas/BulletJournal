@@ -66,6 +66,10 @@ class ProjectPaths:
     def uploads_temp_dir(self) -> Path:
         return self.root / 'uploads' / 'temp'
 
+    @property
+    def execution_logs_dir(self) -> Path:
+        return self.uploads_temp_dir / 'execution_logs'
+
     def notebook_path(self, node_id: str) -> Path:
         return self.notebooks_dir / f'{node_id}.py'
 
@@ -83,6 +87,7 @@ def is_project_root(path: Path) -> bool:
         paths.metadata_dir,
         paths.checkpoints_dir,
         paths.uploads_temp_dir,
+        paths.execution_logs_dir,
     ]
     required_files = [
         paths.graph_dir / 'meta.json',
@@ -94,7 +99,9 @@ def is_project_root(path: Path) -> bool:
         paths.pyproject_path,
         paths.uv_lock_path,
     ]
-    return all(directory.is_dir() for directory in required_directories) and all(file_path.is_file() for file_path in required_files)
+    return all(directory.is_dir() for directory in required_directories) and all(
+        file_path.is_file() for file_path in required_files
+    )
 
 
 def validate_project_id(project_id: str) -> str:
@@ -116,6 +123,7 @@ def init_project_root(path: Path, title: str | None = None, project_id: str | No
     ensure_directory(paths.metadata_dir)
     ensure_directory(paths.checkpoints_dir)
     ensure_directory(paths.uploads_temp_dir)
+    ensure_directory(paths.execution_logs_dir)
 
     now = utc_now_iso()
     resolved_project_id = validate_project_id(project_id or slugify(root.name))

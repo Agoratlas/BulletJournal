@@ -25,7 +25,11 @@ class WorkerRunner:
         temp_dir.mkdir(parents=True, exist_ok=True)
         manifest_path = temp_dir / f'{manifest.run_id}_{manifest.node_id}.json'
         progress_path = temp_dir / f'{manifest.run_id}_{manifest.node_id}.progress.json'
+        stdout_path = temp_dir / f'{manifest.run_id}_{manifest.node_id}.stdout.log'
+        stderr_path = temp_dir / f'{manifest.run_id}_{manifest.node_id}.stderr.log'
         manifest.progress_path = str(progress_path)
+        manifest.stdout_path = str(stdout_path)
+        manifest.stderr_path = str(stderr_path)
         atomic_write_text(manifest_path, json.dumps(manifest.to_dict(), sort_keys=True))
         process = subprocess.Popen(
             [sys.executable, '-m', 'bulletjournal.execution.worker_main', str(manifest_path)],
@@ -72,6 +76,10 @@ class WorkerRunner:
             payload['progress'] = progress_state
         if stderr.strip():
             payload['stderr'] = stderr
+        if stdout_path.exists():
+            payload['stdout'] = stdout_path.read_text(encoding='utf-8')
+        if stderr_path.exists():
+            payload['stderr'] = stderr_path.read_text(encoding='utf-8')
         return payload
 
 

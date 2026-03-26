@@ -48,6 +48,42 @@ def _():
     assert interface.inputs[0].default is None
 
 
+def test_parser_preserves_port_declaration_order(tmp_path) -> None:
+    notebook = tmp_path / 'port_order.py'
+    notebook.write_text(
+        """
+import marimo
+
+app = marimo.App()
+
+with app.setup:
+    from bulletjournal.runtime import artifacts
+
+@app.cell
+def _():
+    second = artifacts.pull(name='second', data_type=int)
+    first = artifacts.pull(name='first', data_type=int)
+    return second, first
+
+@app.cell
+def _(second, first):
+    artifacts.push(second, name='zeta', data_type=int, is_output=True)
+    artifacts.push(first, name='alpha', data_type=int, is_output=True)
+    artifacts.push('notes', name='later_asset', data_type=str)
+    artifacts.push('summary', name='earlier_asset', data_type=str)
+    return
+""".strip()
+        + '\n',
+        encoding='utf-8',
+    )
+
+    interface = parse_notebook_interface(notebook, node_id='port_order')
+
+    assert [port.name for port in interface.inputs] == ['second', 'first']
+    assert [port.name for port in interface.outputs] == ['zeta', 'alpha']
+    assert [port.name for port in interface.assets] == ['later_asset', 'earlier_asset']
+
+
 def test_parser_rejects_non_literal_pull_file_allow_missing(tmp_path) -> None:
     notebook = tmp_path / 'invalid_optional_file.py'
     notebook.write_text(

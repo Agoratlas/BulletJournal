@@ -13,6 +13,10 @@ from bulletjournal.storage.migrations import MIGRATIONS
 from bulletjournal.utils import json_dumps, utc_now_iso
 
 
+LOG_PREVIEW_MAX_LINES = 50
+LOG_PREVIEW_MAX_CHARS = 10_000
+
+
 class StateDB:
     def __init__(self, path: Path):
         self.path = path
@@ -54,10 +58,10 @@ class StateDB:
             connection.execute(
                 'ALTER TABLE orchestrator_execution_meta ADD COLUMN last_completed_cell_number INTEGER NULL'
             )
-        if 'stdout_text' not in columns:
-            connection.execute('ALTER TABLE orchestrator_execution_meta ADD COLUMN stdout_text TEXT NULL')
-        if 'stderr_text' not in columns:
-            connection.execute('ALTER TABLE orchestrator_execution_meta ADD COLUMN stderr_text TEXT NULL')
+        if 'stdout_path' not in columns:
+            connection.execute('ALTER TABLE orchestrator_execution_meta ADD COLUMN stdout_path TEXT NULL')
+        if 'stderr_path' not in columns:
+            connection.execute('ALTER TABLE orchestrator_execution_meta ADD COLUMN stderr_path TEXT NULL')
 
     def set_project_meta(self, key: str, value: str) -> None:
         with self._connect() as connection:
@@ -543,13 +547,13 @@ class StateDB:
         current_cell: dict[str, Any] | None = None,
         total_cells: int | None = None,
         last_completed_cell_number: int | None = None,
-        stdout: str | None = None,
-        stderr: str | None = None,
+        stdout_path: str | None = None,
+        stderr_path: str | None = None,
     ) -> None:
         with self._connect() as connection:
             connection.execute(
                 'INSERT INTO orchestrator_execution_meta '
-                '(node_id, run_id, status, started_at, ended_at, duration_seconds, current_cell_json, total_cells, last_completed_cell_number, stdout_text, stderr_text, updated_at) '
+                '(node_id, run_id, status, started_at, ended_at, duration_seconds, current_cell_json, total_cells, last_completed_cell_number, stdout_path, stderr_path, updated_at) '
                 'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) '
                 'ON CONFLICT(node_id) DO UPDATE SET '
                 'run_id = excluded.run_id, '
@@ -560,8 +564,8 @@ class StateDB:
                 'current_cell_json = excluded.current_cell_json, '
                 'total_cells = excluded.total_cells, '
                 'last_completed_cell_number = excluded.last_completed_cell_number, '
-                'stdout_text = excluded.stdout_text, '
-                'stderr_text = excluded.stderr_text, '
+                'stdout_path = excluded.stdout_path, '
+                'stderr_path = excluded.stderr_path, '
                 'updated_at = excluded.updated_at',
                 (
                     node_id,
@@ -573,8 +577,8 @@ class StateDB:
                     None if current_cell is None else json_dumps(current_cell),
                     total_cells,
                     last_completed_cell_number,
-                    stdout,
-                    stderr,
+                    stdout_path,
+                    stderr_path,
                     utc_now_iso(),
                 ),
             )
@@ -593,8 +597,10 @@ class StateDB:
             else:
                 record['current_cell'] = None
             del record['current_cell_json']
-            record['stdout'] = record.pop('stdout_text', None)
-            record['stderr'] = record.pop('stderr_text', None)
+            stdout_path = record.pop('stdout_path', None)
+            stderr_path = record.pop('stderr_path', None)
+            record['stdout'] = _read_optional_text_file_summary(stdout_path)
+            record['stderr'] = _read_optional_text_file_summary(stderr_path)
             records[str(record['node_id'])] = record
         return records
 
@@ -668,3 +674,30 @@ class StateDB:
             'mime_type': row['mime_type'],
             'preview': None if row['preview_json'] is None else json.loads(str(row['preview_json'])),
         }
+
+
+def _read_optional_text_file(path_value: object) -> str | None:
+    if not isinstance(path_value, str) or not path_value:
+        return None
+    path = Path(path_value)
+    if not path.exists() or not path.is_file():
+        return None
+    try:
+        return path.read_text(encoding='utf-8')
+    except OSError:
+        return None
+
+
+def _read_optional_text_file_summary(path_value: object) -> dict[str, Any] | None:
+    content = _read_optional_text_file(path_value)
+    if content is None:
+        return None
+    lines = content.splitlines()
+    preview = '\n'.join(lines[:LOG_PREVIEW_MAX_LINES])
+    truncated = len(lines) > LOG_PREVIEW_MAX_LINES
+    if len(preview) > LOG_PREVIEW_MAX_CHARS:
+        preview = preview[:LOG_PREVIEW_MAX_CHARS]
+        truncated = True
+    if content.endswith('\n') and preview and not preview.endswith('\n') and not truncated:
+        preview = f'{preview}\n'
+    return {'text': preview, 'truncated': truncated}

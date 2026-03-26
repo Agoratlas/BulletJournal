@@ -16,6 +16,8 @@ class RunManifest:
     bindings: dict[str, dict[str, Any]]
     outputs: dict[str, dict[str, Any]]
     progress_path: str | None = None
+    stdout_path: str | None = None
+    stderr_path: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

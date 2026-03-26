@@ -124,9 +124,9 @@ def parse_notebook_interface(path: NotebookSource, node_id: str) -> NotebookInte
     return NotebookInterface(
         node_id=node_id,
         source_hash=source_hash,
-        inputs=sorted(inputs, key=lambda item: item.name),
-        outputs=sorted(outputs, key=lambda item: item.name),
-        assets=sorted(assets, key=lambda item: item.name),
+        inputs=inputs,
+        outputs=outputs,
+        assets=assets,
         docs=docs,
         issues=issues,
     )
@@ -434,10 +434,11 @@ def _parse_pull_file(call: ast.Call, *, node_id: str) -> tuple[Port | None, list
     issues: list[ValidationIssue] = []
     if 'description' in kwargs and description is None:
         issues.append(_literal_issue(node_id, 'description', 'Description must be a literal string.'))
-    allow_missing = _literal_bool(kwargs.get('allow_missing')) if 'allow_missing' in kwargs else False
-    if 'allow_missing' in kwargs and allow_missing is None:
+    allow_missing_value = _literal_bool(kwargs.get('allow_missing')) if 'allow_missing' in kwargs else False
+    if 'allow_missing' in kwargs and allow_missing_value is None:
         issues.append(_literal_issue(node_id, 'allow_missing', 'allow_missing must be a literal boolean.'))
-        allow_missing = False
+        allow_missing_value = False
+    allow_missing = bool(allow_missing_value)
     return (
         Port(
             name=name,

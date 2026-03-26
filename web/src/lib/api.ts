@@ -24,6 +24,10 @@ export function appUrl(path: string): string {
   return `${appBasePath()}${normalizedPath}`
 }
 
+export function executionLogDownloadUrl(nodeId: string, stream: 'stdout' | 'stderr'): string {
+  return appUrl(`/api/v1/nodes/${encodeURIComponent(nodeId)}/execution-logs/${stream}/download`)
+}
+
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(appUrl(url), {
     ...init,

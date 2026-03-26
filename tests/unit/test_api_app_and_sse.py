@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import socket
 import threading
 import time
@@ -16,6 +17,9 @@ from websockets.sync.server import serve
 import bulletjournal.api.app as api_app_module
 import bulletjournal.api.sse as sse_module
 from bulletjournal.config import ServerConfig
+from bulletjournal.domain.errors import ProjectValidationError
+from bulletjournal.storage.project_fs import init_project_root, require_project_root
+from bulletjournal.storage.state_db import StateDB
 
 
 class FakeRequest:
@@ -39,11 +43,29 @@ class FakeProjectService:
         self.error = error
         self.opened: list[Path] = []
         self.stop_calls = 0
+        self._project = None
 
     def open_project(self, path: Path) -> None:
         self.opened.append(path)
         if self.error is not None:
             raise self.error
+        try:
+            resolved = require_project_root(path)
+        except ProjectValidationError:
+            self._project = SimpleNamespace(
+                paths=SimpleNamespace(root=path), metadata=SimpleNamespace(project_id='test-project')
+            )
+            return
+        self._project = SimpleNamespace(
+            paths=resolved,
+            metadata=SimpleNamespace(project_id='test-project'),
+            state_db=StateDB(resolved.state_db_path),
+        )
+
+    def require_project(self):
+        if self._project is None:
+            raise RuntimeError('No project open')
+        return self._project
 
     def stop(self) -> None:
         self.stop_calls += 1
@@ -62,10 +84,19 @@ class FakeContainer:
     def __init__(self, *, project_error: Exception | None = None, event_service=None) -> None:
         self.project_service = FakeProjectService(project_error)
         self.run_service = FakeRunService()
-        self.event_service = event_service or SimpleNamespace(events_after=lambda last_event_id: {'events': [], 'reset_required': False, 'earliest_available_id': 0})
+        self.event_service = event_service or SimpleNamespace(
+            events_after=lambda last_event_id: {'events': [], 'reset_required': False, 'earliest_available_id': 0}
+        )
 
 
-def _make_app(monkeypatch, web_root: Path, *, project_path: Path | None = None, server_config: ServerConfig | None = None, container=None):
+def _make_app(
+    monkeypatch,
+    web_root: Path,
+    *,
+    project_path: Path | None = None,
+    server_config: ServerConfig | None = None,
+    container=None,
+):
     resolved_container = container or FakeContainer()
     monkeypatch.setattr(api_app_module, 'ServiceContainer', lambda: resolved_container)
     monkeypatch.setattr(api_app_module, 'bundled_web_root', lambda: web_root)
@@ -135,6 +166,31 @@ def test_create_app_serves_assets_files_index_and_503(monkeypatch, tmp_path: Pat
     assert unavailable.json()['detail'].startswith('Frontend assets are not built yet')
 
 
+def test_create_app_downloads_execution_logs(monkeypatch, tmp_path: Path) -> None:
+    web_root = tmp_path / 'web'
+    web_root.mkdir()
+    project_root = init_project_root(tmp_path / 'project').root
+    app, _ = _make_app(monkeypatch, web_root, project_path=project_root)
+
+    with TestClient(app) as client:
+        project_paths = require_project_root(project_root)
+        stdout_log = project_paths.execution_logs_dir / 'run-1_node_a.stdout.log'
+        stdout_log.write_text('hello stdout\n', encoding='utf-8')
+        state_db = StateDB(project_paths.state_db_path)
+        state_db.upsert_orchestrator_execution_meta(
+            node_id='node_a',
+            run_id='run-1',
+            status='succeeded',
+            started_at='2026-03-26T00:00:00Z',
+            stdout_path=str(stdout_log),
+        )
+        response = client.get('/api/v1/nodes/node_a/execution-logs/stdout/download')
+
+    assert response.status_code == 200
+    assert response.text == 'hello stdout\n'
+    assert 'run-1_node_a.stdout.log' in response.headers['content-disposition']
+
+
 def test_create_app_redirects_to_dev_frontend(monkeypatch, tmp_path: Path) -> None:
     web_root = tmp_path / 'web'
     web_root.mkdir()
@@ -167,7 +223,9 @@ def test_edit_session_proxy_rewrites_upstream_redirect_location(monkeypatch, tmp
         process=FakeProcess(),
     )
     container = FakeContainer()
-    container.run_service.session_manager = SimpleNamespace(get=lambda session_id: session if session_id == 'demo' else None)
+    container.run_service.session_manager = SimpleNamespace(
+        get=lambda session_id: session if session_id == 'demo' else None
+    )
 
     class FakeResponse:
         def __init__(self):
@@ -215,7 +273,9 @@ def test_edit_session_proxy_accepts_upstream_session_cookie(monkeypatch, tmp_pat
         process=FakeProcess(),
     )
     container = FakeContainer()
-    container.run_service.session_manager = SimpleNamespace(get=lambda session_id: session if session_id == 'demo' else None)
+    container.run_service.session_manager = SimpleNamespace(
+        get=lambda session_id: session if session_id == 'demo' else None
+    )
 
     class FakeResponse:
         def __init__(self):
@@ -296,7 +356,9 @@ def test_create_app_proxies_editor_websocket(monkeypatch, tmp_path: Path) -> Non
         process=FakeProcess(),
     )
     container = FakeContainer()
-    container.run_service.session_manager = SimpleNamespace(get=lambda session_id: session if session_id == 'demo' else None)
+    container.run_service.session_manager = SimpleNamespace(
+        get=lambda session_id: session if session_id == 'demo' else None
+    )
 
     app, _ = _make_app(monkeypatch, web_root, container=container)
 
@@ -336,12 +398,17 @@ def test_create_app_preserves_upstream_websocket_close_reason(monkeypatch, tmp_p
         process=FakeProcess(),
     )
     container = FakeContainer()
-    container.run_service.session_manager = SimpleNamespace(get=lambda session_id: session if session_id == 'demo' else None)
+    container.run_service.session_manager = SimpleNamespace(
+        get=lambda session_id: session if session_id == 'demo' else None
+    )
 
     app, _ = _make_app(monkeypatch, web_root, container=container)
 
     try:
-        with TestClient(app) as client, client.websocket_connect('/api/v1/edit/sessions/demo/ws?session_id=s_demo') as websocket:
+        with (
+            TestClient(app) as client,
+            client.websocket_connect('/api/v1/edit/sessions/demo/ws?session_id=s_demo') as websocket,
+        ):
             with pytest.raises(WebSocketDisconnect) as excinfo:
                 websocket.receive_text()
     finally:
@@ -353,7 +420,9 @@ def test_create_app_preserves_upstream_websocket_close_reason(monkeypatch, tmp_p
 
 
 def test_cors_allowed_origins_include_valid_dev_frontend_only() -> None:
-    allowed = api_app_module._cors_allowed_origins(ServerConfig(port=9000, dev_frontend_url='https://frontend.example:5173/path'))
+    allowed = api_app_module._cors_allowed_origins(
+        ServerConfig(port=9000, dev_frontend_url='https://frontend.example:5173/path')
+    )
     invalid = api_app_module._cors_allowed_origins(ServerConfig(port=9000, dev_frontend_url='frontend-example'))
 
     assert 'http://127.0.0.1:9000' in allowed
@@ -371,7 +440,9 @@ def test_sse_response_emits_reset_event_from_header_cursor(monkeypatch) -> None:
             return {'events': [], 'reset_required': True, 'earliest_available_id': 12}
 
     request: Any = FakeRequest([False, True], headers={'last-event-id': '9'})
-    response = sse_module.sse_response(SimpleNamespace(event_service=FakeEventService()), 'demo', request, last_event_id=1)
+    response = sse_module.sse_response(
+        SimpleNamespace(event_service=FakeEventService()), 'demo', request, last_event_id=1
+    )
 
     chunks = asyncio.run(_collect_chunks(response))
 
@@ -389,7 +460,13 @@ def test_sse_response_filters_projects_and_emits_keepalive(monkeypatch) -> None:
             'earliest_available_id': 1,
             'events': [
                 {'id': 4, 'event_type': 'skip.me', 'project_id': 'other', 'graph_version': 1, 'payload': {}},
-                {'id': 5, 'event_type': 'graph.updated', 'project_id': 'demo', 'graph_version': 2, 'payload': {'ok': True}},
+                {
+                    'id': 5,
+                    'event_type': 'graph.updated',
+                    'project_id': 'demo',
+                    'graph_version': 2,
+                    'payload': {'ok': True},
+                },
             ],
         },
         {'reset_required': False, 'earliest_available_id': 1, 'events': []},
@@ -405,7 +482,9 @@ def test_sse_response_filters_projects_and_emits_keepalive(monkeypatch) -> None:
 
     monkeypatch.setattr(sse_module.asyncio, 'sleep', fake_sleep)
     request: Any = FakeRequest([False, False, True])
-    response = sse_module.sse_response(SimpleNamespace(event_service=FakeEventService()), 'demo', request, last_event_id=0)
+    response = sse_module.sse_response(
+        SimpleNamespace(event_service=FakeEventService()), 'demo', request, last_event_id=0
+    )
 
     chunks = asyncio.run(_collect_chunks(response))
 
