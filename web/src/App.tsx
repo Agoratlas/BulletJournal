@@ -149,6 +149,69 @@ function runFailureMessage(response: Record<string, unknown>, fallback: string):
   return fallback
 }
 
+const LOG_PREVIEW_MAX_LINES = 50
+const LOG_PREVIEW_MAX_CHARS = 10_000
+
+function truncateLog(text: string): { text: string; truncated: boolean } {
+  if (!text) {
+    return { text, truncated: false }
+  }
+  const lines = text.split('\n')
+  const limitedLines = lines.slice(0, LOG_PREVIEW_MAX_LINES)
+  let preview = limitedLines.join('\n')
+  let truncated = lines.length > LOG_PREVIEW_MAX_LINES
+  if (preview.length > LOG_PREVIEW_MAX_CHARS) {
+    preview = preview.slice(0, LOG_PREVIEW_MAX_CHARS)
+    truncated = true
+  }
+  return { text: preview, truncated }
+}
+
+function downloadTextFile(filename: string, contents: string): void {
+  const blob = new Blob([contents], { type: 'text/plain;charset=utf-8' })
+  const href = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = href
+  link.download = filename
+  document.body.appendChild(link)
+  link.click()
+  link.remove()
+  URL.revokeObjectURL(href)
+}
+
+function ExecutionLogPanel({
+  title,
+  log,
+  nodeId,
+  runId,
+  filenameSuffix,
+}: {
+  title: string
+  log: string
+  nodeId: string
+  runId: string
+  filenameSuffix: 'stdout' | 'stderr'
+}) {
+  const preview = truncateLog(log)
+
+  return (
+    <div className="inspector-subblock">
+      <div className="panel-header-row execution-log-header">
+        <strong>{title}</strong>
+        <button
+          className="secondary small"
+          onClick={() => downloadTextFile(`${nodeId}_${runId}_${filenameSuffix}.log`, log)}
+        >
+          <Download width={14} height={14} />
+          Download
+        </button>
+      </div>
+      <pre className="code-block docs-block execution-log-block">{preview.text}</pre>
+      {preview.truncated ? <p className="muted-copy">Preview truncated to 50 lines or 10k characters.</p> : null}
+    </div>
+  )
+}
+
 function isEditorOpenConflict(message: string): boolean {
   return message.includes('An editor is open for this notebook.')
 }
@@ -2077,6 +2140,32 @@ function NodeInspector({
             </strong>
             {displayedCurrentCell.cell_code ? <pre className="code-block docs-block">{displayedCurrentCell.cell_code}</pre> : null}
           </div>
+        </div>
+      ) : null}
+
+      {node.execution_meta?.stdout ? (
+        <div className="inspector-block">
+          <h3>Stdout</h3>
+          <ExecutionLogPanel
+            title="Notebook stdout"
+            log={node.execution_meta.stdout}
+            nodeId={node.id}
+            runId={node.execution_meta.run_id}
+            filenameSuffix="stdout"
+          />
+        </div>
+      ) : null}
+
+      {node.execution_meta?.stderr ? (
+        <div className="inspector-block">
+          <h3>Stderr</h3>
+          <ExecutionLogPanel
+            title="Notebook stderr"
+            log={node.execution_meta.stderr}
+            nodeId={node.id}
+            runId={node.execution_meta.run_id}
+            filenameSuffix="stderr"
+          />
         </div>
       ) : null}
 

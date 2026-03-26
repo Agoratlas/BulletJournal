@@ -16,8 +16,12 @@ def test_state_db_tracks_artifact_head_lifecycle_and_cache_nondeterminism(tmp_pa
     assert pending['current_version_id'] is None
     assert pending['state'] == ArtifactState.PENDING.value
 
-    db.upsert_artifact_object('hash-1', 'json', 'int', 2, None, None, {'kind': 'simple', 'repr': '1', 'truncated': False})
-    db.upsert_artifact_object('hash-2', 'json', 'int', 2, None, None, {'kind': 'simple', 'repr': '2', 'truncated': False})
+    db.upsert_artifact_object(
+        'hash-1', 'json', 'int', 2, None, None, {'kind': 'simple', 'repr': '1', 'truncated': False}
+    )
+    db.upsert_artifact_object(
+        'hash-2', 'json', 'int', 2, None, None, {'kind': 'simple', 'repr': '2', 'truncated': False}
+    )
     first_version = db.create_artifact_version(
         node_id='node_a',
         artifact_name='output',
@@ -69,8 +73,12 @@ def test_state_db_can_delete_single_artifact_state(tmp_path) -> None:
     paths = init_project_root(tmp_path / 'project')
     db = StateDB(paths.state_db_path)
 
-    db.upsert_artifact_object('hash-1', 'json', 'int', 2, None, None, {'kind': 'simple', 'repr': '1', 'truncated': False})
-    db.upsert_artifact_object('hash-2', 'json', 'int', 2, None, None, {'kind': 'simple', 'repr': '2', 'truncated': False})
+    db.upsert_artifact_object(
+        'hash-1', 'json', 'int', 2, None, None, {'kind': 'simple', 'repr': '1', 'truncated': False}
+    )
+    db.upsert_artifact_object(
+        'hash-2', 'json', 'int', 2, None, None, {'kind': 'simple', 'repr': '2', 'truncated': False}
+    )
     db.create_artifact_version(
         node_id='node_a',
         artifact_name='keep',
@@ -125,7 +133,9 @@ def test_state_db_delete_node_state_removes_all_visible_node_records(tmp_path) -
             )
         ],
     )
-    db.upsert_artifact_object('hash-1', 'json', 'int', 2, None, None, {'kind': 'simple', 'repr': '1', 'truncated': False})
+    db.upsert_artifact_object(
+        'hash-1', 'json', 'int', 2, None, None, {'kind': 'simple', 'repr': '1', 'truncated': False}
+    )
     db.create_artifact_version(
         node_id='node_a',
         artifact_name='output',
@@ -228,3 +238,27 @@ def test_state_db_preserves_persistent_notice_dismissal_across_updates(tmp_path)
     persisted = db.get_persistent_notice(issue_id)
     assert persisted is not None
     assert persisted['details']['current_node'] == 'sample'
+
+
+def test_state_db_persists_execution_logs(tmp_path) -> None:
+    paths = init_project_root(tmp_path / 'project')
+    db = StateDB(paths.state_db_path)
+
+    db.upsert_orchestrator_execution_meta(
+        node_id='node_a',
+        run_id='run-1',
+        status='succeeded',
+        started_at='2026-03-26T00:00:00Z',
+        ended_at='2026-03-26T00:00:05Z',
+        duration_seconds=5.0,
+        current_cell=None,
+        total_cells=3,
+        last_completed_cell_number=3,
+        stdout='hello stdout\n',
+        stderr='warning on stderr\n',
+    )
+
+    records = db.list_orchestrator_execution_meta()
+
+    assert records['node_a']['stdout'] == 'hello stdout\n'
+    assert records['node_a']['stderr'] == 'warning on stderr\n'

@@ -69,6 +69,8 @@ export type NodeRecord = {
       total_cells: number | null
       cell_code: string | null
     } | null
+    stdout: string | null
+    stderr: string | null
     updated_at: string
   } | null
   orchestrator_state?: {

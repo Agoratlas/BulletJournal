@@ -33,9 +33,7 @@ class StateDB:
                     'SELECT 1 FROM sqlite_master WHERE type = ? AND name = ?', ('table', 'schema_migrations')
                 ).fetchone()
                 if exists:
-                    applied = connection.execute(
-                        'SELECT 1 FROM schema_migrations WHERE name = ?', (name,)
-                    ).fetchone()
+                    applied = connection.execute('SELECT 1 FROM schema_migrations WHERE name = ?', (name,)).fetchone()
                     if applied:
                         continue
                 connection.executescript(sql)
@@ -48,13 +46,18 @@ class StateDB:
 
     def _ensure_orchestrator_execution_meta_columns(self, connection: sqlite3.Connection) -> None:
         columns = {
-            str(row['name'])
-            for row in connection.execute('PRAGMA table_info(orchestrator_execution_meta)').fetchall()
+            str(row['name']) for row in connection.execute('PRAGMA table_info(orchestrator_execution_meta)').fetchall()
         }
         if 'total_cells' not in columns:
             connection.execute('ALTER TABLE orchestrator_execution_meta ADD COLUMN total_cells INTEGER NULL')
         if 'last_completed_cell_number' not in columns:
-            connection.execute('ALTER TABLE orchestrator_execution_meta ADD COLUMN last_completed_cell_number INTEGER NULL')
+            connection.execute(
+                'ALTER TABLE orchestrator_execution_meta ADD COLUMN last_completed_cell_number INTEGER NULL'
+            )
+        if 'stdout_text' not in columns:
+            connection.execute('ALTER TABLE orchestrator_execution_meta ADD COLUMN stdout_text TEXT NULL')
+        if 'stderr_text' not in columns:
+            connection.execute('ALTER TABLE orchestrator_execution_meta ADD COLUMN stderr_text TEXT NULL')
 
     def set_project_meta(self, key: str, value: str) -> None:
         with self._connect() as connection:
@@ -89,7 +92,9 @@ class StateDB:
             ).fetchone()
         return None if row is None else str(row['ended_at'])
 
-    def save_notebook_revision(self, node_id: str, source_hash: str, docs: str | None, interface_json: dict[str, Any]) -> None:
+    def save_notebook_revision(
+        self, node_id: str, source_hash: str, docs: str | None, interface_json: dict[str, Any]
+    ) -> None:
         with self._connect() as connection:
             connection.execute(
                 'INSERT OR REPLACE INTO notebook_revisions '
@@ -138,7 +143,9 @@ class StateDB:
             self._prune_stale_validation_issue_dismissals(connection)
             connection.commit()
 
-    def list_validation_issues(self, *, node_id: str | None = None, include_dismissed: bool = False) -> list[dict[str, Any]]:
+    def list_validation_issues(
+        self, *, node_id: str | None = None, include_dismissed: bool = False
+    ) -> list[dict[str, Any]]:
         with self._connect() as connection:
             query = (
                 'SELECT vi.*, vid.dismissed_at '
@@ -153,7 +160,7 @@ class StateDB:
             if not include_dismissed:
                 clauses.append('vid.dismissed_at IS NULL')
             if clauses:
-                query = f"{query} WHERE {' AND '.join(clauses)}"
+                query = f'{query} WHERE {" AND ".join(clauses)}'
             query = f'{query} ORDER BY vi.node_id, vi.severity DESC, vi.code'
             rows = connection.execute(query, params).fetchall()
         return [self._row_to_validation_issue(row) for row in rows]
@@ -249,7 +256,9 @@ class StateDB:
             ).fetchall()
         return [str(row['node_id']) for row in rows]
 
-    def ensure_artifact_head(self, node_id: str, artifact_name: str, state: ArtifactState = ArtifactState.PENDING) -> None:
+    def ensure_artifact_head(
+        self, node_id: str, artifact_name: str, state: ArtifactState = ArtifactState.PENDING
+    ) -> None:
         with self._connect() as connection:
             connection.execute(
                 'INSERT OR IGNORE INTO artifact_heads (node_id, artifact_name, current_version_id, state) VALUES (?, ?, NULL, ?)',
@@ -439,22 +448,45 @@ class StateDB:
             ).fetchall()
         return [self._row_to_artifact(row) for row in rows]
 
-    def record_run(self, run_id: str, project_id: str, mode: str, target_json: dict[str, Any], graph_version: int, source_snapshot_json: dict[str, Any]) -> None:
+    def record_run(
+        self,
+        run_id: str,
+        project_id: str,
+        mode: str,
+        target_json: dict[str, Any],
+        graph_version: int,
+        source_snapshot_json: dict[str, Any],
+    ) -> None:
         with self._connect() as connection:
             connection.execute(
                 'INSERT INTO run_records '
                 '(run_id, project_id, mode, status, target_json, graph_version, source_snapshot_json, started_at, ended_at, failure_json) '
                 'VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL)',
-                (run_id, project_id, mode, RunStatus.QUEUED.value, json_dumps(target_json), graph_version, json_dumps(source_snapshot_json)),
+                (
+                    run_id,
+                    project_id,
+                    mode,
+                    RunStatus.QUEUED.value,
+                    json_dumps(target_json),
+                    graph_version,
+                    json_dumps(source_snapshot_json),
+                ),
             )
             connection.commit()
 
     def update_run_status(self, run_id: str, status: RunStatus, *, failure_json: dict[str, Any] | None = None) -> None:
         with self._connect() as connection:
             started_at = utc_now_iso() if status == RunStatus.RUNNING else None
-            ended_at = utc_now_iso() if status in {RunStatus.SUCCEEDED, RunStatus.FAILED, RunStatus.CANCELLED, RunStatus.ABORTED_ON_RESTART} else None
+            ended_at = (
+                utc_now_iso()
+                if status in {RunStatus.SUCCEEDED, RunStatus.FAILED, RunStatus.CANCELLED, RunStatus.ABORTED_ON_RESTART}
+                else None
+            )
             if started_at is not None:
-                connection.execute('UPDATE run_records SET status = ?, started_at = ? WHERE run_id = ?', (status.value, started_at, run_id))
+                connection.execute(
+                    'UPDATE run_records SET status = ?, started_at = ? WHERE run_id = ?',
+                    (status.value, started_at, run_id),
+                )
             elif ended_at is not None:
                 connection.execute(
                     'UPDATE run_records SET status = ?, ended_at = ?, failure_json = COALESCE(?, failure_json) WHERE run_id = ?',
@@ -464,7 +496,9 @@ class StateDB:
                 connection.execute('UPDATE run_records SET status = ? WHERE run_id = ?', (status.value, run_id))
             connection.commit()
 
-    def record_run_input(self, run_id: str, logical_artifact_id: str, artifact_hash_at_load: str, state_at_load: str) -> None:
+    def record_run_input(
+        self, run_id: str, logical_artifact_id: str, artifact_hash_at_load: str, state_at_load: str
+    ) -> None:
         with self._connect() as connection:
             connection.execute(
                 'INSERT INTO run_inputs (run_id, logical_artifact_id, artifact_hash_at_load, state_at_load, loaded_at) VALUES (?, ?, ?, ?, ?)',
@@ -484,7 +518,9 @@ class StateDB:
 
     def list_run_records(self) -> list[dict[str, Any]]:
         with self._connect() as connection:
-            rows = connection.execute('SELECT * FROM run_records ORDER BY COALESCE(started_at, ended_at) DESC, run_id DESC').fetchall()
+            rows = connection.execute(
+                'SELECT * FROM run_records ORDER BY COALESCE(started_at, ended_at) DESC, run_id DESC'
+            ).fetchall()
         records = []
         for row in rows:
             record = dict(row)
@@ -507,12 +543,14 @@ class StateDB:
         current_cell: dict[str, Any] | None = None,
         total_cells: int | None = None,
         last_completed_cell_number: int | None = None,
+        stdout: str | None = None,
+        stderr: str | None = None,
     ) -> None:
         with self._connect() as connection:
             connection.execute(
                 'INSERT INTO orchestrator_execution_meta '
-                '(node_id, run_id, status, started_at, ended_at, duration_seconds, current_cell_json, total_cells, last_completed_cell_number, updated_at) '
-                'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) '
+                '(node_id, run_id, status, started_at, ended_at, duration_seconds, current_cell_json, total_cells, last_completed_cell_number, stdout_text, stderr_text, updated_at) '
+                'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) '
                 'ON CONFLICT(node_id) DO UPDATE SET '
                 'run_id = excluded.run_id, '
                 'status = excluded.status, '
@@ -522,6 +560,8 @@ class StateDB:
                 'current_cell_json = excluded.current_cell_json, '
                 'total_cells = excluded.total_cells, '
                 'last_completed_cell_number = excluded.last_completed_cell_number, '
+                'stdout_text = excluded.stdout_text, '
+                'stderr_text = excluded.stderr_text, '
                 'updated_at = excluded.updated_at',
                 (
                     node_id,
@@ -533,6 +573,8 @@ class StateDB:
                     None if current_cell is None else json_dumps(current_cell),
                     total_cells,
                     last_completed_cell_number,
+                    stdout,
+                    stderr,
                     utc_now_iso(),
                 ),
             )
@@ -551,6 +593,8 @@ class StateDB:
             else:
                 record['current_cell'] = None
             del record['current_cell_json']
+            record['stdout'] = record.pop('stdout_text', None)
+            record['stderr'] = record.pop('stderr_text', None)
             records[str(record['node_id'])] = record
         return records
 
@@ -572,7 +616,9 @@ class StateDB:
 
     def mark_checkpoint_restored(self, checkpoint_id: str) -> None:
         with self._connect() as connection:
-            connection.execute('UPDATE checkpoints SET restored_at = ? WHERE checkpoint_id = ?', (utc_now_iso(), checkpoint_id))
+            connection.execute(
+                'UPDATE checkpoints SET restored_at = ? WHERE checkpoint_id = ?', (utc_now_iso(), checkpoint_id)
+            )
             connection.commit()
 
     def list_checkpoints(self) -> list[CheckpointRecord]:
@@ -596,8 +642,7 @@ class StateDB:
     @staticmethod
     def _prune_stale_validation_issue_dismissals(connection: sqlite3.Connection) -> None:
         connection.execute(
-            'DELETE FROM validation_issue_dismissals '
-            'WHERE issue_id NOT IN (SELECT issue_id FROM validation_issues)'
+            'DELETE FROM validation_issue_dismissals WHERE issue_id NOT IN (SELECT issue_id FROM validation_issues)'
         )
 
     @staticmethod

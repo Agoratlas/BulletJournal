@@ -400,6 +400,8 @@ class RunService:
                         last_completed_cell_number=int(current_cell_number) - 1
                         if isinstance(current_cell_number, int) and current_cell_number > 1
                         else None,
+                        stdout=result.get('stdout') if isinstance(result.get('stdout'), str) else None,
+                        stderr=result.get('stderr') if isinstance(result.get('stderr'), str) else None,
                     )
                     cancelled_by_graph_edit = active.cancel_reason == 'graph_edit'
                     project.state_db.update_run_status(run_id, RunStatus.CANCELLED)
@@ -438,6 +440,8 @@ class RunService:
                         last_completed_cell_number=int(current_cell_number) - 1
                         if isinstance(current_cell_number, int) and current_cell_number > 1
                         else None,
+                        stdout=result.get('stdout') if isinstance(result.get('stdout'), str) else None,
+                        stderr=result.get('stderr') if isinstance(result.get('stderr'), str) else None,
                     )
                     self._record_run_failure_notice(run_id=run_id, result=result)
                     project.state_db.update_run_status(run_id, RunStatus.FAILED, failure_json=result)
@@ -467,6 +471,8 @@ class RunService:
                     current_cell=None,
                     total_cells=int(total_cells) if isinstance(total_cells, int) else None,
                     last_completed_cell_number=int(total_cells) if isinstance(total_cells, int) else None,
+                    stdout=result.get('stdout') if isinstance(result.get('stdout'), str) else None,
+                    stderr=result.get('stderr') if isinstance(result.get('stderr'), str) else None,
                 )
             project.state_db.update_run_status(run_id, RunStatus.SUCCEEDED)
             self.project_service.event_service.publish(

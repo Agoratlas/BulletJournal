@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib
+import json
 from pathlib import Path
 from types import SimpleNamespace
 from typing import cast
@@ -20,6 +21,9 @@ import bulletjournal.templates.builtin_provider as builtin_template_provider
 import bulletjournal.templates.registry as template_registry
 from bulletjournal.domain.enums import ArtifactRole, LineageMode
 from bulletjournal.execution import marimo_adapter
+from bulletjournal.execution import runner as runner_module
+import bulletjournal.execution.worker_main as worker_main
+from bulletjournal.execution.manifests import RunManifest
 from bulletjournal.storage.project_fs import init_project_root
 from bulletjournal.templates.builtin_provider import FilesystemTemplateProvider
 
@@ -383,3 +387,115 @@ def test_launch_editor_invokes_marimo_with_expected_command(monkeypatch: pytest.
     assert popen_calls[0]['text'] is True
     env = cast(dict[str, str], popen_calls[0]['env'])
     assert env['EXTRA_FLAG'] == '1'
+
+
+def test_worker_runner_returns_structured_error_when_worker_stdout_is_not_json(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    class FakeProcess:
+        returncode = 1
+
+        def poll(self):
+            return 1
+
+        def communicate(self, timeout=None):
+            _ = timeout
+            return '', 'RuntimeError: hook setup failed\n'
+
+    monkeypatch.setattr(runner_module.subprocess, 'Popen', lambda *args, **kwargs: FakeProcess())
+
+    manifest = RunManifest(
+        project_root=str(tmp_path),
+        node_id='sample_node',
+        notebook_path=str(tmp_path / 'sample_node.py'),
+        run_id='run-123',
+        source_hash='hash',
+        lineage_mode=LineageMode.MANAGED.value,
+        bindings={},
+        outputs={},
+    )
+
+    result = runner_module.WorkerRunner().run(manifest, temp_dir=tmp_path)
+
+    assert result['status'] == 'error'
+    assert result['error'] == 'RuntimeError: hook setup failed'
+    assert result['outputs'] == []
+    assert result['stdout'] == ''
+    assert result['stderr'] == 'RuntimeError: hook setup failed\n'
+    assert result['returncode'] == 1
+
+
+def test_worker_main_reports_setup_failures_as_json(
+    capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    project_root = init_project_root(tmp_path / 'project').root
+    manifest_path = tmp_path / 'manifest.json'
+    manifest_path.write_text(
+        json.dumps(
+            {
+                'project_root': str(project_root),
+                'node_id': 'sample_node',
+                'notebook_path': str(project_root / 'notebooks' / 'sample_node.py'),
+                'run_id': 'run-123',
+                'source_hash': 'hash',
+                'lineage_mode': LineageMode.MANAGED.value,
+                'bindings': {},
+                'outputs': {},
+                'progress_path': None,
+            }
+        ),
+        encoding='utf-8',
+    )
+    monkeypatch.setattr(
+        worker_main,
+        '_install_script_runner_progress_hooks',
+        lambda **kwargs: (_ for _ in ()).throw(RuntimeError('hook setup failed')),
+    )
+
+    exit_code = worker_main.main([str(manifest_path)])
+    payload = json.loads(capsys.readouterr().out)
+
+    assert exit_code == 1
+    assert payload['status'] == 'error'
+    assert payload['error'] == 'hook setup failed'
+    assert payload['outputs'] == []
+    assert 'RuntimeError: hook setup failed' in payload['traceback']
+
+
+def test_worker_main_captures_notebook_stdout_without_corrupting_json(
+    capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    project_root = init_project_root(tmp_path / 'project').root
+    manifest_path = tmp_path / 'manifest.json'
+    manifest_path.write_text(
+        json.dumps(
+            {
+                'project_root': str(project_root),
+                'node_id': 'sample_node',
+                'notebook_path': str(project_root / 'notebooks' / 'sample_node.py'),
+                'run_id': 'run-123',
+                'source_hash': 'hash',
+                'lineage_mode': LineageMode.MANAGED.value,
+                'bindings': {},
+                'outputs': {},
+                'progress_path': None,
+            }
+        ),
+        encoding='utf-8',
+    )
+    monkeypatch.setattr(worker_main, '_install_script_runner_progress_hooks', lambda **kwargs: None)
+
+    def fake_execute_notebook(path: Path, *, progress_path: Path | None = None) -> dict[str, object]:
+        _ = (path, progress_path)
+        print('worker-side notebook output')
+        return {'result': {'ok': True}}
+
+    monkeypatch.setattr(worker_main, 'execute_notebook', fake_execute_notebook)
+
+    exit_code = worker_main.main([str(manifest_path)])
+    payload = json.loads(capsys.readouterr().out)
+
+    assert exit_code == 0
+    assert payload['status'] == 'ok'
+    assert payload['outputs'] == []
+    assert payload['stdout'] == 'worker-side notebook output\n'

@@ -57,11 +57,29 @@ class WorkerRunner:
                 }
             time.sleep(0.1)
         stdout, stderr = process.communicate()
-        stdout = stdout.strip() or '{}'
-        payload = json.loads(stdout)
+        stdout = stdout.strip()
+        try:
+            payload = json.loads(stdout)
+        except json.JSONDecodeError:
+            payload = {
+                'status': 'error',
+                'error': _summarize_worker_failure(stdout=stdout, stderr=stderr, returncode=process.returncode),
+                'outputs': [],
+                'stdout': stdout,
+            }
         payload['returncode'] = process.returncode
         if progress_state is not None:
             payload['progress'] = progress_state
         if stderr.strip():
             payload['stderr'] = stderr
         return payload
+
+
+def _summarize_worker_failure(*, stdout: str, stderr: str, returncode: int | None) -> str:
+    for text in (stderr, stdout):
+        lines = [line.strip() for line in text.splitlines() if line.strip()]
+        if lines:
+            return lines[-1]
+    if returncode is None:
+        return 'Worker exited without producing valid JSON output.'
+    return f'Worker exited with code {returncode} without producing valid JSON output.'

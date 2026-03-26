@@ -1501,6 +1501,22 @@ label span,
   gap: 10px;
 }
 
+.execution-log-header {
+  align-items: center;
+}
+
+.execution-log-header button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.execution-log-block {
+  max-height: 360px;
+  overflow: auto;
+  margin: 0;
+}
+
 .node-action-menu {
   position: fixed;
   z-index: 40;
