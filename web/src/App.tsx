@@ -1105,7 +1105,15 @@ function App() {
       return
     }
     if (entry.kind === 'empty') {
-      await handleCreateNode({ type: 'empty', nodeId: payload.nodeId, title: payload.title }, { x, y })
+      await handleCreateNode(
+        {
+          type: 'template',
+          nodeId: payload.nodeId,
+          title: payload.title,
+          templateRef: 'builtin/empty_notebook',
+        },
+        { x, y },
+      )
     }
   }
 

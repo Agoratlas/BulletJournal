@@ -7,7 +7,7 @@ from bulletjournal.templates.provider import TemplateAsset
 
 
 BUILTIN_PROVIDER = 'builtin'
-HIDDEN_NOTEBOOK_TEMPLATES = {'starter_notebook'}
+HIDDEN_NOTEBOOK_TEMPLATES = {'test_starter_notebook'}
 
 
 @dataclass(slots=True)

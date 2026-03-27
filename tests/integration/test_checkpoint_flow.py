@@ -135,7 +135,7 @@ def test_checkpoint_restore_marks_restored_outputs_stale(tmp_path) -> None:
                     'type': 'add_notebook_node',
                     'node_id': 'table_sink',
                     'title': 'Table Sink',
-                    'template_ref': 'builtin/starter_notebook',
+                    'template_ref': 'builtin/test_starter_notebook',
                     'x': 420,
                     'y': 80,
                 },
