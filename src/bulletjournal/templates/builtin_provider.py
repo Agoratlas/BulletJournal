@@ -7,6 +7,7 @@ from bulletjournal.templates.provider import TemplateAsset
 
 
 BUILTIN_PROVIDER = 'builtin'
+HIDDEN_NOTEBOOK_TEMPLATES = {'starter_notebook'}
 
 
 @dataclass(slots=True)
@@ -36,6 +37,7 @@ class FilesystemTemplateProvider:
                     ref=f'{self.provider_name}/{logical_name}',
                     path=path,
                     origin_revision=self.origin_revision,
+                    hidden=logical_name in HIDDEN_NOTEBOOK_TEMPLATES,
                 )
             )
         return templates

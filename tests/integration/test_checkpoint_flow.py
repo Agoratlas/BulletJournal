@@ -17,9 +17,7 @@ def test_checkpoint_restore_recovers_graph_state(tmp_path) -> None:
         '/api/v1/graph',
         json={
             'graph_version': graph_version,
-            'operations': [
-                {'type': 'add_notebook_node', 'node_id': 'checkpointed', 'title': 'Original Title'}
-            ],
+            'operations': [{'type': 'add_notebook_node', 'node_id': 'checkpointed', 'title': 'Original Title'}],
         },
     )
     assert patch.status_code == 200
@@ -33,9 +31,7 @@ def test_checkpoint_restore_recovers_graph_state(tmp_path) -> None:
         '/api/v1/graph',
         json={
             'graph_version': graph_version,
-            'operations': [
-                {'type': 'update_node_title', 'node_id': 'checkpointed', 'title': 'Updated Title'}
-            ],
+            'operations': [{'type': 'update_node_title', 'node_id': 'checkpointed', 'title': 'Updated Title'}],
         },
     )
     assert retitle.status_code == 200
@@ -139,7 +135,7 @@ def test_checkpoint_restore_marks_restored_outputs_stale(tmp_path) -> None:
                     'type': 'add_notebook_node',
                     'node_id': 'table_sink',
                     'title': 'Table Sink',
-                    'template_ref': 'builtin/empty_notebook',
+                    'template_ref': 'builtin/starter_notebook',
                     'x': 420,
                     'y': 80,
                 },

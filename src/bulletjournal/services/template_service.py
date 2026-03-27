@@ -86,11 +86,7 @@ class TemplateService:
         return parse_notebook_interface(asset, node_id=Path(asset.name).stem).to_dict()
 
     def pipeline_node_interfaces(self, definition: dict[str, Any]) -> dict[str, dict[str, Any]]:
-        notebook_paths_by_ref = {
-            asset.ref: asset
-            for asset in self._assets_by_ref.values()
-            if asset.kind == 'notebook'
-        }
+        notebook_paths_by_ref = {asset.ref: asset for asset in self._assets_by_ref.values() if asset.kind == 'notebook'}
         nodes = definition.get('nodes')
         if not isinstance(nodes, list):
             raise ValueError('Pipeline template must define a `nodes` list.')
@@ -105,7 +101,7 @@ class TemplateService:
         return interfaces
 
     def empty_notebook_source(self, *, title: str, node_id: str) -> str:
-        template = self.resolve_template_source('builtin/empty_notebook')
+        template = self.resolve_template_source('builtin/starter_notebook')
         return template.source_text.replace('{{TITLE}}', title).replace('{{NODE_ID}}', node_id)
 
     def template_ref(self, ref: str) -> TemplateRef:
@@ -198,7 +194,9 @@ class TemplateService:
         return aliases
 
     @staticmethod
-    def _coerce_provider_asset(raw_asset: TemplateAsset | dict[str, object], *, provider: object, kind: str) -> TemplateAsset:
+    def _coerce_provider_asset(
+        raw_asset: TemplateAsset | dict[str, object], *, provider: object, kind: str
+    ) -> TemplateAsset:
         if isinstance(raw_asset, TemplateAsset):
             return raw_asset
         if not isinstance(raw_asset, dict):
@@ -214,8 +212,12 @@ class TemplateService:
         if raw_kind and raw_kind != kind:
             raise ValueError(f'Template provider asset kind mismatch: expected `{kind}`, got `{raw_kind}`.')
         ref = str(raw_asset.get('ref') or f'{provider_name}/{name}').strip()
-        file_name = str(raw_asset.get('file_name') or raw_asset.get('path') or f'{name}.{"py" if kind == "notebook" else "json"}').strip()
-        origin_revision = str(raw_asset.get('origin_revision') or getattr(provider, 'provider_revision', '') or '').strip()
+        file_name = str(
+            raw_asset.get('file_name') or raw_asset.get('path') or f'{name}.{"py" if kind == "notebook" else "json"}'
+        ).strip()
+        origin_revision = str(
+            raw_asset.get('origin_revision') or getattr(provider, 'provider_revision', '') or ''
+        ).strip()
         title = raw_asset.get('title')
         description = raw_asset.get('description')
         hidden = bool(raw_asset.get('hidden', False))
