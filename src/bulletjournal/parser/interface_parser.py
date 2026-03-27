@@ -80,6 +80,7 @@ def parse_notebook_interface(path: NotebookSource, node_id: str) -> NotebookInte
     assets: list[Port] = []
     seen_names: set[str] = set()
     exported_names: dict[str, int] = {}
+    declaration_index = 0
     for cell in iter_app_cells(module):
         for statement in cell.body:
             alias_issue = _artifact_alias_issue(statement, node_id=node_id)
@@ -100,6 +101,8 @@ def parse_notebook_interface(path: NotebookSource, node_id: str) -> NotebookInte
             ports, new_issues = parsed
             issues.extend(new_issues)
             for port in ports:
+                port.declaration_index = declaration_index
+                declaration_index += 1
                 if port.name in seen_names:
                     issues.append(
                         build_issue(

@@ -11,6 +11,7 @@ export type Port = {
   has_default: boolean
   kind: string
   direction: 'input' | 'output'
+  declaration_index?: number | null
 }
 
 export type NoticeRecord = {

@@ -32,6 +32,49 @@ export function assetsForNode(node: NodeRecord): Port[] {
   return node.interface?.assets ?? []
 }
 
+export function artifactsForDisplay(snapshot: ProjectSnapshot, artifacts: ArtifactRecord[]): ArtifactRecord[] {
+  const nodeOrder = new Map(snapshot.graph.nodes.map((node, index) => [node.id, index]))
+  const artifactOrder = new Map<string, Map<string, number>>()
+
+  for (const node of snapshot.graph.nodes) {
+    const ports = [...(node.interface?.outputs ?? []), ...(node.interface?.assets ?? [])]
+    if (!ports.length) {
+      continue
+    }
+    const order = new Map<string, number>()
+    ports
+      .slice()
+      .sort((left, right) => {
+        const leftIndex = left.declaration_index ?? Number.MAX_SAFE_INTEGER
+        const rightIndex = right.declaration_index ?? Number.MAX_SAFE_INTEGER
+        if (leftIndex !== rightIndex) {
+          return leftIndex - rightIndex
+        }
+        return 0
+      })
+      .forEach((port, index) => {
+        order.set(port.name, index)
+      })
+    artifactOrder.set(node.id, order)
+  }
+
+  return artifacts.slice().sort((left, right) => {
+    const leftNodeIndex = nodeOrder.get(left.node_id) ?? Number.MAX_SAFE_INTEGER
+    const rightNodeIndex = nodeOrder.get(right.node_id) ?? Number.MAX_SAFE_INTEGER
+    if (leftNodeIndex !== rightNodeIndex) {
+      return leftNodeIndex - rightNodeIndex
+    }
+
+    const leftArtifactIndex = artifactOrder.get(left.node_id)?.get(left.artifact_name) ?? Number.MAX_SAFE_INTEGER
+    const rightArtifactIndex = artifactOrder.get(right.node_id)?.get(right.artifact_name) ?? Number.MAX_SAFE_INTEGER
+    if (leftArtifactIndex !== rightArtifactIndex) {
+      return leftArtifactIndex - rightArtifactIndex
+    }
+
+    return 0
+  })
+}
+
 export function artifactFor(snapshot: ProjectSnapshot, nodeId: string, artifactName: string): ArtifactRecord | undefined {
   return snapshot.artifacts.find(
     (artifact) => artifact.node_id === nodeId && artifact.artifact_name === artifactName,

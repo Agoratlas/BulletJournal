@@ -3,7 +3,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import type { Connection, EdgeChange, Node } from 'reactflow'
 
 import { appUrl, cancelRun, createCheckpoint, currentProject, dismissNotice, executionLogDownloadUrl, getSnapshot, listSessions, patchGraph, restoreCheckpoint, runAll, runNode, stopSession, uploadFile } from './lib/api'
-import { GRID_SIZE, activeRunNodeId, artifactCounts, artifactFor, badgeForNode, currentRun, formatBytes, formatDurationSeconds, formatTimestamp, globalArtifactCounts, hiddenInputNames, inputBindingSource, inputState, queuedRunNodeIds, templateByRef } from './lib/helpers'
+import { GRID_SIZE, activeRunNodeId, artifactCounts, artifactFor, artifactsForDisplay, badgeForNode, currentRun, formatBytes, formatDurationSeconds, formatTimestamp, globalArtifactCounts, hiddenInputNames, inputBindingSource, inputState, queuedRunNodeIds, templateByRef } from './lib/helpers'
 import type { ArtifactRecord, NodeRecord, NoticeRecord, ProjectSnapshot, TemplateRecord } from './lib/types'
 import { ConfirmDialog, CreateConstantValueDialog, CreateFileDialog, CreateNotebookDialog, CreatePipelineDialog, Modal } from './components/Dialogs'
 import { ArtifactPreviewPanel } from './components/ArtifactPreview'
@@ -356,6 +356,8 @@ const SNAPSHOT_REFRESH_EVENTS = [
   'validation.updated',
 ]
 
+const SNAPSHOT_REFRESH_THROTTLE_MS = 1000
+
 function validationIssuesForNode(snapshot: ProjectSnapshot, nodeId: string) {
   return snapshot.validation_issues.filter((issue) => issue.node_id === nodeId)
 }
@@ -422,6 +424,10 @@ function App() {
   })
   const eventSourceRef = useRef<EventSource | null>(null)
   const hadEventConnectionRef = useRef(false)
+  const snapshotRefreshTimeoutRef = useRef<number | null>(null)
+  const snapshotRefreshInFlightRef = useRef<Promise<void> | null>(null)
+  const snapshotRefreshQueuedRef = useRef(false)
+  const lastSnapshotRefreshAtRef = useRef(0)
   const startupSearch = useMemo(() => new URLSearchParams(window.location.search), [])
   const loadingSession = startupSearch.get('session_id')
     ? {
@@ -450,6 +456,25 @@ function App() {
 
   const serverSnapshot = snapshotQuery.data ?? snapshot
   const liveSnapshot = optimisticGraph?.snapshot ?? serverSnapshot
+
+  useEffect(() => {
+    return () => {
+      if (snapshotRefreshTimeoutRef.current !== null) {
+        window.clearTimeout(snapshotRefreshTimeoutRef.current)
+      }
+    }
+  }, [])
+
+  useEffect(() => {
+    if (projectId) {
+      return
+    }
+    if (snapshotRefreshTimeoutRef.current !== null) {
+      window.clearTimeout(snapshotRefreshTimeoutRef.current)
+      snapshotRefreshTimeoutRef.current = null
+    }
+    snapshotRefreshQueuedRef.current = false
+  }, [projectId])
 
   useEffect(() => {
     if (!liveSnapshot?.server_time) {
@@ -624,7 +649,7 @@ function App() {
       hadEventConnectionRef.current = true
     }
     const refreshSnapshot = () => {
-      void queryClient.refetchQueries({ queryKey: ['snapshot'], exact: true })
+      void scheduleSnapshotRefresh()
     }
     source.onmessage = refreshSnapshot
     for (const eventType of SNAPSHOT_REFRESH_EVENTS) {
@@ -636,7 +661,7 @@ function App() {
         'event_stream_reset',
         'The live event stream fell behind and was resynced from the latest snapshot.',
       )
-      void queryClient.refetchQueries({ queryKey: ['snapshot'], exact: true })
+      void refreshSnapshotNow()
     })
     source.onerror = () => {
       reportClientError(
@@ -644,7 +669,7 @@ function App() {
         'server_connection_lost',
         'The server connection was interrupted. Reconnecting now.',
       )
-      void queryClient.refetchQueries({ queryKey: ['snapshot'], exact: true })
+      void scheduleSnapshotRefresh()
     }
     return () => {
       for (const eventType of SNAPSHOT_REFRESH_EVENTS) {
@@ -664,7 +689,7 @@ function App() {
       return
     }
     const interval = window.setInterval(() => {
-      void refreshSnapshot()
+      void scheduleSnapshotRefresh()
     }, 1000)
     return () => window.clearInterval(interval)
   }, [projectId, selectedNode?.id, selectedNode?.execution_meta?.status])
@@ -727,11 +752,12 @@ function App() {
     const selectedArtifacts = artifactNodeId
       ? liveSnapshot.artifacts.filter((artifact) => artifact.node_id === artifactNodeId)
       : liveSnapshot.artifacts
+    const orderedArtifacts = artifactsForDisplay(liveSnapshot, selectedArtifacts)
     const needle = artifactFilter.trim().toLowerCase()
     if (!needle) {
-      return selectedArtifacts
+      return orderedArtifacts
     }
-    return selectedArtifacts.filter((artifact) => {
+    return orderedArtifacts.filter((artifact) => {
       return `${artifact.node_id}/${artifact.artifact_name}`.toLowerCase().includes(needle)
     })
   }, [artifactFilter, artifactNodeId, liveSnapshot])
@@ -817,11 +843,81 @@ function App() {
     return allEntries.filter((entry) => `${entry.title} ${entry.description}`.toLowerCase().includes(needle))
   }, [liveSnapshot, paletteSearch])
 
-  async function refreshSnapshot() {
+  function queueSnapshotRefresh(delayMs: number) {
+    if (snapshotRefreshTimeoutRef.current !== null) {
+      return
+    }
+    snapshotRefreshTimeoutRef.current = window.setTimeout(() => {
+      snapshotRefreshTimeoutRef.current = null
+      if (!snapshotRefreshQueuedRef.current) {
+        return
+      }
+      snapshotRefreshQueuedRef.current = false
+      void refreshSnapshotNow()
+    }, delayMs)
+  }
+
+  async function refreshSnapshotNow() {
     if (!projectId) {
       return
     }
-    await queryClient.refetchQueries({ queryKey: ['snapshot'], exact: true })
+    if (snapshotRefreshTimeoutRef.current !== null) {
+      window.clearTimeout(snapshotRefreshTimeoutRef.current)
+      snapshotRefreshTimeoutRef.current = null
+    }
+    if (snapshotRefreshInFlightRef.current) {
+      snapshotRefreshQueuedRef.current = true
+      await snapshotRefreshInFlightRef.current
+      return
+    }
+    const refreshPromise = queryClient
+      .refetchQueries({ queryKey: ['snapshot'], exact: true })
+      .then(() => {
+        lastSnapshotRefreshAtRef.current = Date.now()
+      })
+      .finally(() => {
+        snapshotRefreshInFlightRef.current = null
+        if (!snapshotRefreshQueuedRef.current || !projectId) {
+          return
+        }
+        const remainingDelay = Math.max(
+          0,
+          SNAPSHOT_REFRESH_THROTTLE_MS - (Date.now() - lastSnapshotRefreshAtRef.current),
+        )
+        snapshotRefreshQueuedRef.current = false
+        if (remainingDelay === 0) {
+          void refreshSnapshotNow()
+          return
+        }
+        snapshotRefreshQueuedRef.current = true
+        queueSnapshotRefresh(remainingDelay)
+      })
+    snapshotRefreshInFlightRef.current = refreshPromise
+    await refreshPromise
+  }
+
+  function scheduleSnapshotRefresh() {
+    if (!projectId) {
+      return
+    }
+    snapshotRefreshQueuedRef.current = true
+    if (snapshotRefreshInFlightRef.current) {
+      return
+    }
+    const remainingDelay = Math.max(
+      0,
+      SNAPSHOT_REFRESH_THROTTLE_MS - (Date.now() - lastSnapshotRefreshAtRef.current),
+    )
+    if (remainingDelay === 0) {
+      snapshotRefreshQueuedRef.current = false
+      void refreshSnapshotNow()
+      return
+    }
+    queueSnapshotRefresh(remainingDelay)
+  }
+
+  async function refreshSnapshot() {
+    await refreshSnapshotNow()
   }
 
   async function mutateGraph(operations: Array<Record<string, unknown>>) {

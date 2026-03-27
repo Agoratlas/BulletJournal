@@ -6,7 +6,14 @@ from typing import Any
 
 from bulletjournal.domain.errors import InvalidRequestError, NotFoundError
 from bulletjournal.domain.enums import ArtifactRole, ArtifactState, NodeKind, ValidationSeverity
-from bulletjournal.domain.models import GraphData, Node, NotebookInterface, Port, ProjectMetadata, file_input_artifact_name
+from bulletjournal.domain.models import (
+    GraphData,
+    Node,
+    NotebookInterface,
+    Port,
+    ProjectMetadata,
+    file_input_artifact_name,
+)
 from bulletjournal.domain.state_machine import derive_node_state
 from bulletjournal.execution.watcher import NotebookWatcher
 from bulletjournal.storage.graph_store import GraphStore
@@ -56,7 +63,9 @@ class ProjectService:
         graph_store = GraphStore(paths)
         state_db = StateDB(paths.state_db_path)
         object_store = ObjectStore(paths)
-        project = OpenProject(paths=paths, metadata=metadata, graph_store=graph_store, state_db=state_db, object_store=object_store)
+        project = OpenProject(
+            paths=paths, metadata=metadata, graph_store=graph_store, state_db=state_db, object_store=object_store
+        )
         state_db.abort_inflight_runs()
         self.project = project
         self.watcher.start()
@@ -135,6 +144,7 @@ class ProjectService:
                     description='Uploaded file',
                     kind='file',
                     direction='output',
+                    declaration_index=0,
                 )
             ],
             assets=[],
@@ -143,7 +153,9 @@ class ProjectService:
         )
 
     def validation_issues(self, *, node_id: str | None = None, include_dismissed: bool = False) -> list[dict[str, Any]]:
-        return self.require_project().state_db.list_validation_issues(node_id=node_id, include_dismissed=include_dismissed)
+        return self.require_project().state_db.list_validation_issues(
+            node_id=node_id, include_dismissed=include_dismissed
+        )
 
     def notices(self) -> list[dict[str, Any]]:
         notices = [
@@ -252,7 +264,9 @@ class ProjectService:
             template_status = None
             if node.template and interface is not None:
                 template_source = self.template_service.resolve_template_source(node.template.ref)
-                template_status = 'template' if interface.get('source_hash') == template_source.source_hash else 'modified'
+                template_status = (
+                    'template' if interface.get('source_hash') == template_source.source_hash else 'modified'
+                )
             orchestrator_state = orchestrator_state_by_node.get(node.id)
             node_payload.append(
                 {
@@ -311,7 +325,11 @@ class ProjectService:
         last_notebook_edit_at = meta.get('last_notebook_edit_at')
         last_run_started_at = project.state_db.latest_run_started_at()
         last_run_finished_at = project.state_db.latest_run_finished_at()
-        relevant = [timestamp for timestamp in [last_graph_edit_at, last_notebook_edit_at, last_run_finished_at, last_run_started_at] if timestamp]
+        relevant = [
+            timestamp
+            for timestamp in [last_graph_edit_at, last_notebook_edit_at, last_run_finished_at, last_run_started_at]
+            if timestamp
+        ]
         idle_since = max(relevant) if relevant else project.metadata.created_at
         idle_eligible = not has_active_run
         return {
@@ -404,6 +422,8 @@ class ProjectService:
 
 def _as_str(value: object) -> str:
     return str(value)
+
+
 def _optional_str(value: object | None) -> str | None:
     if value is None:
         return None

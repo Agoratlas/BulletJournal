@@ -268,6 +268,8 @@ class RunService:
                 started_at=started_at,
                 current_cell=cast(dict[str, Any], progress_payload),
                 total_cells=int(total_cells) if isinstance(total_cells, int) else None,
+                stdout_path=str(stdout_path),
+                stderr_path=str(stderr_path),
             )
             self.project_service.event_service.publish(
                 'run.progress',
@@ -358,6 +360,8 @@ class RunService:
                     status='running',
                     started_at=active.current_node_started_at,
                     current_cell=None,
+                    stdout_path=str(stdout_path),
+                    stderr_path=str(stderr_path),
                 )
                 self.project_service.event_service.publish(
                     'run.progress',
@@ -383,6 +387,8 @@ class RunService:
                         started_at=active.current_node_started_at or utc_now_iso(),
                         current_cell=cast(dict[str, Any], progress),
                         total_cells=int(total_cells) if isinstance(total_cells, int) else None,
+                        stdout_path=str(stdout_path),
+                        stderr_path=str(stderr_path),
                     )
                 if result['status'] == 'cancelled':
                     finished_at = utc_now_iso()

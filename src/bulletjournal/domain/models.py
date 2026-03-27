@@ -90,6 +90,7 @@ class Port:
     has_default: bool = False
     kind: str = 'value'
     direction: str = 'output'
+    declaration_index: int | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -101,6 +102,7 @@ class Port:
             'has_default': self.has_default,
             'kind': self.kind,
             'direction': self.direction,
+            'declaration_index': self.declaration_index,
         }
 
 
