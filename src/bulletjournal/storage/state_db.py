@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 from collections.abc import Iterable
 from pathlib import Path
@@ -15,19 +16,39 @@ from bulletjournal.utils import json_dumps, utc_now_iso
 
 LOG_PREVIEW_MAX_LINES = 50
 LOG_PREVIEW_MAX_CHARS = 10_000
+SUPPORTED_DB_JOURNAL_MODES = frozenset({'DELETE', 'TRUNCATE', 'PERSIST', 'MEMORY', 'WAL', 'OFF'})
+
+
+def _database_journal_mode(path: Path, *, in_container: bool | None = None) -> str:
+    configured = os.environ.get('BULLETJOURNAL_DB_JOURNAL_MODE')
+    if configured is not None:
+        candidate = configured.strip().upper()
+        if candidate in SUPPORTED_DB_JOURNAL_MODES:
+            return candidate
+    if in_container is None:
+        in_container = Path('/.dockerenv').exists()
+    try:
+        resolved_path = path.resolve()
+    except OSError:
+        resolved_path = path
+    if in_container and resolved_path.is_relative_to(Path('/project')):
+        return 'DELETE'
+    return 'WAL'
 
 
 class StateDB:
     def __init__(self, path: Path):
         self.path = path
+        self._journal_mode = _database_journal_mode(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._initialize()
 
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self.path, timeout=DB_TIMEOUT_SECONDS)
         connection.row_factory = sqlite3.Row
+        connection.execute(f'PRAGMA busy_timeout = {int(DB_TIMEOUT_SECONDS * 1000)}')
         connection.execute('PRAGMA foreign_keys = ON')
-        connection.execute('PRAGMA journal_mode = WAL')
+        connection.execute(f'PRAGMA journal_mode = {self._journal_mode}')
         return connection
 
     def _initialize(self) -> None:

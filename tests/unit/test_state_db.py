@@ -1,8 +1,10 @@
+from pathlib import Path
+
 from bulletjournal.domain.enums import ArtifactRole, ArtifactState, LineageMode, ValidationSeverity
 from bulletjournal.domain.models import ValidationIssue
 from bulletjournal.parser.validation import build_issue_id
 from bulletjournal.storage.project_fs import init_project_root
-from bulletjournal.storage.state_db import StateDB
+from bulletjournal.storage.state_db import StateDB, _database_journal_mode
 
 
 def test_state_db_tracks_artifact_head_lifecycle_and_cache_nondeterminism(tmp_path) -> None:
@@ -288,3 +290,23 @@ def test_state_db_truncates_execution_log_previews(tmp_path) -> None:
     assert records['node_a']['stdout'] is not None
     assert records['node_a']['stdout']['truncated'] is True
     assert records['node_a']['stdout']['text'].count('\n') <= 49
+
+
+def test_database_journal_mode_defaults_to_delete_for_project_mounts_in_container() -> None:
+    mode = _database_journal_mode(Path('/project/metadata/state.db'), in_container=True)
+
+    assert mode == 'DELETE'
+
+
+def test_database_journal_mode_keeps_wal_outside_container_mounts() -> None:
+    mode = _database_journal_mode(Path('/tmp/state.db'), in_container=True)
+
+    assert mode == 'WAL'
+
+
+def test_database_journal_mode_honors_env_override(monkeypatch) -> None:
+    monkeypatch.setenv('BULLETJOURNAL_DB_JOURNAL_MODE', 'memory')
+
+    mode = _database_journal_mode(Path('/project/metadata/state.db'), in_container=True)
+
+    assert mode == 'MEMORY'
