@@ -4,6 +4,7 @@ import json
 import time
 import uuid
 from dataclasses import dataclass
+from pathlib import Path
 from threading import Event, Lock
 from typing import Any, cast
 
@@ -250,8 +251,7 @@ class RunService:
             bindings=bindings,
             outputs=outputs,
         )
-        stdout_path = project.paths.execution_logs_dir / f'{run_id}_{node_id}.stdout.log'
-        stderr_path = project.paths.execution_logs_dir / f'{run_id}_{node_id}.stderr.log'
+        stdout_path, stderr_path = self._prepare_execution_log_files(run_id=run_id, node_id=node_id)
         manifest.stdout_path = str(stdout_path)
         manifest.stderr_path = str(stderr_path)
 
@@ -290,6 +290,14 @@ class RunService:
             on_process_started=remember_process,
             on_progress=record_progress,
         )
+        missing_logs = self._missing_execution_log_streams(stdout_path=stdout_path, stderr_path=stderr_path)
+        if missing_logs:
+            return {
+                'status': 'error',
+                'node_id': node_id,
+                'error': f'Managed run log file(s) missing for node `{node_id}`: {", ".join(missing_logs)}.',
+                'outputs': [],
+            }
         if result.get('status') != 'ok':
             result.setdefault('node_id', node_id)
         raw_outputs = result.get('outputs')
@@ -345,8 +353,7 @@ class RunService:
                 active.current_node = current_node_id
                 active.current_node_started_at = utc_now_iso()
                 active.current_node_started_monotonic = time.monotonic()
-                stdout_path = project.paths.execution_logs_dir / f'{run_id}_{current_node_id}.stdout.log'
-                stderr_path = project.paths.execution_logs_dir / f'{run_id}_{current_node_id}.stderr.log'
+                stdout_path, stderr_path = self._prepare_execution_log_files(run_id=run_id, node_id=current_node_id)
                 with self._lock:
                     self._orchestrator_node_states[current_node_id] = OrchestratorNodeState(
                         node_id=current_node_id,
@@ -656,6 +663,25 @@ class RunService:
             }
             for port in interface.get('outputs', []) + interface.get('assets', [])
         }
+
+    def _prepare_execution_log_files(self, *, run_id: str, node_id: str) -> tuple[Path, Path]:
+        project = self.project_service.require_project()
+        stdout_path = project.paths.execution_logs_dir / f'{run_id}_{node_id}.stdout.log'
+        stderr_path = project.paths.execution_logs_dir / f'{run_id}_{node_id}.stderr.log'
+        stdout_path.parent.mkdir(parents=True, exist_ok=True)
+        stderr_path.parent.mkdir(parents=True, exist_ok=True)
+        stdout_path.touch(exist_ok=True)
+        stderr_path.touch(exist_ok=True)
+        return stdout_path, stderr_path
+
+    @staticmethod
+    def _missing_execution_log_streams(*, stdout_path: Path, stderr_path: Path) -> list[str]:
+        missing: list[str] = []
+        if not stdout_path.exists() or not stdout_path.is_file():
+            missing.append('stdout')
+        if not stderr_path.exists() or not stderr_path.is_file():
+            missing.append('stderr')
+        return missing
 
     def _elapsed_seconds(self, started_monotonic: float | None) -> float | None:
         if started_monotonic is None:
