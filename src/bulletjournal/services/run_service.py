@@ -343,6 +343,8 @@ class RunService:
                 active.current_node = current_node_id
                 active.current_node_started_at = utc_now_iso()
                 active.current_node_started_monotonic = time.monotonic()
+                stdout_path = project.paths.execution_logs_dir / f'{run_id}_{current_node_id}.stdout.log'
+                stderr_path = project.paths.execution_logs_dir / f'{run_id}_{current_node_id}.stderr.log'
                 with self._lock:
                     self._orchestrator_node_states[current_node_id] = OrchestratorNodeState(
                         node_id=current_node_id,

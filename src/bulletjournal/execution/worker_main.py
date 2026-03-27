@@ -20,6 +20,10 @@ from bulletjournal.runtime.context import Binding, RuntimeContext, activate_runt
 class _TeeWriter:
     def __init__(self, *targets) -> None:
         self._targets = targets
+        primary = targets[0] if targets else None
+        self.encoding = getattr(primary, 'encoding', 'utf-8')
+        self.errors = getattr(primary, 'errors', None)
+        self.newlines = getattr(primary, 'newlines', None)
 
     def write(self, value: str) -> int:
         written = 0
@@ -30,6 +34,33 @@ class _TeeWriter:
     def flush(self) -> None:
         for target in self._targets:
             target.flush()
+
+    def isatty(self) -> bool:
+        return any(bool(getattr(target, 'isatty', lambda: False)()) for target in self._targets)
+
+    def fileno(self) -> int:
+        for target in self._targets:
+            fileno = getattr(target, 'fileno', None)
+            if fileno is None:
+                continue
+            try:
+                return fileno()
+            except (OSError, io.UnsupportedOperation):
+                continue
+        raise io.UnsupportedOperation('fileno')
+
+    def writable(self) -> bool:
+        return True
+
+    @property
+    def closed(self) -> bool:
+        return all(bool(getattr(target, 'closed', False)) for target in self._targets)
+
+    def __getattr__(self, name: str):
+        for target in self._targets:
+            if hasattr(target, name):
+                return getattr(target, name)
+        raise AttributeError(name)
 
 
 def _write_progress(
