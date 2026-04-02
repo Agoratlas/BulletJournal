@@ -285,7 +285,7 @@ class RunService:
 
         result = self.worker_runner.run(
             manifest,
-            temp_dir=project.paths.uploads_temp_dir,
+            temp_dir=project.paths.worker_temp_dir,
             cancel_event=active_run.cancel_event,
             on_process_started=remember_process,
             on_progress=record_progress,

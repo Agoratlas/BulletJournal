@@ -67,12 +67,16 @@ class ProjectPaths:
         return self.root / 'temp'
 
     @property
-    def uploads_temp_dir(self) -> Path:
+    def uploads_dir(self) -> Path:
         return self.temp_dir / 'uploads'
 
     @property
     def execution_logs_dir(self) -> Path:
         return self.temp_dir / 'execution_logs'
+
+    @property
+    def worker_temp_dir(self) -> Path:
+        return self.temp_dir / 'worker'
 
     def notebook_path(self, node_id: str) -> Path:
         return self.notebooks_dir / f'{node_id}.py'
@@ -125,8 +129,9 @@ def init_project_root(path: Path, title: str | None = None, project_id: str | No
     ensure_directory(paths.metadata_dir)
     ensure_directory(paths.checkpoints_dir)
     ensure_directory(paths.temp_dir)
-    ensure_directory(paths.uploads_temp_dir)
+    ensure_directory(paths.uploads_dir)
     ensure_directory(paths.execution_logs_dir)
+    ensure_directory(paths.worker_temp_dir)
 
     now = utc_now_iso()
     resolved_project_id = validate_project_id(project_id or slugify(root.name))
@@ -170,7 +175,8 @@ def require_project_root(path: Path) -> ProjectPaths:
         raise ProjectValidationError(f'{paths.root} is not a valid BulletJournal project root.')
     ensure_directory(paths.temp_dir)
     ensure_directory(paths.execution_logs_dir)
-    ensure_directory(paths.uploads_temp_dir)
+    ensure_directory(paths.uploads_dir)
+    ensure_directory(paths.worker_temp_dir)
     project_json = load_project_json(paths)
     validate_project_id(str(project_json.get('project_id') or ''))
     return paths

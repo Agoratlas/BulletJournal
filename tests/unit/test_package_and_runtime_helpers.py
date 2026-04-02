@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib
 import json
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 from typing import cast
@@ -425,6 +426,45 @@ def test_worker_runner_returns_structured_error_when_worker_stdout_is_not_json(
     assert result['returncode'] == 1
 
 
+def test_worker_runner_respects_manifest_execution_log_paths(tmp_path: Path) -> None:
+    project_root = init_project_root(tmp_path / 'project').root
+    notebook_path = project_root / 'notebooks' / 'sample_node.py'
+    notebook_path.write_text(
+        (
+            'import marimo\n\n'
+            'app = marimo.App()\n\n'
+            '@app.cell\n'
+            'def _():\n'
+            "    print('hello from worker runner')\n"
+            '    return\n\n'
+            "if __name__ == '__main__':\n"
+            '    app.run()\n'
+        ),
+        encoding='utf-8',
+    )
+    stdout_log = project_root / 'temp' / 'execution_logs' / 'run-123_sample_node.stdout.log'
+    stderr_log = project_root / 'temp' / 'execution_logs' / 'run-123_sample_node.stderr.log'
+    manifest = RunManifest(
+        project_root=str(project_root),
+        node_id='sample_node',
+        notebook_path=str(notebook_path),
+        run_id='run-123',
+        source_hash='hash',
+        lineage_mode=LineageMode.MANAGED.value,
+        bindings={},
+        outputs={},
+        stdout_path=str(stdout_log),
+        stderr_path=str(stderr_log),
+    )
+
+    result = runner_module.WorkerRunner().run(manifest, temp_dir=project_root / 'temp' / 'uploads')
+
+    assert result['status'] == 'ok'
+    assert result['stdout'] == 'hello from worker runner\n'
+    assert stdout_log.read_text(encoding='utf-8') == 'hello from worker runner\n'
+    assert stderr_log.read_text(encoding='utf-8') == ''
+
+
 def test_worker_main_reports_setup_failures_as_json(
     capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -499,3 +539,49 @@ def test_worker_main_captures_notebook_stdout_without_corrupting_json(
     assert payload['status'] == 'ok'
     assert payload['outputs'] == []
     assert payload['stdout'] == 'worker-side notebook output\n'
+
+
+def test_worker_main_writes_stdout_and_stderr_logs_to_files(
+    capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    project_root = init_project_root(tmp_path / 'project').root
+    manifest_path = tmp_path / 'manifest.json'
+    stdout_log = tmp_path / 'worker.stdout.log'
+    stderr_log = tmp_path / 'worker.stderr.log'
+    manifest_path.write_text(
+        json.dumps(
+            {
+                'project_root': str(project_root),
+                'node_id': 'sample_node',
+                'notebook_path': str(project_root / 'notebooks' / 'sample_node.py'),
+                'run_id': 'run-123',
+                'source_hash': 'hash',
+                'lineage_mode': LineageMode.MANAGED.value,
+                'bindings': {},
+                'outputs': {},
+                'progress_path': None,
+                'stdout_path': str(stdout_log),
+                'stderr_path': str(stderr_log),
+            }
+        ),
+        encoding='utf-8',
+    )
+    monkeypatch.setattr(worker_main, '_install_script_runner_progress_hooks', lambda **kwargs: None)
+
+    def fake_execute_notebook(path: Path, *, progress_path: Path | None = None) -> dict[str, object]:
+        _ = (path, progress_path)
+        print('worker-side stdout output')
+        print('worker-side stderr output', file=sys.stderr)
+        return {'result': {'ok': True}}
+
+    monkeypatch.setattr(worker_main, 'execute_notebook', fake_execute_notebook)
+
+    exit_code = worker_main.main([str(manifest_path)])
+    payload = json.loads(capsys.readouterr().out)
+
+    assert exit_code == 0
+    assert payload['status'] == 'ok'
+    assert payload['stdout'] == 'worker-side stdout output\n'
+    assert payload['stderr'] == 'worker-side stderr output\n'
+    assert stdout_log.read_text(encoding='utf-8') == 'worker-side stdout output\n'
+    assert stderr_log.read_text(encoding='utf-8') == 'worker-side stderr output\n'

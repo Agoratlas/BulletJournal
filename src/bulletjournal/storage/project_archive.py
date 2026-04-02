@@ -26,7 +26,9 @@ REQUIRED_EXPORT_MEMBERS = {
 }
 
 
-def export_project_archive(project_root: Path, archive_path: Path, *, include_artifacts: bool = True) -> dict[str, object]:
+def export_project_archive(
+    project_root: Path, archive_path: Path, *, include_artifacts: bool = True
+) -> dict[str, object]:
     paths = require_project_root(project_root)
     archive = archive_path.resolve()
     archive.parent.mkdir(parents=True, exist_ok=True)
@@ -126,6 +128,8 @@ def _restore_required_directories(root: Path) -> None:
         paths.artifacts_dir,
         paths.object_store_dir,
         paths.checkpoints_dir,
-        paths.uploads_temp_dir,
+        paths.uploads_dir,
+        paths.worker_temp_dir,
+        paths.execution_logs_dir,
     ]:
         directory.mkdir(parents=True, exist_ok=True)

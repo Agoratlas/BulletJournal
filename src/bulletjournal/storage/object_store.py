@@ -64,7 +64,7 @@ class ObjectStore:
         return self.object_path(artifact_hash)
 
     def create_temp_file(self, suffix: str = '') -> Path:
-        self.paths.uploads_temp_dir.mkdir(parents=True, exist_ok=True)
-        fd, temp_path = tempfile.mkstemp(dir=self.paths.uploads_temp_dir, suffix=suffix)
+        self.paths.uploads_dir.mkdir(parents=True, exist_ok=True)
+        fd, temp_path = tempfile.mkstemp(dir=self.paths.uploads_dir, suffix=suffix)
         os.close(fd)
         return Path(temp_path)
