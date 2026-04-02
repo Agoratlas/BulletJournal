@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from bulletjournal.domain.hashing import combine_hashes, hash_json
 from bulletjournal.domain.errors import NotFoundError
 from bulletjournal.domain.enums import ArtifactState, NodeKind
 from bulletjournal.domain.errors import GraphValidationError
@@ -15,7 +16,7 @@ from bulletjournal.domain.graph_rules import (
 )
 from bulletjournal.domain.models import Edge, GraphData, LayoutEntry, Node, file_input_artifact_name
 from bulletjournal.domain.type_system import types_compatible
-from bulletjournal.execution.planner import downstream_closure, visible_edge_id
+from bulletjournal.execution.planner import downstream_closure, topological_nodes, visible_edge_id
 
 
 class GraphService:
@@ -35,12 +36,14 @@ class GraphService:
         graph = self.project_service.graph()
         if int(graph.meta['graph_version']) != graph_version:
             raise GraphValidationError('Graph version conflict.')
+        self._assert_operations_allowed_with_frozen_notebooks(graph, operations)
         active_run_interruption = None
         reparse_all = False
         stale_roots: set[str] = set()
         interruption_roots: set[str] = set()
         pending_notebook_creates: list[tuple[str, str]] = []
         pending_notebook_deletes: list[str] = []
+        pending_editor_stops: list[str] = []
         pending_file_input_heads: list[str] = []
         pending_state_deletes: list[str] = []
         for operation in operations:
@@ -76,6 +79,8 @@ class GraphService:
                 self._update_title(graph, operation)
             elif op_type == 'update_node_hidden_inputs':
                 self._update_hidden_inputs(graph, operation)
+            elif op_type == 'update_node_frozen':
+                pending_editor_stops.extend(self._update_frozen(graph, operation))
             elif op_type == 'delete_node':
                 deleted = self._delete_node(graph, str(operation['node_id']))
                 stale_roots.update(deleted['stale_roots'])
@@ -83,6 +88,7 @@ class GraphService:
                 interruption_roots.add(str(deleted['node_id']))
                 if deleted['delete_notebook_file']:
                     pending_notebook_deletes.append(str(deleted['node_id']))
+                    pending_editor_stops.append(str(deleted['node_id']))
                 pending_state_deletes.append(str(deleted['node_id']))
                 reparse_all = True
             else:
@@ -96,6 +102,9 @@ class GraphService:
         graph = self.project_service.write_graph(graph)
         for node_id, source in pending_notebook_creates:
             self.project_service.require_project().paths.notebook_path(node_id).write_text(source, encoding='utf-8')
+        for node_id in pending_editor_stops:
+            if self.project_service.run_service is not None:
+                self.project_service.run_service.session_manager.stop_by_node(node_id)
         for node_id in pending_file_input_heads:
             node = next(node for node in graph.nodes if node.id == node_id)
             self.project_service.require_project().state_db.ensure_artifact_head(
@@ -113,6 +122,7 @@ class GraphService:
             self.project_service.reparse_all_notebooks()
         if stale_roots:
             self.mark_nodes_and_downstream_stale(sorted(stale_roots))
+            self.restore_nodes_and_downstream_ready_if_lineage_matches(sorted(stale_roots))
         snapshot = self.project_service.snapshot()
         graph_payload = snapshot['graph']
         return {
@@ -129,10 +139,10 @@ class GraphService:
         node_id: str,
         removed_source_ports: list[str],
         removed_target_ports: list[str],
-    ) -> list[str]:
+    ) -> list[dict[str, Any]]:
         graph = self.project_service.graph()
         kept_edges: list[Edge] = []
-        removed: list[str] = []
+        removed: list[dict[str, Any]] = []
         stale_roots: set[str] = set()
         for edge in graph.edges:
             remove = False
@@ -143,7 +153,7 @@ class GraphService:
                 remove = True
                 stale_roots.add(node_id)
             if remove:
-                removed.append(edge.id)
+                removed.append(edge.to_dict())
             else:
                 kept_edges.append(edge)
         if removed:
@@ -166,6 +176,17 @@ class GraphService:
         for node_id in node_ids:
             affected.update(downstream_closure(graph, node_id))
         self._mark_nodes_stale(sorted(affected), graph)
+
+    def restore_nodes_and_downstream_ready_if_lineage_matches(self, node_ids: list[str]) -> None:
+        graph = self.project_service.graph()
+        if not node_ids:
+            return
+        affected: set[str] = set(node_ids)
+        for node_id in node_ids:
+            affected.update(downstream_closure(graph, node_id))
+        ordered_ids = [node_id for node_id in topological_nodes(graph) if node_id in affected]
+        for node_id in ordered_ids:
+            self._restore_ready_outputs_for_node(node_id, graph)
 
     def _mark_nodes_stale(self, node_ids: list[str], graph: GraphData) -> None:
         project = self.project_service.require_project()
@@ -196,6 +217,97 @@ class GraphService:
                             },
                         )
 
+    def _restore_ready_outputs_for_node(self, node_id: str, graph: GraphData) -> None:
+        project = self.project_service.require_project()
+        node = next((item for item in graph.nodes if item.id == node_id), None)
+        if node is None or node.kind != NodeKind.NOTEBOOK:
+            return
+        interface = self.project_service.latest_interface(node_id)
+        if interface is None:
+            return
+        source_hash = interface.get('source_hash')
+        if not isinstance(source_hash, str) or not source_hash:
+            return
+
+        input_hashes: list[str] = []
+        input_code_hashes: list[str] = []
+        for port in interface.get('inputs', []):
+            metadata = self._lineage_metadata_for_input(node_id, port, graph)
+            if metadata is None:
+                return
+            input_hashes.append(metadata['artifact_hash'])
+            input_code_hashes.append(metadata['upstream_code_hash'])
+
+        for port in interface.get('outputs', []) + interface.get('assets', []):
+            artifact_name = str(port['name'])
+            head = project.state_db.get_artifact_head(node_id, artifact_name)
+            if head is None or head.get('current_version_id') is None:
+                continue
+            if head['state'] != ArtifactState.STALE.value:
+                continue
+            expected_upstream_data_hash = combine_hashes([source_hash, f'{node_id}/{artifact_name}', *input_hashes])
+            expected_upstream_code_hash = combine_hashes(
+                [source_hash, f'{node_id}/{artifact_name}', *input_code_hashes]
+            )
+            if (
+                head.get('source_hash') != source_hash
+                or head.get('upstream_data_hash') != expected_upstream_data_hash
+                or head.get('upstream_code_hash') != expected_upstream_code_hash
+            ):
+                continue
+            project.state_db.set_artifact_head_state(
+                node_id,
+                artifact_name,
+                ArtifactState.READY,
+            )
+            self.project_service.event_service.publish(
+                'artifact.state_changed',
+                project_id=project.metadata.project_id,
+                graph_version=int(graph.meta['graph_version']),
+                payload={
+                    'node_id': node_id,
+                    'artifact_name': artifact_name,
+                    'old_state': ArtifactState.STALE.value,
+                    'new_state': ArtifactState.READY.value,
+                },
+            )
+
+    def _lineage_metadata_for_input(
+        self,
+        node_id: str,
+        port: dict[str, Any],
+        graph: GraphData,
+    ) -> dict[str, str] | None:
+        binding = next(
+            (edge for edge in graph.edges if edge.target_node == node_id and edge.target_port == str(port['name'])),
+            None,
+        )
+        if binding is None:
+            if bool(port.get('has_default', False)):
+                return {
+                    'artifact_hash': hash_json(port.get('default')),
+                    'upstream_code_hash': 'default',
+                }
+            return None
+        head = self.project_service.require_project().state_db.get_artifact_head(
+            binding.source_node,
+            binding.source_port,
+        )
+        if head is None or head.get('current_version_id') is None:
+            return None
+        if head.get('state') != ArtifactState.READY.value:
+            return None
+        artifact_hash = head.get('artifact_hash')
+        upstream_code_hash = head.get('upstream_code_hash')
+        if not isinstance(artifact_hash, str) or not artifact_hash:
+            return None
+        if not isinstance(upstream_code_hash, str) or not upstream_code_hash:
+            return None
+        return {
+            'artifact_hash': artifact_hash,
+            'upstream_code_hash': upstream_code_hash,
+        }
+
     def _add_notebook_node(self, graph: GraphData, operation: dict[str, Any]) -> tuple[str, str]:
         node_id = str(operation['node_id'])
         title = str(operation['title'])
@@ -204,13 +316,17 @@ class GraphService:
         template_ref = operation.get('template_ref')
         source_text = operation.get('source_text')
         ui = operation.get('ui')
-        template = self.project_service.template_service.resolve_template_source(str(template_ref)) if template_ref else None
+        template = (
+            self.project_service.template_service.resolve_template_source(str(template_ref)) if template_ref else None
+        )
         node = Node(
             id=node_id,
             kind=NodeKind.NOTEBOOK,
             title=title,
             path=self.project_service.require_project().paths.notebook_relpath(node_id),
-            template=None if template_ref is None or source_text is not None else self.project_service.template_service.template_ref(str(template_ref)),
+            template=None
+            if template_ref is None or source_text is not None
+            else self.project_service.template_service.template_ref(str(template_ref)),
             ui={**({'hidden_inputs': []}), **ui} if isinstance(ui, dict) else {'hidden_inputs': []},
         )
         graph.nodes.append(node)
@@ -230,7 +346,14 @@ class GraphService:
         if any(node.id == node_id for node in graph.nodes):
             raise GraphValidationError(f'Node `{node_id}` already exists.')
         artifact_name = str(operation.get('artifact_name', 'file'))
-        graph.nodes.append(Node(id=node_id, kind=NodeKind.FILE_INPUT, title=title, ui={'hidden_inputs': [], 'artifact_name': artifact_name}))
+        graph.nodes.append(
+            Node(
+                id=node_id,
+                kind=NodeKind.FILE_INPUT,
+                title=title,
+                ui={'hidden_inputs': [], 'artifact_name': artifact_name},
+            )
+        )
         graph.layout.append(self._layout_entry(node_id, operation))
         return node_id
 
@@ -259,7 +382,9 @@ class GraphService:
         notebook_creates: list[tuple[str, str]] = []
         file_input_heads: list[str] = []
         node_id_map: dict[str, str] = {}
-        interfaces_by_node: dict[str, dict[str, Any]] = self.project_service.template_service.pipeline_node_interfaces(definition)
+        interfaces_by_node: dict[str, dict[str, Any]] = self.project_service.template_service.pipeline_node_interfaces(
+            definition
+        )
 
         for raw_node in nodes:
             if not isinstance(raw_node, dict):
@@ -269,7 +394,9 @@ class GraphService:
                 raise GraphValidationError(f'Pipeline template `{template_ref}` contains a node without an id.')
             layout = layout_by_node.get(template_node_id)
             if layout is None:
-                raise GraphValidationError(f'Pipeline template `{template_ref}` is missing layout for `{template_node_id}`.')
+                raise GraphValidationError(
+                    f'Pipeline template `{template_ref}` is missing layout for `{template_node_id}`.'
+                )
             resolved_node_id = f'{node_id_prefix}{template_node_id}' if node_id_prefix else template_node_id
             if any(node.id == resolved_node_id for node in graph.nodes) or resolved_node_id in node_id_map.values():
                 raise GraphValidationError(
@@ -294,8 +421,7 @@ class GraphService:
                 add_operation = {
                     'node_id': resolved_node_id,
                     'title': resolved_title,
-                    'artifact_name': raw_node.get('artifact_name')
-                    or raw_node.get('ui', {}).get('artifact_name')
+                    'artifact_name': raw_node.get('artifact_name') or raw_node.get('ui', {}).get('artifact_name')
                     if isinstance(raw_node.get('ui'), dict)
                     else 'file',
                     'x': int(layout.get('x', 80)) + offset_x,
@@ -306,7 +432,9 @@ class GraphService:
                 node_id = self._add_file_input_node(graph, add_operation)
                 file_input_heads.append(node_id)
             else:
-                raise GraphValidationError(f'Pipeline template `{template_ref}` contains unsupported node kind `{kind}`.')
+                raise GraphValidationError(
+                    f'Pipeline template `{template_ref}` contains unsupported node kind `{kind}`.'
+                )
             node_id_map[template_node_id] = resolved_node_id
 
         for raw_edge in edges:
@@ -365,7 +493,9 @@ class GraphService:
         source_port = str(operation['source_port'])
         target_node = str(operation['target_node'])
         target_port = str(operation['target_port'])
-        source_type = _port_data_type(source_interface.get('outputs', []) + source_interface.get('assets', []), source_port)
+        source_type = _port_data_type(
+            source_interface.get('outputs', []) + source_interface.get('assets', []), source_port
+        )
         target_type = _port_data_type(target_interface.get('inputs', []), target_port)
         if source_type is None:
             raise GraphValidationError(f'Unknown source port `{source_port}`.')
@@ -446,6 +576,78 @@ class GraphService:
                 node.ui = {**node.ui, 'hidden_inputs': hidden_inputs}
                 return
         raise GraphValidationError(f'Unknown node `{node_id}`.')
+
+    def _update_frozen(self, graph: GraphData, operation: dict[str, Any]) -> list[str]:
+        node_id = str(operation['node_id'])
+        frozen = bool(operation.get('frozen', False))
+        target_node = next((node for node in graph.nodes if node.id == node_id), None)
+        if target_node is None:
+            raise GraphValidationError(f'Unknown node `{node_id}`.')
+        if target_node.kind != NodeKind.NOTEBOOK:
+            raise GraphValidationError(f'Only notebook nodes can be frozen. `{node_id}` is {target_node.kind.value}.')
+        if not frozen:
+            unfrozen_ids = set(downstream_closure(graph, node_id)) | {node_id}
+            for node in graph.nodes:
+                if node.id not in unfrozen_ids or node.kind != NodeKind.NOTEBOOK:
+                    continue
+                node.ui = {**node.ui, 'frozen': False}
+            return []
+
+        blockers = self.project_service.active_editor_upstream_blockers_for_freeze(node_id, graph=graph)
+        if blockers:
+            raise GraphValidationError(self.project_service.freeze_upstream_editor_block_message(blockers))
+
+        frozen_ids: list[str] = []
+        for node in self.project_service.freeze_targets_for_node(node_id, graph=graph):
+            if not node.ui.get('frozen'):
+                frozen_ids.append(node.id)
+            node.ui = {**node.ui, 'frozen': True}
+        return frozen_ids
+
+    def _assert_operations_allowed_with_frozen_notebooks(
+        self,
+        graph: GraphData,
+        operations: list[dict[str, Any]],
+    ) -> None:
+        for operation in operations:
+            blockers = self._frozen_notebook_blockers_for_operation(graph, operation)
+            if blockers:
+                raise GraphValidationError(self.project_service.freeze_block_message(blockers))
+
+    def _frozen_notebook_blockers_for_operation(
+        self,
+        graph: GraphData,
+        operation: dict[str, Any],
+    ) -> list[Node]:
+        op_type = operation['type']
+        if op_type == 'add_edge':
+            return self.project_service.frozen_notebook_blockers_for_stale_roots(
+                [str(operation['target_node'])], graph=graph
+            )
+        if op_type == 'remove_edge':
+            edge_id = str(operation['edge_id'])
+            edge = next((item for item in graph.edges if item.id == edge_id), None)
+            if edge is None:
+                return []
+            return self.project_service.frozen_notebook_blockers_for_stale_roots([edge.target_node], graph=graph)
+        if op_type != 'delete_node':
+            return []
+        node_id = str(operation['node_id'])
+        node = next((item for item in graph.nodes if item.id == node_id), None)
+        blockers = []
+        if node is not None and self.project_service.node_is_frozen(node):
+            blockers.append(node)
+        stale_roots = sorted({edge.target_node for edge in graph.edges if edge.source_node == node_id})
+        downstream_blockers = self.project_service.frozen_notebook_blockers_for_stale_roots(
+            stale_roots,
+            graph=graph,
+        )
+        seen = {item.id for item in blockers}
+        for blocker in downstream_blockers:
+            if blocker.id not in seen:
+                blockers.append(blocker)
+                seen.add(blocker.id)
+        return blockers
 
     def _delete_node(self, graph: GraphData, node_id: str) -> dict[str, Any]:
         existing = next((node for node in graph.nodes if node.id == node_id), None)

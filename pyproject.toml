@@ -65,3 +65,6 @@ bulletjournal = [
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+
+[tool.marimo.display]
+theme = "system"

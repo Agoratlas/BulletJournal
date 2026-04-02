@@ -5,7 +5,7 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from bulletjournal.domain.enums import RunMode
+from bulletjournal.domain.enums import ArtifactState, RunMode
 
 
 class StrictModel(BaseModel):
@@ -83,6 +83,12 @@ class DeleteNodeOperation(StrictModel):
     node_id: str
 
 
+class UpdateNodeFrozenOperation(StrictModel):
+    type: Literal['update_node_frozen']
+    node_id: str
+    frozen: bool
+
+
 GraphOperation = Annotated[
     AddNotebookNodeOperation
     | AddFileInputNodeOperation
@@ -92,7 +98,8 @@ GraphOperation = Annotated[
     | UpdateNodeLayoutOperation
     | UpdateNodeTitleOperation
     | UpdateNodeHiddenInputsOperation
-    | DeleteNodeOperation,
+    | DeleteNodeOperation
+    | UpdateNodeFrozenOperation,
     Field(discriminator='type'),
 ]
 
@@ -142,3 +149,12 @@ class RunAllRequest(StrictModel):
 class ControllerEnvironmentChangeRequest(StrictModel):
     reason: str
     mark_all_artifacts_stale: bool = True
+
+
+class ArtifactStateChangeRequest(StrictModel):
+    state: ArtifactState
+
+
+class NodeOutputsStateChangeRequest(StrictModel):
+    state: ArtifactState
+    only_current_state: ArtifactState | None = None

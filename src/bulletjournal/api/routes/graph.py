@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from fastapi import APIRouter, Request
+from fastapi.responses import FileResponse
 
 from bulletjournal.api.schemas import GraphPatchRequest
 
@@ -28,3 +31,18 @@ def get_node(node_id: str, request: Request):
         **node.to_dict(),
         'interface': container.project_service.latest_interface(node_id),
     }
+
+
+@router.get('/nodes/{node_id}/notebook/download')
+def download_notebook(node_id: str, request: Request):
+    container = request.app.state.container
+    node = container.project_service.get_node(node_id)
+    if node.kind != 'notebook':
+        raise FileNotFoundError(f'Node `{node_id}` does not have a notebook file.')
+    notebook_path = container.project_service.notebook_path(node_id)
+    filename = Path(notebook_path).name
+    return FileResponse(
+        notebook_path,
+        media_type='text/x-python; charset=utf-8',
+        filename=filename,
+    )

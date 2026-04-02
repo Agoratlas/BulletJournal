@@ -28,6 +28,9 @@ class ArtifactService:
 
     def upload_file(self, node_id: str, filename: str, content: bytes, mime_type: str | None = None) -> dict[str, Any]:
         project = self.project_service.require_project()
+        blockers = self.project_service.frozen_notebook_blockers_for_stale_roots([node_id])
+        if blockers:
+            raise InvalidRequestError(self.project_service.freeze_block_message(blockers))
         node = self.project_service.get_node(node_id)
         if node.kind != NodeKind.FILE_INPUT:
             raise InvalidRequestError(f'Node `{node_id}` is not a file input node.')
@@ -86,6 +89,109 @@ class ArtifactService:
             )
         GraphService(self.project_service).mark_downstream_stale([node_id])
         return self.get_artifact(node_id, artifact_name)
+
+    def set_artifact_state(
+        self,
+        node_id: str,
+        artifact_name: str,
+        *,
+        state: ArtifactState,
+        propagate_downstream_stale: bool = True,
+    ) -> dict[str, Any]:
+        if state == ArtifactState.READY and not self._node_inputs_are_ready(node_id):
+            raise InvalidRequestError(
+                f'Node `{node_id}` has stale or pending inputs. Its outputs cannot be marked ready.'
+            )
+        head = self.get_artifact(node_id, artifact_name)
+        if head.get('current_version_id') is None:
+            raise InvalidRequestError(
+                f'Artifact `{node_id}/{artifact_name}` is pending and cannot be marked {state.value}.'
+            )
+        current_state = str(head['state'])
+        if current_state == state.value:
+            return head
+        project = self.project_service.require_project()
+        project.state_db.set_artifact_head_state(node_id, artifact_name, state)
+        self.project_service.event_service.publish(
+            'artifact.state_changed',
+            project_id=project.metadata.project_id,
+            graph_version=int(self.project_service.graph().meta['graph_version']),
+            payload={
+                'node_id': node_id,
+                'artifact_name': artifact_name,
+                'old_state': current_state,
+                'new_state': state.value,
+            },
+        )
+        if state == ArtifactState.STALE and propagate_downstream_stale:
+            GraphService(self.project_service).mark_downstream_stale([node_id])
+        return self.get_artifact(node_id, artifact_name)
+
+    def set_node_output_states(
+        self,
+        node_id: str,
+        *,
+        state: ArtifactState,
+        only_current_state: ArtifactState | None = None,
+    ) -> dict[str, Any]:
+        if state == ArtifactState.READY and not self._node_inputs_are_ready(node_id):
+            raise InvalidRequestError(
+                f'Node `{node_id}` has stale or pending inputs. Its outputs cannot be marked ready.'
+            )
+        interface = self.project_service.latest_interface(node_id)
+        if interface is None:
+            raise InvalidRequestError(f'Node `{node_id}` does not have a parsed interface yet.')
+        changed_artifacts: list[str] = []
+        for port in interface.get('outputs', []) + interface.get('assets', []):
+            artifact_name = str(port['name'])
+            head = self.project_service.require_project().state_db.get_artifact_head(node_id, artifact_name)
+            if head is None or head.get('current_version_id') is None:
+                continue
+            current_state = ArtifactState(str(head['state']))
+            if only_current_state is not None and current_state != only_current_state:
+                continue
+            if current_state == state:
+                continue
+            self.set_artifact_state(
+                node_id,
+                artifact_name,
+                state=state,
+                propagate_downstream_stale=False,
+            )
+            changed_artifacts.append(artifact_name)
+        if changed_artifacts and state == ArtifactState.STALE:
+            GraphService(self.project_service).mark_downstream_stale([node_id])
+        return {
+            'node_id': node_id,
+            'artifact_names': changed_artifacts,
+            'state': state.value,
+            'only_current_state': None if only_current_state is None else only_current_state.value,
+        }
+
+    def _node_inputs_are_ready(self, node_id: str) -> bool:
+        node = self.project_service.get_node(node_id)
+        if node.kind != NodeKind.NOTEBOOK:
+            return True
+        interface = self.project_service.latest_interface(node_id)
+        if interface is None:
+            return False
+        graph = self.project_service.graph()
+        state_db = self.project_service.require_project().state_db
+        for port in interface.get('inputs', []):
+            binding = next(
+                (edge for edge in graph.edges if edge.target_node == node_id and edge.target_port == str(port['name'])),
+                None,
+            )
+            if binding is None:
+                if bool(port.get('has_default', False)):
+                    continue
+                return False
+            head = state_db.get_artifact_head(binding.source_node, binding.source_port)
+            if head is None or head.get('current_version_id') is None:
+                return False
+            if head.get('state') != ArtifactState.READY.value:
+                return False
+        return True
 
     def download_file(self, node_id: str, artifact_name: str, *, download_format: str | None = None) -> dict[str, Any]:
         head = self.get_artifact(node_id, artifact_name)

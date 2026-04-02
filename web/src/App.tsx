@@ -2,9 +2,9 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import type { Connection, EdgeChange, Node } from 'reactflow'
 
-import { appUrl, cancelRun, createCheckpoint, currentProject, dismissNotice, executionLogDownloadUrl, getSnapshot, listSessions, patchGraph, restoreCheckpoint, runAll, runNode, stopSession, uploadFile } from './lib/api'
+import { appUrl, cancelRun, createCheckpoint, currentProject, dismissNotice, downloadNotebookSource, executionLogDownloadUrl, getSnapshot, listSessions, notebookDownloadUrl, patchGraph, restoreCheckpoint, runAll, runNode, setArtifactState, setNodeOutputsState, stopSession, uploadFile } from './lib/api'
 import { GRID_SIZE, activeRunNodeId, artifactCounts, artifactFor, artifactsForDisplay, badgeForNode, currentRun, formatBytes, formatDurationSeconds, formatTimestamp, globalArtifactCounts, hiddenInputNames, inputBindingSource, inputState, queuedRunNodeIds, templateByRef } from './lib/helpers'
-import type { ArtifactRecord, NodeRecord, NoticeRecord, ProjectSnapshot, TemplateRecord } from './lib/types'
+import type { ArtifactRecord, EdgeRecord, GraphPatchOperation, LayoutRecord, NodeRecord, NoticeRecord, ProjectSnapshot, TemplateRecord } from './lib/types'
 import { ConfirmDialog, CreateConstantValueDialog, CreateFileDialog, CreateNotebookDialog, CreatePipelineDialog, Modal } from './components/Dialogs'
 import { ArtifactPreviewPanel } from './components/ArtifactPreview'
 import { ArtifactCounts } from './components/ArtifactCounts'
@@ -35,7 +35,15 @@ type FileNodeEditState = {
 }
 
 type NodeActionMenuState = {
+  nodeIds: string[]
+  x: number
+  y: number
+}
+
+type PortActionMenuState = {
   nodeId: string
+  portName: string
+  side: 'input' | 'output'
   x: number
   y: number
 }
@@ -65,6 +73,39 @@ type EditorSessionNoticeDetails = {
   ready?: boolean
 }
 
+type ArtifactMutationState = 'ready' | 'stale'
+
+type GraphMutationPlan = {
+  operations: GraphPatchOperation[]
+  followUpOperations?: GraphPatchOperation[]
+}
+
+type GraphHistoryEntry = {
+  undo: GraphMutationPlan
+  redo: GraphMutationPlan
+}
+
+type ClipboardNodeRecord = {
+  node: NodeRecord
+  layout: LayoutRecord
+  sourceText: string | null
+}
+
+type ClipboardGraph = {
+  nodes: ClipboardNodeRecord[]
+  edges: EdgeRecord[]
+}
+
+type NodeActionItem = {
+  key: string
+  label: string
+  href?: string
+  tone?: 'default' | 'danger'
+  disabled?: boolean
+  title?: string
+  onClick?: () => void
+}
+
 type ConfirmationState =
   | {
       kind: 'run-upstream'
@@ -74,6 +115,29 @@ type ConfirmationState =
     }
   | {
       kind: 'run-all'
+    }
+  | {
+      kind: 'node-outputs-state'
+      nodeIds: string[]
+      state: ArtifactMutationState
+      onlyCurrentState: ArtifactMutationState | 'pending' | null
+      title: string
+      message: string
+    }
+  | {
+      kind: 'artifact-state'
+      nodeId: string
+      artifactName: string
+      state: ArtifactMutationState
+      title: string
+      message: string
+    }
+  | {
+      kind: 'node-frozen'
+      nodeIds: string[]
+      frozen: boolean
+      title: string
+      message: string
     }
 
 type OptimisticGraphState = {
@@ -105,6 +169,38 @@ function normalizeNodeId(value: string): string {
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '_')
     .replace(/^_+|_+$/g, '')
+}
+
+function edgeIdForPorts(sourceNode: string, sourcePort: string, targetNode: string, targetPort: string): string {
+  return `${sourceNode}.${sourcePort}__${targetNode}.${targetPort}`
+}
+
+function copiedTitle(title: string): string {
+  return title.endsWith(' Copy') ? title : `${title} Copy`
+}
+
+function uniqueCopiedNodeId(baseNodeId: string, existingNodeIds: Set<string>): string {
+  const baseCopyId = normalizeNodeId(`${baseNodeId}_copy`) || 'node_copy'
+  if (!existingNodeIds.has(baseCopyId)) {
+    return baseCopyId
+  }
+  let index = 2
+  while (existingNodeIds.has(`${baseCopyId}_${index}`)) {
+    index += 1
+  }
+  return `${baseCopyId}_${index}`
+}
+
+function isEditableTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) {
+    return false
+  }
+  return target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName)
+}
+
+function prefixedNodeId(nodeIdPrefix: string | null | undefined, templateNodeId: string): string {
+  const normalizedPrefix = normalizeNodeId(nodeIdPrefix ?? '')
+  return normalizedPrefix ? `${normalizedPrefix}_${templateNodeId}` : templateNodeId
 }
 
 function artifactEndpoint(artifact: ArtifactRecord, action: 'download' | 'content'): string {
@@ -149,6 +245,10 @@ function runFailureMessage(response: Record<string, unknown>, fallback: string):
   return fallback
 }
 
+function isManagedRunFailure(response: Record<string, unknown>): boolean {
+  return response.status === 'failed' && typeof response.run_id === 'string'
+}
+
 function ExecutionLogPanel({
   title,
   log,
@@ -179,6 +279,10 @@ function isEditorOpenConflict(message: string): boolean {
   return message.includes('An editor is open for this notebook.')
 }
 
+function isFreezeConflict(message: string): boolean {
+  return message.includes('frozen notebook') && message.includes('Unfreeze')
+}
+
 function editorSessionDetails(details: Record<string, unknown>): EditorSessionNoticeDetails | null {
   if (typeof details.session_id !== 'string' || typeof details.session_url !== 'string') {
     return null
@@ -188,6 +292,95 @@ function editorSessionDetails(details: Record<string, unknown>): EditorSessionNo
     session_url: details.session_url,
     ready: typeof details.ready === 'boolean' ? details.ready : undefined,
   }
+}
+
+function artifactTargetForPort(snapshot: ProjectSnapshot, menu: PortActionMenuState): { nodeId: string; artifactName: string } | null {
+  if (menu.side === 'output') {
+    return { nodeId: menu.nodeId, artifactName: menu.portName }
+  }
+  const binding = inputBindingSource(snapshot, menu.nodeId, menu.portName)
+  if (!binding) {
+    return null
+  }
+  return { nodeId: binding.source_node, artifactName: binding.source_port }
+}
+
+function edgeIdsForPort(snapshot: ProjectSnapshot, menu: PortActionMenuState): string[] {
+  return snapshot.graph.edges
+    .filter((edge) => {
+      if (menu.side === 'output') {
+        return edge.source_node === menu.nodeId && edge.source_port === menu.portName
+      }
+      return edge.target_node === menu.nodeId && edge.target_port === menu.portName
+    })
+    .map((edge) => edge.id)
+}
+
+function downstreamNodeIds(snapshot: ProjectSnapshot, rootNodeIds: string[]): Set<string> {
+  const queue = [...rootNodeIds]
+  const visited = new Set(rootNodeIds)
+  const downstreamByNodeId = new Map<string, string[]>()
+  for (const edge of snapshot.graph.edges) {
+    const targets = downstreamByNodeId.get(edge.source_node) ?? []
+    targets.push(edge.target_node)
+    downstreamByNodeId.set(edge.source_node, targets)
+  }
+  while (queue.length) {
+    const nodeId = queue.shift() as string
+    for (const targetNodeId of downstreamByNodeId.get(nodeId) ?? []) {
+      if (visited.has(targetNodeId)) {
+        continue
+      }
+      visited.add(targetNodeId)
+      queue.push(targetNodeId)
+    }
+  }
+  return visited
+}
+
+function frozenNotebookBlockersForStaleRoots(snapshot: ProjectSnapshot, rootNodeIds: string[]): NodeRecord[] {
+  const affectedNodeIds = downstreamNodeIds(snapshot, rootNodeIds)
+  return snapshot.graph.nodes.filter((node) => node.kind === 'notebook' && Boolean(node.ui?.frozen) && affectedNodeIds.has(node.id))
+}
+
+function frozenNotebookBlockersForDelete(snapshot: ProjectSnapshot, nodeId: string): NodeRecord[] {
+  const blockers: NodeRecord[] = []
+  const seen = new Set<string>()
+  const node = snapshot.graph.nodes.find((entry) => entry.id === nodeId) ?? null
+  if (node?.kind === 'notebook' && node.ui?.frozen) {
+    blockers.push(node)
+    seen.add(node.id)
+  }
+  const staleRoots = Array.from(new Set(
+    snapshot.graph.edges
+      .filter((edge) => edge.source_node === nodeId)
+      .map((edge) => edge.target_node),
+  ))
+  for (const blocker of frozenNotebookBlockersForStaleRoots(snapshot, staleRoots)) {
+    if (seen.has(blocker.id)) {
+      continue
+    }
+    blockers.push(blocker)
+    seen.add(blocker.id)
+  }
+  return blockers
+}
+
+function frozenNotebookBlockersForRemovedEdges(snapshot: ProjectSnapshot, edgeIds: string[]): NodeRecord[] {
+  const staleRoots = Array.from(new Set(
+    snapshot.graph.edges
+      .filter((edge) => edgeIds.includes(edge.id))
+      .map((edge) => edge.target_node),
+  ))
+  return frozenNotebookBlockersForStaleRoots(snapshot, staleRoots)
+}
+
+function freezeBlockMessage(blockers: NodeRecord[]): string {
+  const labels = blockers.map((node) => `\`${node.title}\` (${node.id})`).join(', ')
+  if (blockers.length === 1) {
+    return `This change is blocked because it would affect the frozen notebook ${labels}. Unfreeze it first.`
+  }
+  return `This change is blocked because it would affect frozen notebooks ${labels}. Unfreeze them first.`
 }
 
 function cloneSnapshot(snapshot: ProjectSnapshot): ProjectSnapshot {
@@ -244,6 +437,72 @@ function mergeGraphIntoSnapshot(snapshot: SnapshotLike, graph: { meta: ProjectSn
     layout: graph.layout.map((entry) => ({ ...entry })),
   }
   return merged
+}
+
+function clampContextMenuPosition(position: { x: number; y: number }, estimatedSize: { width: number; height: number } = { width: 260, height: 320 }) {
+  const margin = 12
+  return {
+    x: Math.max(margin, Math.min(position.x, window.innerWidth - estimatedSize.width - margin)),
+    y: Math.max(margin, Math.min(position.y, window.innerHeight - estimatedSize.height - margin)),
+  }
+}
+
+function pipelineTemplateNodeRecords(
+  snapshot: ProjectSnapshot,
+  templateRef: string,
+  nodeIdPrefix?: string | null,
+): Array<{ nodeId: string; title: string }> {
+  const template = snapshot.templates.find((entry) => entry.ref === templateRef && entry.kind === 'pipeline')
+  return (template?.definition?.nodes ?? []).map((node) => ({
+    nodeId: prefixedNodeId(nodeIdPrefix, node.id),
+    title: nodeIdPrefix?.trim() ? `${nodeIdPrefix.trim()} ${node.title}` : node.title,
+  }))
+}
+
+function expandMutationPlan(plan: GraphMutationPlan): GraphPatchOperation[] {
+  return [...plan.operations, ...(plan.followUpOperations ?? [])]
+}
+
+function cloneNodeUi(node: NodeRecord): NonNullable<GraphPatchOperation & { type: 'add_notebook_node' }>['ui'] {
+  return {
+    hidden_inputs: [...(node.ui?.hidden_inputs ?? [])],
+    origin: node.ui?.origin ?? null,
+    frozen: Boolean(node.ui?.frozen),
+  }
+}
+
+function notebookAddOperationForNode(
+  node: NodeRecord,
+  layout: LayoutRecord,
+  sourceText: string | null,
+  nodeId: string,
+  title: string,
+): GraphPatchOperation {
+  return {
+    type: 'add_notebook_node',
+    node_id: nodeId,
+    title,
+    template_ref: sourceText === null ? node.template?.ref : undefined,
+    source_text: sourceText ?? undefined,
+    ui: cloneNodeUi(node),
+    x: layout.x,
+    y: layout.y,
+    w: layout.w,
+    h: layout.h,
+  }
+}
+
+function fileInputAddOperationForNode(node: NodeRecord, layout: LayoutRecord, nodeId: string, title: string): GraphPatchOperation {
+  return {
+    type: 'add_file_input_node',
+    node_id: nodeId,
+    title,
+    artifact_name: node.ui?.artifact_name ?? 'file',
+    x: layout.x,
+    y: layout.y,
+    w: layout.w,
+    h: layout.h,
+  }
 }
 
 function applyOptimisticGraphOperations(snapshot: ProjectSnapshot, operations: Array<Record<string, unknown>>): OptimisticGraphState | null {
@@ -304,6 +563,14 @@ function applyOptimisticGraphOperations(snapshot: ProjectSnapshot, operations: A
         node.ui = { ...(node.ui ?? {}), hidden_inputs: Array.isArray(operation.hidden_inputs) ? operation.hidden_inputs.map(String) : [] }
         changed = true
       }
+      continue
+    }
+    if (type === 'update_node_frozen') {
+      const node = next.graph.nodes.find((entry) => entry.id === String(operation.node_id))
+      if (node) {
+        node.ui = { ...(node.ui ?? {}), frozen: Boolean(operation.frozen) }
+        changed = true
+      }
     }
   }
 
@@ -324,19 +591,13 @@ function applyOptimisticGraphOperations(snapshot: ProjectSnapshot, operations: A
   }
 }
 
-function setSnapshotData(queryClient: ReturnType<typeof useQueryClient>, updater: (current: ProjectSnapshot) => ProjectSnapshot) {
-  queryClient.setQueryData(['snapshot'], (current: ProjectSnapshot | undefined) => {
-    if (!current) {
-      return current
-    }
-    return updater(current)
-  })
-  queryClient.setQueryData(['project-current'], (current: ProjectSnapshot | undefined) => {
-    if (!current) {
-      return current
-    }
-    return updater(current)
-  })
+function setSnapshotData(
+  queryClient: ReturnType<typeof useQueryClient>,
+  fallbackSnapshot: ProjectSnapshot,
+  updater: (current: ProjectSnapshot) => ProjectSnapshot,
+) {
+  queryClient.setQueryData(['snapshot'], (current: ProjectSnapshot | undefined) => updater(current ?? fallbackSnapshot))
+  queryClient.setQueryData(['project-current'], (current: ProjectSnapshot | undefined) => updater(current ?? fallbackSnapshot))
 }
 
 const SNAPSHOT_REFRESH_EVENTS = [
@@ -363,6 +624,22 @@ function validationIssuesForNode(snapshot: ProjectSnapshot, nodeId: string) {
 }
 
 function formatIssueDetails(details: Record<string, unknown>): string | null {
+  const removedEdges = details.removed_edges
+  if (Array.isArray(removedEdges) && removedEdges.length > 0) {
+    return removedEdges
+      .map((edge) => {
+        if (!edge || typeof edge !== 'object') {
+          return JSON.stringify(edge)
+        }
+        const record = edge as Record<string, unknown>
+        return [
+          `Removed edge ${record.id ?? '?'}`,
+          `from ${record.source_node ?? '?'}/${record.source_port ?? '?'}`,
+          `to ${record.target_node ?? '?'}/${record.target_port ?? '?'}`,
+        ].join('\n')
+      })
+      .join('\n\n')
+  }
   const entries = Object.entries(details)
   if (!entries.length) {
     return null
@@ -396,6 +673,8 @@ function App() {
   const queryClient = useQueryClient()
   const [clientNotices, setClientNotices] = useState<AppNotice[]>([])
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null)
+  const [selectedNodeIds, setSelectedNodeIds] = useState<string[]>([])
+  const [selectedEdgeIds, setSelectedEdgeIds] = useState<string[]>([])
   const [artifactNodeId, setArtifactNodeId] = useState<string | null>(null)
   const [artifactExplorerOpen, setArtifactExplorerOpen] = useState(false)
   const [artifactFilter, setArtifactFilter] = useState('')
@@ -403,17 +682,25 @@ function App() {
   const [showProjectInfo, setShowProjectInfo] = useState(false)
   const [showSettings, setShowSettings] = useState(false)
   const [templatesCollapsed, setTemplatesCollapsed] = useState(true)
+  const [showHiddenTemplates, setShowHiddenTemplates] = useState(false)
   const [paletteSearch, setPaletteSearch] = useState('')
   const [draggedPaletteEntry, setDraggedPaletteEntry] = useState<PaletteEntry | null>(null)
-  const [dragPointer, setDragPointer] = useState<{ x: number; y: number } | null>(null)
   const [pendingBlockCreation, setPendingBlockCreation] = useState<PendingBlockCreation | null>(null)
   const [pendingPipelineCreation, setPendingPipelineCreation] = useState<PendingPipelineCreation | null>(null)
   const [fileNodeEdit, setFileNodeEdit] = useState<FileNodeEditState | null>(null)
   const [nodeActionMenu, setNodeActionMenu] = useState<NodeActionMenuState | null>(null)
+  const [portActionMenu, setPortActionMenu] = useState<PortActionMenuState | null>(null)
   const [optimisticGraph, setOptimisticGraph] = useState<OptimisticGraphState | null>(null)
   const [inspectorOpen, setInspectorOpen] = useState(false)
   const [confirmationState, setConfirmationState] = useState<ConfirmationState | null>(null)
-  const [serverNowOffsetMs, setServerNowOffsetMs] = useState(0)
+  const [clipboardGraph, setClipboardGraph] = useState<ClipboardGraph | null>(null)
+  const [graphHistoryPast, setGraphHistoryPast] = useState<GraphHistoryEntry[]>([])
+  const [graphHistoryFuture, setGraphHistoryFuture] = useState<GraphHistoryEntry[]>([])
+  const [serverClock, setServerClock] = useState(() => ({
+    serverNowMs: Date.now(),
+    clientAnchorMs: Date.now(),
+  }))
+  const [pasteSequence, setPasteSequence] = useState(0)
   const [activeEditorNodeIds, setActiveEditorNodeIds] = useState<string[]>([])
   const [themeMode, setThemeMode] = useState<ThemeMode>(() => {
     const stored = window.localStorage.getItem('bulletjournal-theme')
@@ -424,6 +711,8 @@ function App() {
   })
   const eventSourceRef = useRef<EventSource | null>(null)
   const hadEventConnectionRef = useRef(false)
+  const nodeActionMenuRef = useRef<HTMLDivElement | null>(null)
+  const portActionMenuRef = useRef<HTMLDivElement | null>(null)
   const snapshotRefreshTimeoutRef = useRef<number | null>(null)
   const snapshotRefreshInFlightRef = useRef<Promise<void> | null>(null)
   const snapshotRefreshQueuedRef = useRef(false)
@@ -457,6 +746,22 @@ function App() {
   const serverSnapshot = snapshotQuery.data ?? snapshot
   const liveSnapshot = optimisticGraph?.snapshot ?? serverSnapshot
 
+  function applySelection(nodeIds: string[], edgeIds: string[], options: { openInspector?: boolean } = {}) {
+    setSelectedNodeIds(nodeIds)
+    setSelectedEdgeIds(edgeIds)
+    const singleNodeId = nodeIds.length === 1 && edgeIds.length === 0 ? nodeIds[0] : null
+    setSelectedNodeId(singleNodeId)
+    if (options.openInspector !== undefined) {
+      setInspectorOpen(options.openInspector && Boolean(singleNodeId))
+      return
+    }
+    setInspectorOpen(Boolean(singleNodeId))
+  }
+
+  function selectSingleNode(nodeId: string | null, options: { openInspector?: boolean } = {}) {
+    applySelection(nodeId ? [nodeId] : [], [], { openInspector: options.openInspector ?? Boolean(nodeId) })
+  }
+
   useEffect(() => {
     return () => {
       if (snapshotRefreshTimeoutRef.current !== null) {
@@ -477,6 +782,11 @@ function App() {
   }, [projectId])
 
   useEffect(() => {
+    setGraphHistoryPast([])
+    setGraphHistoryFuture([])
+  }, [projectId])
+
+  useEffect(() => {
     if (!liveSnapshot?.server_time) {
       return
     }
@@ -484,7 +794,10 @@ function App() {
     if (Number.isNaN(parsedServerTime)) {
       return
     }
-    setServerNowOffsetMs(parsedServerTime - Date.now())
+    setServerClock({
+      serverNowMs: parsedServerTime,
+      clientAnchorMs: Date.now(),
+    })
   }, [liveSnapshot?.server_time])
 
   function upsertClientNotice(notice: AppNotice) {
@@ -548,7 +861,7 @@ function App() {
         return current
       }
       if (current.clearSelection) {
-        setSelectedNodeId(null)
+        applySelection([], [], { openInspector: false })
       }
       if (current.clearArtifacts) {
         setArtifactNodeId(null)
@@ -575,27 +888,6 @@ function App() {
     media.addEventListener('change', applyTheme)
     return () => media.removeEventListener('change', applyTheme)
   }, [themeMode])
-
-  useEffect(() => {
-    if (!draggedPaletteEntry) {
-      setDragPointer(null)
-      return
-    }
-    function handleDragOver(event: DragEvent) {
-      setDragPointer({ x: event.clientX, y: event.clientY })
-    }
-    function clearDragState() {
-      setDragPointer(null)
-    }
-    window.addEventListener('dragover', handleDragOver)
-    window.addEventListener('drop', clearDragState)
-    window.addEventListener('dragend', clearDragState)
-    return () => {
-      window.removeEventListener('dragover', handleDragOver)
-      window.removeEventListener('drop', clearDragState)
-      window.removeEventListener('dragend', clearDragState)
-    }
-  }, [draggedPaletteEntry])
 
   useEffect(() => {
     let cancelled = false
@@ -684,6 +976,353 @@ function App() {
     [liveSnapshot, selectedNodeId],
   )
 
+  const nodeActionMenuNode = useMemo(
+    () => {
+      if (!liveSnapshot || !nodeActionMenu?.nodeIds.length) {
+        return []
+      }
+      const nodeIdSet = new Set(nodeActionMenu.nodeIds)
+      return liveSnapshot.graph.nodes.filter((node) => nodeIdSet.has(node.id))
+    },
+    [liveSnapshot, nodeActionMenu],
+  )
+
+  const primaryNodeActionMenuNode = nodeActionMenuNode[0] ?? null
+
+  const portActionMenuNode = useMemo(
+    () => liveSnapshot?.graph.nodes.find((node) => node.id === portActionMenu?.nodeId) ?? null,
+    [liveSnapshot, portActionMenu],
+  )
+
+  const portActionArtifact = useMemo(
+    () => (liveSnapshot && portActionMenu ? artifactTargetForPort(liveSnapshot, portActionMenu) : null),
+    [liveSnapshot, portActionMenu],
+  )
+
+  const portActionHead = useMemo(
+    () => (liveSnapshot && portActionArtifact
+      ? artifactFor(liveSnapshot, portActionArtifact.nodeId, portActionArtifact.artifactName)
+      : null),
+    [liveSnapshot, portActionArtifact],
+  )
+
+  const portActionEdgeIds = useMemo(
+    () => (liveSnapshot && portActionMenu ? edgeIdsForPort(liveSnapshot, portActionMenu) : []),
+    [liveSnapshot, portActionMenu],
+  )
+
+  const portActionMutationFrozenBlockers = useMemo(
+    () => (liveSnapshot && portActionArtifact
+      ? frozenNotebookBlockersForStaleRoots(liveSnapshot, [portActionArtifact.nodeId])
+      : []),
+    [liveSnapshot, portActionArtifact],
+  )
+
+  const portDisconnectFrozenBlockers = useMemo(
+    () => (liveSnapshot && portActionEdgeIds.length
+      ? frozenNotebookBlockersForRemovedEdges(liveSnapshot, portActionEdgeIds)
+      : []),
+    [liveSnapshot, portActionEdgeIds],
+  )
+
+  const portActionMutationBlockedReason = portActionMutationFrozenBlockers.length
+    ? freezeBlockMessage(portActionMutationFrozenBlockers)
+    : undefined
+
+  const portDisconnectBlockedReason = portDisconnectFrozenBlockers.length
+    ? freezeBlockMessage(portDisconnectFrozenBlockers)
+    : undefined
+
+  function nodeInputsAreReady(node: NodeRecord): boolean {
+    if (!liveSnapshot || node.kind !== 'notebook') {
+      return true
+    }
+    return (node.interface?.inputs ?? []).every((port) => inputState(liveSnapshot, node.id, port) === 'ready')
+  }
+
+  async function handleSetNodeOutputsStateForNodes(
+    nodeIds: string[],
+    state: ArtifactMutationState,
+    onlyCurrentState: ArtifactMutationState | 'pending' | null = null,
+  ) {
+    if (!projectId || !nodeIds.length) {
+      return
+    }
+    try {
+      await Promise.all(nodeIds.map((nodeId) => setNodeOutputsState(nodeId, state, onlyCurrentState)))
+      await refreshSnapshot()
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Node output state update failed.'
+      reportClientError(
+        `node-output-state:${nodeIds.join(',')}:${state}:${onlyCurrentState ?? 'all'}`,
+        'node_output_state_update_failed',
+        message,
+        { nodeId: nodeIds.length === 1 ? nodeIds[0] : null, details: { node_ids: nodeIds } },
+      )
+    }
+  }
+
+  async function handleSetNodesFrozen(nodeIds: string[], frozen: boolean) {
+    if (!nodeIds.length) {
+      return
+    }
+    const redo = {
+      operations: nodeIds.map((nodeId) => ({ type: 'update_node_frozen', node_id: nodeId, frozen } satisfies GraphPatchOperation)),
+    }
+    await mutateGraph(redo.operations, { history: liveSnapshot ? simpleHistoryEntryForPlan(liveSnapshot, redo) : null })
+    setNodeActionMenu(null)
+  }
+
+  function requestSetNodesFrozen(nodeIds: string[], frozen: boolean) {
+    if (!nodeIds.length) {
+      return
+    }
+    if (frozen) {
+      void handleSetNodesFrozen(nodeIds, true)
+      return
+    }
+    setConfirmationState({
+      kind: 'node-frozen',
+      nodeIds,
+      frozen: false,
+      title: nodeIds.length === 1 ? 'Unfreeze notebook?' : 'Unfreeze selected notebooks?',
+      message: nodeIds.length === 1
+        ? 'This will unfreeze the notebook and any frozen descendants downstream of it.'
+        : `This will unfreeze ${nodeIds.length} selected notebooks and any frozen descendants downstream of them.`,
+    })
+  }
+
+  async function handleDeleteNodesAction(nodeIds: string[]) {
+    if (!projectId || !liveSnapshot || !nodeIds.length) {
+      return
+    }
+    const nodes = nodeIds
+      .map((nodeId) => liveSnapshot.graph.nodes.find((entry) => entry.id === nodeId) ?? null)
+      .filter((node): node is NodeRecord => node !== null)
+    if (!nodes.length) {
+      return
+    }
+    const label = nodes.length === 1
+      ? `block "${nodes[0].title}"`
+      : `${nodes.length} selected blocks`
+    if (!window.confirm(`Create a checkpoint and delete ${label}?`)) {
+      return
+    }
+    await createCheckpoint()
+    await handleNodesDelete(nodes.map((node) => ({ id: node.id } as Node)))
+    await refreshSnapshot()
+    setNodeActionMenu(null)
+  }
+
+  function nodeActionsForNode(node: NodeRecord, options: { dismissMenu?: () => void } = {}): NodeActionItem[] {
+    const dismissMenu = options.dismissMenu ?? (() => undefined)
+    const freezeBlockedOutputMutations = liveSnapshot ? frozenNotebookBlockersForStaleRoots(liveSnapshot, [node.id]) : []
+    const deleteFrozenBlockers = liveSnapshot ? frozenNotebookBlockersForDelete(liveSnapshot, node.id) : []
+    const outputMutationBlockedReason = freezeBlockedOutputMutations.length ? freezeBlockMessage(freezeBlockedOutputMutations) : undefined
+    const deleteBlockedReason = deleteFrozenBlockers.length ? freezeBlockMessage(deleteFrozenBlockers) : undefined
+    const artifactHeads = liveSnapshot
+      ? [...(node.interface?.outputs ?? []), ...(node.interface?.assets ?? [])]
+          .map((port) => artifactFor(liveSnapshot, node.id, port.name))
+          .filter((artifact): artifact is ArtifactRecord => artifact !== undefined && artifact.current_version_id !== null)
+      : []
+    const canMarkOutputsStale = artifactHeads.some((artifact) => artifact.state !== 'stale')
+    const canMarkOutputsReady = artifactHeads.some((artifact) => artifact.state === 'stale') && nodeInputsAreReady(node)
+    const actions: NodeActionItem[] = []
+
+    if (node.kind === 'file_input') {
+      actions.push({
+        key: 'edit-file-input',
+        label: 'Edit block',
+        onClick: () => {
+          dismissMenu()
+          openFileNodeEdit(node.id)
+        },
+      })
+    }
+
+    if (node.kind === 'notebook') {
+      actions.push({
+        key: 'download-notebook',
+        label: 'Download notebook',
+        href: notebookDownloadUrl(node.id),
+        onClick: () => dismissMenu(),
+      })
+    }
+
+    actions.push(
+      {
+        key: 'mark-outputs-stale',
+        label: 'Mark all outputs stale',
+        disabled: !canMarkOutputsStale || Boolean(outputMutationBlockedReason),
+        title: outputMutationBlockedReason,
+        onClick: () => {
+          dismissMenu()
+          void handleSetNodeOutputsStateAction(node.id, 'stale')
+        },
+      },
+      {
+        key: 'mark-stale-outputs-ready',
+        label: 'Mark stale outputs ready',
+        disabled: !canMarkOutputsReady || Boolean(outputMutationBlockedReason),
+        title: outputMutationBlockedReason,
+        onClick: () => {
+          dismissMenu()
+          setConfirmationState({
+            kind: 'node-outputs-state',
+            nodeIds: [node.id],
+            state: 'ready',
+            onlyCurrentState: 'stale',
+            title: 'Mark stale outputs ready?',
+            message: 'This bypasses consistency checks and marks every stale output on this block as ready.',
+          })
+        },
+      },
+    )
+
+    if (node.kind === 'notebook') {
+      actions.push({
+        key: 'toggle-frozen',
+        label: node.ui?.frozen ? 'Unfreeze notebook' : 'Freeze notebook',
+        onClick: () => {
+          dismissMenu()
+          requestSetNodesFrozen([node.id], !node.ui?.frozen)
+        },
+      })
+    }
+
+    actions.push({
+      key: 'delete-node',
+      label: 'Delete block',
+      tone: 'danger',
+      disabled: Boolean(deleteBlockedReason),
+      title: deleteBlockedReason,
+      onClick: () => {
+        dismissMenu()
+        void handleDeleteNodeAction(node.id)
+      },
+    })
+
+    return actions
+  }
+
+  function nodeActionsForMenu(nodeIds: string[], options: { dismissMenu?: () => void } = {}): NodeActionItem[] {
+    const dismissMenu = options.dismissMenu ?? (() => undefined)
+    const menuNodes = nodeIds
+      .map((nodeId) => liveSnapshot?.graph.nodes.find((node) => node.id === nodeId) ?? null)
+      .filter((node): node is NodeRecord => node !== null)
+    if (menuNodes.length === 1) {
+      return nodeActionsForNode(menuNodes[0], options)
+    }
+    if (!menuNodes.length) {
+      return []
+    }
+
+    const notebookNodes = menuNodes.filter((node) => node.kind === 'notebook')
+    const affectedOutputNodeIds = menuNodes.filter((node) => {
+      if (!liveSnapshot) {
+        return false
+      }
+      return [...(node.interface?.outputs ?? []), ...(node.interface?.assets ?? [])]
+        .some((port) => artifactFor(liveSnapshot, node.id, port.name)?.current_version_id !== null)
+    }).map((node) => node.id)
+    const staleMutationNodes = menuNodes.filter((node) => {
+      if (!liveSnapshot) {
+        return false
+      }
+      return [...(node.interface?.outputs ?? []), ...(node.interface?.assets ?? [])]
+        .some((port) => artifactFor(liveSnapshot, node.id, port.name)?.state !== 'stale')
+    })
+    const readyMutationNodes = menuNodes.filter((node) => {
+      if (!liveSnapshot) {
+        return false
+      }
+      const hasStaleOutputs = [...(node.interface?.outputs ?? []), ...(node.interface?.assets ?? [])]
+        .some((port) => artifactFor(liveSnapshot, node.id, port.name)?.state === 'stale')
+      return hasStaleOutputs && nodeInputsAreReady(node)
+    })
+    const staleEligibleNodeIds = staleMutationNodes.map((node) => node.id)
+    const readyEligibleNodeIds = readyMutationNodes.map((node) => node.id)
+    const outputMutationFrozenBlockers = liveSnapshot
+      ? Array.from(new Map(
+          staleMutationNodes.flatMap((node) => frozenNotebookBlockersForStaleRoots(liveSnapshot, [node.id]).map((blocker) => [blocker.id, blocker] as const)),
+        ).values())
+      : []
+    const readyMutationFrozenBlockers = liveSnapshot
+      ? Array.from(new Map(
+          readyMutationNodes.flatMap((node) => frozenNotebookBlockersForStaleRoots(liveSnapshot, [node.id]).map((blocker) => [blocker.id, blocker] as const)),
+        ).values())
+      : []
+    const deleteFrozenBlockers = liveSnapshot
+      ? Array.from(new Map(
+          menuNodes.flatMap((node) => frozenNotebookBlockersForDelete(liveSnapshot, node.id).map((blocker) => [blocker.id, blocker] as const)),
+        ).values())
+      : []
+    const freezableNodeIds = notebookNodes.filter((node) => !node.ui?.frozen).map((node) => node.id)
+    const unfreezableNodeIds = notebookNodes.filter((node) => node.ui?.frozen).map((node) => node.id)
+    const outputMutationBlockedReason = outputMutationFrozenBlockers.length ? freezeBlockMessage(outputMutationFrozenBlockers) : undefined
+    const readyMutationBlockedReason = readyMutationFrozenBlockers.length ? freezeBlockMessage(readyMutationFrozenBlockers) : undefined
+    const deleteBlockedReason = deleteFrozenBlockers.length ? freezeBlockMessage(deleteFrozenBlockers) : undefined
+
+    return [
+      {
+        key: 'mark-selected-outputs-stale',
+        label: 'Mark selected outputs stale',
+        disabled: staleEligibleNodeIds.length === 0 || affectedOutputNodeIds.length === 0 || Boolean(outputMutationBlockedReason),
+        title: outputMutationBlockedReason,
+        onClick: () => {
+          dismissMenu()
+          void handleSetNodeOutputsStateForNodes(staleEligibleNodeIds, 'stale')
+        },
+      },
+      {
+        key: 'mark-selected-stale-outputs-ready',
+        label: 'Mark selected stale outputs ready',
+        disabled: readyEligibleNodeIds.length === 0 || Boolean(readyMutationBlockedReason),
+        title: readyMutationBlockedReason,
+        onClick: () => {
+          dismissMenu()
+          setConfirmationState({
+            kind: 'node-outputs-state',
+            nodeIds: readyEligibleNodeIds,
+            state: 'ready',
+            onlyCurrentState: 'stale',
+            title: 'Mark selected stale outputs ready?',
+            message: `This bypasses consistency checks and marks stale outputs as ready on ${readyEligibleNodeIds.length} selected block${readyEligibleNodeIds.length === 1 ? '' : 's'}.`,
+          })
+        },
+      },
+      {
+        key: 'freeze-selected-notebooks',
+        label: 'Freeze selected notebooks',
+        disabled: freezableNodeIds.length === 0,
+        onClick: () => {
+          dismissMenu()
+          void handleSetNodesFrozen(freezableNodeIds, true)
+        },
+      },
+      {
+        key: 'unfreeze-selected-notebooks',
+        label: 'Unfreeze selected notebooks',
+        disabled: unfreezableNodeIds.length === 0,
+        onClick: () => {
+          dismissMenu()
+          requestSetNodesFrozen(unfreezableNodeIds, false)
+        },
+      },
+      {
+        key: 'delete-selected-nodes',
+        label: 'Delete selected blocks',
+        tone: 'danger',
+        disabled: Boolean(deleteBlockedReason),
+        title: deleteBlockedReason,
+        onClick: () => {
+          dismissMenu()
+          void handleDeleteNodesAction(menuNodes.map((node) => node.id))
+        },
+      },
+    ]
+  }
+
   useEffect(() => {
     if (!projectId || !selectedNode || selectedNode.execution_meta?.status !== 'running') {
       return
@@ -698,12 +1337,29 @@ function App() {
     if (!nodeActionMenu) {
       return
     }
-    function handlePointerDown() {
+    function handlePointerDown(event: PointerEvent) {
+      if (nodeActionMenuRef.current?.contains(event.target as globalThis.Node)) {
+        return
+      }
       setNodeActionMenu(null)
     }
     window.addEventListener('pointerdown', handlePointerDown)
     return () => window.removeEventListener('pointerdown', handlePointerDown)
   }, [nodeActionMenu])
+
+  useEffect(() => {
+    if (!portActionMenu) {
+      return
+    }
+    function handlePointerDown(event: PointerEvent) {
+      if (portActionMenuRef.current?.contains(event.target as globalThis.Node)) {
+        return
+      }
+      setPortActionMenu(null)
+    }
+    window.addEventListener('pointerdown', handlePointerDown)
+    return () => window.removeEventListener('pointerdown', handlePointerDown)
+  }, [portActionMenu])
 
   useEffect(() => {
     if (!projectId) {
@@ -818,7 +1474,11 @@ function App() {
       },
     ]
     const templateEntries = (liveSnapshot?.templates ?? [])
-      .filter((template) => template.kind === 'notebook' && template.ref !== 'builtin/value_input' && !template.hidden)
+      .filter(
+        (template) => template.kind === 'notebook'
+          && template.ref !== 'builtin/value_input'
+          && (showHiddenTemplates || !template.hidden),
+      )
       .map<PaletteEntry>((template) => ({
         key: `template:${template.ref}`,
         title: template.title,
@@ -841,7 +1501,186 @@ function App() {
       return allEntries
     }
     return allEntries.filter((entry) => `${entry.title} ${entry.description}`.toLowerCase().includes(needle))
-  }, [liveSnapshot, paletteSearch])
+  }, [liveSnapshot, paletteSearch, showHiddenTemplates])
+
+  function notebookNeedsInlineSource(node: NodeRecord): boolean {
+    return node.kind === 'notebook' && !(node.template?.ref && node.template_status === 'template')
+  }
+
+  async function notebookSourceByNodeIds(nodeIds: string[]): Promise<Map<string, string>> {
+    if (!liveSnapshot) {
+      return new Map()
+    }
+    const notebookNodes = nodeIds
+      .map((nodeId) => liveSnapshot.graph.nodes.find((node) => node.id === nodeId) ?? null)
+      .filter((node): node is NodeRecord => node !== null && notebookNeedsInlineSource(node))
+    const uniqueNodeIds = Array.from(new Set(notebookNodes.map((node) => node.id)))
+    const entries = await Promise.all(
+      uniqueNodeIds.map(async (nodeId) => [nodeId, await downloadNotebookSource(nodeId)] as const),
+    )
+    return new Map(entries)
+  }
+
+  function simpleHistoryEntryForPlan(snapshotData: ProjectSnapshot, redo: GraphMutationPlan): GraphHistoryEntry | null {
+    const undoOperations: GraphPatchOperation[] = []
+    for (const operation of [...expandMutationPlan(redo)].reverse()) {
+      switch (operation.type) {
+        case 'add_notebook_node':
+        case 'add_file_input_node':
+          undoOperations.push({ type: 'delete_node', node_id: operation.node_id })
+          break
+        case 'add_edge':
+          undoOperations.push({
+            type: 'remove_edge',
+            edge_id: edgeIdForPorts(
+              operation.source_node,
+              operation.source_port,
+              operation.target_node,
+              operation.target_port,
+            ),
+          })
+          break
+        case 'remove_edge': {
+          const edge = snapshotData.graph.edges.find((entry) => entry.id === operation.edge_id)
+          if (!edge) {
+            return null
+          }
+          undoOperations.push({
+            type: 'add_edge',
+            source_node: edge.source_node,
+            source_port: edge.source_port,
+            target_node: edge.target_node,
+            target_port: edge.target_port,
+          })
+          break
+        }
+        case 'update_node_layout': {
+          const layout = snapshotData.graph.layout.find((entry) => entry.node_id === operation.node_id)
+          if (!layout) {
+            return null
+          }
+          undoOperations.push({
+            type: 'update_node_layout',
+            node_id: operation.node_id,
+            x: layout.x,
+            y: layout.y,
+            w: layout.w,
+            h: layout.h,
+          })
+          break
+        }
+        case 'update_node_title': {
+          const node = snapshotData.graph.nodes.find((entry) => entry.id === operation.node_id)
+          if (!node) {
+            return null
+          }
+          undoOperations.push({ type: 'update_node_title', node_id: operation.node_id, title: node.title })
+          break
+        }
+        case 'update_node_hidden_inputs': {
+          const node = snapshotData.graph.nodes.find((entry) => entry.id === operation.node_id)
+          if (!node) {
+            return null
+          }
+          undoOperations.push({
+            type: 'update_node_hidden_inputs',
+            node_id: operation.node_id,
+            hidden_inputs: [...(node.ui?.hidden_inputs ?? [])],
+          })
+          break
+        }
+        case 'update_node_frozen': {
+          const node = snapshotData.graph.nodes.find((entry) => entry.id === operation.node_id)
+          if (!node) {
+            return null
+          }
+          undoOperations.push({
+            type: 'update_node_frozen',
+            node_id: operation.node_id,
+            frozen: Boolean(node.ui?.frozen),
+          })
+          break
+        }
+        default:
+          return null
+      }
+    }
+    return {
+      undo: { operations: undoOperations },
+      redo,
+    }
+  }
+
+  async function deleteHistoryEntry(nodeIds: string[]): Promise<GraphHistoryEntry | null> {
+    if (!liveSnapshot || !nodeIds.length) {
+      return null
+    }
+    const deletedNodeIdSet = new Set(nodeIds)
+    const nodes = nodeIds
+      .map((nodeId) => liveSnapshot.graph.nodes.find((node) => node.id === nodeId) ?? null)
+      .filter((node): node is NodeRecord => node !== null)
+    if (nodes.length !== nodeIds.length) {
+      return null
+    }
+    const layouts = nodeIds
+      .map((nodeId) => liveSnapshot.graph.layout.find((entry) => entry.node_id === nodeId) ?? null)
+      .filter((entry): entry is LayoutRecord => entry !== null)
+    if (layouts.length !== nodeIds.length) {
+      return null
+    }
+    const sourceByNodeId = await notebookSourceByNodeIds(nodeIds)
+    const layoutByNodeId = new Map(layouts.map((entry) => [entry.node_id, entry]))
+    const undoNodeOperations: GraphPatchOperation[] = nodes.map((node) => {
+      const layout = layoutByNodeId.get(node.id) as LayoutRecord
+      if (node.kind === 'notebook') {
+        return notebookAddOperationForNode(node, layout, sourceByNodeId.get(node.id) ?? null, node.id, node.title)
+      }
+      return fileInputAddOperationForNode(node, layout, node.id, node.title)
+    })
+    const restoredEdges = liveSnapshot.graph.edges.filter(
+      (edge) => deletedNodeIdSet.has(edge.source_node) || deletedNodeIdSet.has(edge.target_node),
+    )
+    const undoEdgeOperations: GraphPatchOperation[] = restoredEdges.map((edge) => ({
+      type: 'add_edge',
+      source_node: edge.source_node,
+      source_port: edge.source_port,
+      target_node: edge.target_node,
+      target_port: edge.target_port,
+    }))
+    return {
+      undo: { operations: [...undoNodeOperations, ...undoEdgeOperations] },
+      redo: { operations: nodeIds.map((nodeId) => ({ type: 'delete_node', node_id: nodeId })) },
+    }
+  }
+
+  async function clipboardGraphForSelection(nodeIds: string[]): Promise<ClipboardGraph | null> {
+    if (!liveSnapshot || !nodeIds.length) {
+      return null
+    }
+    const selectedNodeIdSet = new Set(nodeIds)
+    const sourceByNodeId = await notebookSourceByNodeIds(nodeIds)
+    const nodes = nodeIds
+      .map((nodeId) => {
+        const node = liveSnapshot.graph.nodes.find((entry) => entry.id === nodeId)
+        const layout = liveSnapshot.graph.layout.find((entry) => entry.node_id === nodeId)
+        if (!node || !layout) {
+          return null
+        }
+        return {
+          node,
+          layout,
+          sourceText: sourceByNodeId.get(nodeId) ?? null,
+        } satisfies ClipboardNodeRecord
+      })
+      .filter((entry): entry is ClipboardNodeRecord => entry !== null)
+    if (nodes.length !== nodeIds.length) {
+      return null
+    }
+    const edges = liveSnapshot.graph.edges.filter(
+      (edge) => selectedNodeIdSet.has(edge.source_node) && selectedNodeIdSet.has(edge.target_node),
+    )
+    return { nodes, edges }
+  }
 
   function queueSnapshotRefresh(delayMs: number) {
     if (snapshotRefreshTimeoutRef.current !== null) {
@@ -920,27 +1759,113 @@ function App() {
     await refreshSnapshotNow()
   }
 
-  async function mutateGraph(operations: Array<Record<string, unknown>>) {
+  async function mutateGraph(
+    operations: GraphPatchOperation[],
+    options: { history?: GraphHistoryEntry | null; onSuccess?: () => void } = {},
+  ): Promise<boolean> {
     if (!liveSnapshot || !projectId) {
-      return
+      return false
     }
     const rollbackSnapshot = liveSnapshot
     try {
-      const optimistic = applyOptimisticGraphOperations(liveSnapshot, operations)
+      await Promise.all([
+        queryClient.cancelQueries({ queryKey: ['snapshot'], exact: true }),
+        queryClient.cancelQueries({ queryKey: ['project-current'], exact: true }),
+      ])
+      const optimistic = applyOptimisticGraphOperations(liveSnapshot, operations as Array<Record<string, unknown>>)
       if (optimistic) {
         setOptimisticGraph(optimistic)
       }
-      const response = await patchGraph(liveSnapshot.graph.meta.graph_version, operations as never)
-      setSnapshotData(queryClient, (current) => mergeGraphIntoSnapshot(current, response))
+      const response = await patchGraph(liveSnapshot.graph.meta.graph_version, operations)
+      setSnapshotData(queryClient, rollbackSnapshot, (current) => mergeGraphIntoSnapshot(current, response))
+      if (options.history) {
+        setGraphHistoryPast((current) => [...current, options.history as GraphHistoryEntry])
+        setGraphHistoryFuture([])
+      }
+      options.onSuccess?.()
       dismissClientNotice('graph-update')
       await refreshSnapshot()
+      return true
     } catch (err) {
       setOptimisticGraph(null)
-      setSnapshotData(queryClient, () => rollbackSnapshot)
+      setSnapshotData(queryClient, rollbackSnapshot, () => rollbackSnapshot)
       const message = err instanceof Error ? err.message : 'Graph update failed.'
-      reportClientError('graph-update', 'graph_update_failed', message)
+      if (isFreezeConflict(message)) {
+        reportClientWarning('graph-update-frozen', 'frozen_notebook', message)
+      } else {
+        reportClientError('graph-update', 'graph_update_failed', message)
+      }
       await refreshSnapshot()
+      return false
     }
+  }
+
+  async function stopEditorsForNodes(nodeIds: string[]) {
+    if (!projectId || !nodeIds.length) {
+      return
+    }
+    const targetNodeIds = new Set(nodeIds)
+    try {
+      const sessions = await listSessions()
+      const matching = sessions.filter((session) => targetNodeIds.has(session.node_id))
+      await Promise.all(matching.map((session) => stopSession(session.session_id)))
+      setActiveEditorNodeIds((current) => current.filter((nodeId) => !targetNodeIds.has(nodeId)))
+    } catch {
+      // Deletion still stops editors on the backend as a fallback.
+    }
+  }
+
+  async function handleSetArtifactStateAction(nodeId: string, artifactName: string, state: ArtifactMutationState) {
+    if (!projectId) {
+      return
+    }
+    try {
+      await setArtifactState(nodeId, artifactName, state)
+      await refreshSnapshot()
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Artifact state update failed.'
+      reportClientError(
+        `artifact-state:${nodeId}:${artifactName}:${state}`,
+        'artifact_state_update_failed',
+        message,
+        { nodeId },
+      )
+    }
+  }
+
+  async function handleSetNodeOutputsStateAction(
+    nodeId: string,
+    state: ArtifactMutationState,
+    onlyCurrentState: ArtifactMutationState | 'pending' | null = null,
+  ) {
+    if (!projectId) {
+      return
+    }
+    try {
+      await setNodeOutputsState(nodeId, state, onlyCurrentState)
+      await refreshSnapshot()
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Node output state update failed.'
+      reportClientError(
+        `node-output-state:${nodeId}:${state}:${onlyCurrentState ?? 'all'}`,
+        'node_output_state_update_failed',
+        message,
+        { nodeId },
+      )
+    }
+  }
+
+  async function handleDisconnectPort(menu: PortActionMenuState) {
+    if (!liveSnapshot) {
+      return
+    }
+    const edgeIds = edgeIdsForPort(liveSnapshot, menu)
+    if (!edgeIds.length) {
+      return
+    }
+    const redo = { operations: edgeIds.map((edgeId) => ({ type: 'remove_edge', edge_id: edgeId } satisfies GraphPatchOperation)) }
+    await mutateGraph(redo.operations, { history: liveSnapshot ? simpleHistoryEntryForPlan(liveSnapshot, redo) : null })
+    setPortActionMenu(null)
   }
 
   async function handleCreateNode(
@@ -952,43 +1877,67 @@ function App() {
     const x = snapToGrid((placement?.x ?? baseX) - NEW_NODE_WIDTH / 2)
     const y = snapToGrid((placement?.y ?? baseY) - NEW_NODE_HEIGHT / 2)
     if (payload.type === 'file_input') {
-      await mutateGraph([
-        { type: 'add_file_input_node', node_id: payload.nodeId, title: payload.title, x, y, w: NEW_NODE_WIDTH, h: NEW_NODE_HEIGHT },
-      ])
+      const redo = {
+        operations: [
+          { type: 'add_file_input_node', node_id: payload.nodeId, title: payload.title, x, y, w: NEW_NODE_WIDTH, h: NEW_NODE_HEIGHT } satisfies GraphPatchOperation,
+        ],
+      }
+      await mutateGraph(redo.operations, { history: liveSnapshot ? simpleHistoryEntryForPlan(liveSnapshot, redo) : null })
       return
     }
     if (payload.type === 'template') {
-      await mutateGraph([
-        {
-          type: 'add_notebook_node',
-          node_id: payload.nodeId,
-          title: payload.title,
-          template_ref: payload.templateRef,
-          source_text: payload.sourceText,
-          ui: payload.origin ? { origin: payload.origin } : undefined,
-          x,
-          y,
-          w: NEW_NODE_WIDTH,
-          h: NEW_NODE_HEIGHT,
-        },
-      ])
+      const redo = {
+        operations: [
+          {
+            type: 'add_notebook_node',
+            node_id: payload.nodeId,
+            title: payload.title,
+            template_ref: payload.templateRef,
+            source_text: payload.sourceText,
+            ui: payload.origin ? { origin: payload.origin } : undefined,
+            x,
+            y,
+            w: NEW_NODE_WIDTH,
+            h: NEW_NODE_HEIGHT,
+          } satisfies GraphPatchOperation,
+        ],
+      }
+      await mutateGraph(redo.operations, { history: liveSnapshot ? simpleHistoryEntryForPlan(liveSnapshot, redo) : null })
       return
     }
-    await mutateGraph([
-      { type: 'add_notebook_node', node_id: payload.nodeId, title: payload.title, x, y, w: NEW_NODE_WIDTH, h: NEW_NODE_HEIGHT },
-    ])
+    const redo = {
+      operations: [
+        { type: 'add_notebook_node', node_id: payload.nodeId, title: payload.title, x, y, w: NEW_NODE_WIDTH, h: NEW_NODE_HEIGHT } satisfies GraphPatchOperation,
+      ],
+    }
+    await mutateGraph(redo.operations, { history: liveSnapshot ? simpleHistoryEntryForPlan(liveSnapshot, redo) : null })
   }
 
   async function handleCreatePipelineTemplate(templateRef: string, placement: { x: number; y: number }, nodeIdPrefix?: string | null) {
-    await mutateGraph([
-      {
-        type: 'add_pipeline_template',
-        template_ref: templateRef,
-        x: snapToGrid(placement.x),
-        y: snapToGrid(placement.y),
-        node_id_prefix: nodeIdPrefix ?? null,
-      },
-    ])
+    if (!liveSnapshot) {
+      return
+    }
+    const createdNodes = pipelineTemplateNodeRecords(liveSnapshot, templateRef, nodeIdPrefix)
+    const redo: GraphMutationPlan = {
+      operations: [
+        {
+          type: 'add_pipeline_template',
+          template_ref: templateRef,
+          x: snapToGrid(placement.x),
+          y: snapToGrid(placement.y),
+          node_id_prefix: nodeIdPrefix ?? null,
+        },
+      ],
+    }
+    const history: GraphHistoryEntry | null = createdNodes.length
+      ? {
+          undo: {
+            operations: createdNodes.map((node) => ({ type: 'delete_node', node_id: node.nodeId })),
+          },
+          redo,
+        }
+      : null
+    await mutateGraph(redo.operations, { history })
   }
 
   function pipelineTemplateByEntry(entry: PaletteEntry): TemplateRecord | null {
@@ -1151,32 +2100,32 @@ function App() {
     }
     const { x, y } = pendingBlockCreation
     setPendingBlockCreation(null)
-    await mutateGraph([
-      {
-        type: 'add_file_input_node',
-        node_id: payload.nodeId,
-        title: payload.title,
-        artifact_name: payload.artifactName.trim() || 'file',
-        x: snapToGrid(x - NEW_NODE_WIDTH / 2),
-        y: snapToGrid(y - NEW_NODE_HEIGHT / 2),
-        w: NEW_NODE_WIDTH,
-        h: NEW_NODE_HEIGHT,
-      },
-    ])
+    const redo = {
+      operations: [
+        {
+          type: 'add_file_input_node',
+          node_id: payload.nodeId,
+          title: payload.title,
+          artifact_name: payload.artifactName.trim() || 'file',
+          x: snapToGrid(x - NEW_NODE_WIDTH / 2),
+          y: snapToGrid(y - NEW_NODE_HEIGHT / 2),
+          w: NEW_NODE_WIDTH,
+          h: NEW_NODE_HEIGHT,
+        } satisfies GraphPatchOperation,
+      ],
+    }
+    await mutateGraph(redo.operations, { history: liveSnapshot ? simpleHistoryEntryForPlan(liveSnapshot, redo) : null })
     if (payload.file) {
-      await uploadFile(payload.nodeId, payload.file)
-      await refreshSnapshot()
+      await handleUploadFile(payload.nodeId, payload.file)
     }
   }
 
   function handlePaletteDragStart(entry: PaletteEntry, position?: { x: number; y: number }) {
     setDraggedPaletteEntry(entry)
-    setDragPointer(position ?? null)
   }
 
   function handlePaletteDragEnd() {
     setDraggedPaletteEntry(null)
-    setDragPointer(null)
   }
 
   function handleBlockDrop(x: number, y: number) {
@@ -1185,7 +2134,6 @@ function App() {
     }
     void openCreateBlockDialog(draggedPaletteEntry, { x, y })
     setDraggedPaletteEntry(null)
-    setDragPointer(null)
   }
 
   async function handleRunNode(nodeId: string, mode: 'run_stale' | 'run_all' | 'edit_run') {
@@ -1211,7 +2159,9 @@ function App() {
       if (typeof response.session_id === 'string') {
         launchEditorTab(response.session_id, nodeId)
       } else if (response.status === 'failed') {
-        reportClientError(`run:${nodeId}:${mode}`, 'run_failed', runFailureMessage(response, 'Run failed.'), { nodeId, details: response })
+        if (!isManagedRunFailure(response)) {
+          reportClientError(`run:${nodeId}:${mode}`, 'run_failed', runFailureMessage(response, 'Run failed.'), { nodeId, details: response })
+        }
       } else if (response.status === 'blocked') {
         reportClientWarning(
           `run-blocked:${nodeId}:${mode}`,
@@ -1239,7 +2189,11 @@ function App() {
         )
         return
       }
-      reportClientError(`run:${nodeId}:${mode}`, 'run_failed', message, { nodeId })
+      if (isFreezeConflict(message)) {
+        reportClientWarning(`run-frozen:${nodeId}:${mode}`, 'frozen_notebook', message, { nodeId })
+      } else {
+        reportClientError(`run:${nodeId}:${mode}`, 'run_failed', message, { nodeId })
+      }
     }
   }
 
@@ -1257,7 +2211,9 @@ function App() {
     try {
       const response = await runNode(nodeId, mode, action)
       if (response.status === 'failed') {
-        reportClientError(`run:${nodeId}:${mode}`, 'run_failed', runFailureMessage(response, 'Run failed.'), { nodeId, details: response })
+        if (!isManagedRunFailure(response)) {
+          reportClientError(`run:${nodeId}:${mode}`, 'run_failed', runFailureMessage(response, 'Run failed.'), { nodeId, details: response })
+        }
       } else if (response.status === 'blocked') {
         reportClientWarning(
           `run-blocked:${nodeId}:${mode}`,
@@ -1280,7 +2236,9 @@ function App() {
     try {
       const response = await runAll()
       if (response.status === 'failed') {
-        reportClientError('run-all', 'run_queue_failed', runFailureMessage(response, 'Run queue failed.'), { details: response })
+        if (!isManagedRunFailure(response)) {
+          reportClientError('run-all', 'run_queue_failed', runFailureMessage(response, 'Run queue failed.'), { details: response })
+        }
       }
       await refreshSnapshot()
     } catch (err) {
@@ -1306,7 +2264,10 @@ function App() {
     if (!removals.length) {
       return
     }
-    await mutateGraph(removals.map((change) => ({ type: 'remove_edge', edge_id: change.id })))
+    const redo = {
+      operations: removals.map((change) => ({ type: 'remove_edge', edge_id: change.id } satisfies GraphPatchOperation)),
+    }
+    await mutateGraph(redo.operations, { history: liveSnapshot ? simpleHistoryEntryForPlan(liveSnapshot, redo) : null })
   }
 
   async function handleConnect(connection: Connection) {
@@ -1315,15 +2276,18 @@ function App() {
     }
     const sourcePort = connection.sourceHandle.replace('out:', '')
     const targetPort = connection.targetHandle.replace('in:', '')
-    await mutateGraph([
-      {
-        type: 'add_edge',
-        source_node: connection.source,
-        source_port: sourcePort,
-        target_node: connection.target,
-        target_port: targetPort,
-      },
-    ])
+    const redo = {
+      operations: [
+        {
+          type: 'add_edge',
+          source_node: connection.source,
+          source_port: sourcePort,
+          target_node: connection.target,
+          target_port: targetPort,
+        } satisfies GraphPatchOperation,
+      ],
+    }
+    await mutateGraph(redo.operations, { history: liveSnapshot ? simpleHistoryEntryForPlan(liveSnapshot, redo) : null })
   }
 
   async function handleToggleHiddenInput(node: NodeRecord, inputName: string) {
@@ -1333,13 +2297,16 @@ function App() {
     } else {
       currentHidden.add(inputName)
     }
-    await mutateGraph([
-      {
-        type: 'update_node_hidden_inputs',
-        node_id: node.id,
-        hidden_inputs: Array.from(currentHidden),
-      },
-    ])
+    const redo = {
+      operations: [
+        {
+          type: 'update_node_hidden_inputs',
+          node_id: node.id,
+          hidden_inputs: Array.from(currentHidden),
+        } satisfies GraphPatchOperation,
+      ],
+    }
+    await mutateGraph(redo.operations, { history: liveSnapshot ? simpleHistoryEntryForPlan(liveSnapshot, redo) : null })
   }
 
   async function handleUploadFile(nodeId: string, file: File) {
@@ -1351,7 +2318,11 @@ function App() {
       await refreshSnapshot()
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Upload failed.'
-      reportClientError(`upload:${nodeId}`, 'upload_failed', message, { nodeId })
+      if (isFreezeConflict(message)) {
+        reportClientWarning(`upload-frozen:${nodeId}`, 'frozen_notebook', message, { nodeId })
+      } else {
+        reportClientError(`upload:${nodeId}`, 'upload_failed', message, { nodeId })
+      }
     }
   }
 
@@ -1372,35 +2343,42 @@ function App() {
     }
     await restoreCheckpoint(checkpointId)
     setOptimisticGraph(null)
-    setSelectedNodeId(null)
+    applySelection([], [], { openInspector: false })
     setArtifactNodeId(null)
-    setInspectorOpen(false)
+    setGraphHistoryPast([])
+    setGraphHistoryFuture([])
     await refreshSnapshot()
   }
 
   async function handleNodeMove(nodeId: string, x: number, y: number) {
-    await mutateGraph([
-      {
-        type: 'update_node_layout',
-        node_id: nodeId,
-        x: Math.round(x / 20) * 20,
-        y: Math.round(y / 20) * 20,
-      },
-    ])
+    const redo = {
+      operations: [
+        {
+          type: 'update_node_layout',
+          node_id: nodeId,
+          x: Math.round(x / 20) * 20,
+          y: Math.round(y / 20) * 20,
+        } satisfies GraphPatchOperation,
+      ],
+    }
+    await mutateGraph(redo.operations, { history: liveSnapshot ? simpleHistoryEntryForPlan(liveSnapshot, redo) : null })
   }
 
   async function handleNodesDelete(nodes: Node[]) {
     if (!nodes.length) {
       return
     }
-    await mutateGraph(nodes.map((node) => ({ type: 'delete_node', node_id: node.id })))
-    setSelectedNodeId((current) => {
-      const next = current && nodes.some((node) => node.id === current) ? null : current
-      if (!next) {
-        setInspectorOpen(false)
-      }
-      return next
-    })
+    const nodeIds = nodes.map((node) => node.id)
+    const history = await deleteHistoryEntry(nodeIds)
+    await stopEditorsForNodes(nodes.map((node) => node.id))
+    const success = await mutateGraph(nodeIds.map((nodeId) => ({ type: 'delete_node', node_id: nodeId })), { history })
+    if (!success) {
+      return
+    }
+    setSelectedNodeId((current) => (current && nodes.some((node) => node.id === current) ? null : current))
+    setSelectedNodeIds((current) => current.filter((nodeId) => !nodeIds.includes(nodeId)))
+    setSelectedEdgeIds([])
+    setInspectorOpen(false)
     setArtifactNodeId((current) => (current && nodes.some((node) => node.id === current) ? null : current))
   }
 
@@ -1409,8 +2387,7 @@ function App() {
     if (!node || node.kind !== 'file_input') {
       return
     }
-    setSelectedNodeId(nodeId)
-    setInspectorOpen(true)
+    selectSingleNode(nodeId)
     setFileNodeEdit({
       nodeId,
       title: node.title,
@@ -1484,6 +2461,134 @@ function App() {
     await refreshSnapshot()
   }
 
+  async function handleCopySelection() {
+    const clipboard = await clipboardGraphForSelection(selectedNodeIds)
+    if (!clipboard) {
+      return
+    }
+    setClipboardGraph(clipboard)
+    setPasteSequence(0)
+  }
+
+  async function handlePasteClipboard() {
+    if (!clipboardGraph || !liveSnapshot) {
+      return
+    }
+    const existingIds = new Set(liveSnapshot.graph.nodes.map((node) => node.id))
+    const nodeIdMap = new Map<string, string>()
+    const nextNodeIds: string[] = []
+    const offset = 40 * (pasteSequence + 1)
+    const operations: GraphPatchOperation[] = []
+
+    for (const item of clipboardGraph.nodes) {
+      const nextNodeId = uniqueCopiedNodeId(item.node.id, existingIds)
+      existingIds.add(nextNodeId)
+      nodeIdMap.set(item.node.id, nextNodeId)
+      nextNodeIds.push(nextNodeId)
+      const nextLayout: LayoutRecord = {
+        ...item.layout,
+        node_id: nextNodeId,
+        x: snapToGrid(item.layout.x + offset),
+        y: snapToGrid(item.layout.y + offset),
+      }
+      const nextTitle = copiedTitle(item.node.title)
+      if (item.node.kind === 'notebook') {
+        operations.push(notebookAddOperationForNode(item.node, nextLayout, item.sourceText, nextNodeId, nextTitle))
+      } else {
+        operations.push(fileInputAddOperationForNode(item.node, nextLayout, nextNodeId, nextTitle))
+      }
+    }
+
+    for (const edge of clipboardGraph.edges) {
+      const sourceNode = nodeIdMap.get(edge.source_node)
+      const targetNode = nodeIdMap.get(edge.target_node)
+      if (!sourceNode || !targetNode) {
+        continue
+      }
+      operations.push({
+        type: 'add_edge',
+        source_node: sourceNode,
+        source_port: edge.source_port,
+        target_node: targetNode,
+        target_port: edge.target_port,
+      })
+    }
+
+    const redo = { operations }
+    const success = await mutateGraph(redo.operations, {
+      history: simpleHistoryEntryForPlan(liveSnapshot, redo),
+      onSuccess: () => {
+        applySelection(nextNodeIds, [], { openInspector: nextNodeIds.length === 1 })
+        setPasteSequence((current) => current + 1)
+      },
+    })
+    if (!success) {
+      return
+    }
+  }
+
+  async function handleUndo() {
+    const entry = graphHistoryPast[graphHistoryPast.length - 1]
+    if (!entry) {
+      return
+    }
+    const success = await mutateGraph(expandMutationPlan(entry.undo))
+    if (!success) {
+      return
+    }
+    setGraphHistoryPast((current) => current.slice(0, -1))
+    setGraphHistoryFuture((current) => [entry, ...current])
+    applySelection([], [], { openInspector: false })
+  }
+
+  async function handleRedo() {
+    const entry = graphHistoryFuture[0]
+    if (!entry) {
+      return
+    }
+    const success = await mutateGraph(expandMutationPlan(entry.redo))
+    if (!success) {
+      return
+    }
+    setGraphHistoryFuture((current) => current.slice(1))
+    setGraphHistoryPast((current) => [...current, entry])
+    applySelection([], [], { openInspector: false })
+  }
+
+  useEffect(() => {
+    function handleKeyDown(event: KeyboardEvent) {
+      if (isEditableTarget(event.target)) {
+        return
+      }
+      const primaryModifier = event.metaKey || event.ctrlKey
+      if (!primaryModifier) {
+        return
+      }
+      const key = event.key.toLowerCase()
+      if (key === 'c' && selectedNodeIds.length > 0) {
+        event.preventDefault()
+        void handleCopySelection()
+        return
+      }
+      if (key === 'v' && clipboardGraph) {
+        event.preventDefault()
+        void handlePasteClipboard()
+        return
+      }
+      if (key === 'z' && !event.shiftKey) {
+        event.preventDefault()
+        void handleUndo()
+        return
+      }
+      if ((key === 'z' && event.shiftKey) || key === 'y') {
+        event.preventDefault()
+        void handleRedo()
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [clipboardGraph, graphHistoryFuture, graphHistoryPast, selectedNodeIds])
+
   const counts = liveSnapshot ? globalArtifactCounts(liveSnapshot) : { ready: 0, stale: 0, pending: 0 }
   const activeRun = liveSnapshot ? currentRun(liveSnapshot) : null
   const runningNodeId = liveSnapshot ? activeRunNodeId(liveSnapshot, activeRun) : null
@@ -1493,8 +2598,8 @@ function App() {
       .filter((node) => node.orchestrator_state?.status === 'succeeded')
       .map((node) => node.id)
     : []
-  const clientNowAnchorMs = Date.now()
-  const serverNowMs = clientNowAnchorMs + serverNowOffsetMs
+  const serverNowMs = serverClock.serverNowMs
+  const clientNowAnchorMs = serverClock.clientAnchorMs
 
   if (loadingSession) {
     return (
@@ -1513,21 +2618,10 @@ function App() {
   return (
     <div className="app-shell">
       <div className="canvas-underlay" />
-      {draggedPaletteEntry && dragPointer ? (
-        <div className="drag-cursor-preview" style={{ left: dragPointer.x, top: dragPointer.y }}>
-          <div className="drop-preview-card">
-            <div className={`drop-preview-badge ${draggedPaletteEntry.kind === 'file_input' || draggedPaletteEntry.kind === 'value_input' ? 'tone-input' : draggedPaletteEntry.kind === 'template' || draggedPaletteEntry.kind === 'pipeline' ? 'tone-template' : 'tone-custom'}`}>
-              {draggedPaletteEntry.kind === 'file_input' ? 'F' : draggedPaletteEntry.kind === 'value_input' ? 'V' : draggedPaletteEntry.kind === 'template' ? 'T' : draggedPaletteEntry.kind === 'pipeline' ? 'P' : 'C'}
-            </div>
-            <div className="drop-preview-copy">
-              <strong>{draggedPaletteEntry.title}</strong>
-              <span>{draggedPaletteEntry.kind === 'pipeline' ? 'Drop to place pipeline' : 'Drop to place block'}</span>
-            </div>
-          </div>
-        </div>
-      ) : null}
       <div className="floating-actions floating-panel">
         <div className="topbar-actions">
+          <button className="secondary small" onClick={() => void handleUndo()} disabled={!graphHistoryPast.length}>Undo</button>
+          <button className="secondary small" onClick={() => void handleRedo()} disabled={!graphHistoryFuture.length}>Redo</button>
           <button className="secondary icon-pill" onClick={() => setShowSettings(true)} aria-label="Editor settings"><Palette width={18} height={18} /></button>
           <button className="secondary icon-pill" onClick={() => setShowProjectInfo(true)} disabled={!projectId} aria-label="Project info"><Info width={18} height={18} /></button>
           {activeRun ? (
@@ -1569,6 +2663,14 @@ function App() {
                 <span>Search blocks</span>
                 <input value={paletteSearch} onChange={(event) => setPaletteSearch(event.target.value)} placeholder="Search blocks or templates" />
               </label>
+              <label className="toggle-row">
+                <input
+                  type="checkbox"
+                  checked={showHiddenTemplates}
+                  onChange={(event) => setShowHiddenTemplates(event.target.checked)}
+                />
+                <span>Show hidden templates</span>
+              </label>
               <BlockPalette
                 entries={paletteEntries}
                 onCreate={handleCreateFromPalette}
@@ -1586,17 +2688,29 @@ function App() {
               snapshot={liveSnapshot}
               serverNowMs={serverNowMs}
               serverNowClientAnchorMs={clientNowAnchorMs}
+              selectedNodeIds={selectedNodeIds}
+              selectedEdgeIds={selectedEdgeIds}
               activeRunNodeId={runningNodeId}
               queuedRunNodeIds={queuedNodeIds}
               completedRunNodeIds={completedNodeIds}
               onConnect={handleConnect}
               onEdgesChange={handleEdgeChanges}
-              onNodeSelect={setSelectedNodeId}
-              onNodeContextMenu={(nodeId, position) => {
-                setSelectedNodeId(nodeId)
-                setInspectorOpen(true)
-                setNodeActionMenu({ nodeId, x: position.x, y: position.y })
-              }}
+                onSelectionChange={(nodeIds, edgeIds) => applySelection(nodeIds, edgeIds)}
+                onNodeSelect={(nodeId) => selectSingleNode(nodeId)}
+                onEdgeSelect={(edgeId) => applySelection([], [edgeId], { openInspector: false })}
+                onNodeContextMenu={(nodeId, position) => {
+                  const clamped = clampContextMenuPosition(position)
+                  const menuNodeIds = selectedNodeIds.includes(nodeId) && selectedNodeIds.length > 1
+                    ? selectedNodeIds
+                    : [nodeId]
+                  setPortActionMenu(null)
+                  setNodeActionMenu({ nodeIds: menuNodeIds, x: clamped.x, y: clamped.y })
+                }}
+                onPortContextMenu={(nodeId, portName, side, position) => {
+                  const clamped = clampContextMenuPosition(position)
+                  setNodeActionMenu(null)
+                  setPortActionMenu({ nodeId, portName, side, x: clamped.x, y: clamped.y })
+                }}
               onEditFileNode={openFileNodeEdit}
               activeEditorNodeIds={activeEditorNodeIds}
               onOpenEditor={(nodeId) => void handleOpenEditor(nodeId)}
@@ -1607,15 +2721,16 @@ function App() {
                 setArtifactExplorerOpen(true)
               }}
               onCanvasInteract={() => setTemplatesCollapsed(true)}
-              onCanvasClear={() => {
-                setSelectedNodeId(null)
-                setInspectorOpen(false)
-              }}
-              onNodeMove={handleNodeMove}
-              onNodesDelete={handleNodesDelete}
-              draggedBlock={draggedPaletteEntry ? { title: draggedPaletteEntry.title, kind: draggedPaletteEntry.kind } : null}
-              onBlockDrop={handleBlockDrop}
-            />
+                onCanvasClear={() => {
+                  applySelection([], [], { openInspector: false })
+                  setNodeActionMenu(null)
+                  setPortActionMenu(null)
+                }}
+                onNodeMove={handleNodeMove}
+                onNodesDelete={handleNodesDelete}
+                draggedBlock={draggedPaletteEntry ? { title: draggedPaletteEntry.title, kind: draggedPaletteEntry.kind } : null}
+                onBlockDrop={handleBlockDrop}
+              />
           ) : (
             <div className="empty-state">
               <h2>No project open</h2>
@@ -1629,8 +2744,7 @@ function App() {
             <div className="panel-header-row">
               <h2>Inspector</h2>
               {selectedNode ? <button className="secondary" onClick={() => {
-                setSelectedNodeId(null)
-                setInspectorOpen(false)
+                applySelection([], [], { openInspector: false })
               }}>Clear</button> : null}
             </div>
             {selectedNode ? (
@@ -1642,23 +2756,98 @@ function App() {
                 activeRunNodeId={runningNodeId}
                 queuedRunNodeIds={queuedNodeIds}
                 completedRunNodeIds={completedNodeIds}
+                nodeActions={nodeActionsForNode(selectedNode)}
                 onToggleHiddenInput={handleToggleHiddenInput}
                 onUploadFile={handleUploadFile}
                 onOpenTemplate={setTemplateRefView}
-                onEditFileNode={openFileNodeEdit}
-                onDeleteNode={handleDeleteNodeAction}
               />
             ) : null}
           </div>
         </aside>
       </section>
 
-      {nodeActionMenu && selectedNode ? (
-        <div className="node-action-menu" style={{ left: nodeActionMenu.x, top: nodeActionMenu.y }} onClick={(event) => event.stopPropagation()}>
-          {selectedNode.kind === 'file_input' ? (
-            <button className="secondary menu-item" onClick={() => openFileNodeEdit(selectedNode.id)}>Edit block</button>
+      {nodeActionMenu && nodeActionMenuNode.length > 0 ? (
+        <div
+          ref={nodeActionMenuRef}
+          className="node-action-menu"
+          style={{ left: nodeActionMenu.x, top: nodeActionMenu.y }}
+          onClick={(event) => event.stopPropagation()}
+        >
+          {nodeActionMenuNode.length > 1 ? (
+            <div className="context-menu-label">
+              {nodeActionMenuNode.length} selected blocks
+            </div>
+          ) : primaryNodeActionMenuNode ? (
+            <div className="context-menu-label">
+              block: {primaryNodeActionMenuNode.id}
+            </div>
           ) : null}
-          <button className="secondary menu-item danger-text" onClick={() => void handleDeleteNodeAction(selectedNode.id)}>Delete block</button>
+          <ActionButtons
+            actions={nodeActionsForMenu(nodeActionMenuNode.map((node) => node.id), { dismissMenu: () => setNodeActionMenu(null) })}
+            itemClassName="secondary menu-item"
+          />
+        </div>
+      ) : null}
+
+      {portActionMenu && portActionMenuNode ? (
+        <div ref={portActionMenuRef} className="node-action-menu" style={{ left: portActionMenu.x, top: portActionMenu.y }} onClick={(event) => event.stopPropagation()}>
+          <div className="context-menu-label">
+            {portActionMenu.side} port: {portActionMenuNode.id}/{portActionMenu.portName}
+            <br />
+            {portActionArtifact
+              ? `artifact: ${portActionArtifact.nodeId}/${portActionArtifact.artifactName}`
+              : 'artifact: not connected'}
+          </div>
+          <button
+            className="secondary menu-item"
+            disabled={!portActionArtifact || !portActionHead || portActionHead.current_version_id === null || portActionHead.state === 'stale' || Boolean(portActionMutationBlockedReason)}
+            title={portActionMutationBlockedReason}
+            onClick={() => {
+              if (!portActionArtifact) {
+                return
+              }
+              setPortActionMenu(null)
+              void handleSetArtifactStateAction(portActionArtifact.nodeId, portActionArtifact.artifactName, 'stale')
+            }}
+          >
+            Mark stale
+          </button>
+          <button
+            className="secondary menu-item"
+            disabled={
+              !portActionArtifact
+              || !portActionHead
+              || portActionHead.current_version_id === null
+              || portActionHead.state === 'ready'
+              || !nodeInputsAreReady(portActionMenuNode)
+              || Boolean(portActionMutationBlockedReason)
+            }
+            title={portActionMutationBlockedReason}
+            onClick={() => {
+              if (!portActionArtifact) {
+                return
+              }
+              setPortActionMenu(null)
+              setConfirmationState({
+                kind: 'artifact-state',
+                nodeId: portActionArtifact.nodeId,
+                artifactName: portActionArtifact.artifactName,
+                state: 'ready',
+                title: 'Mark output ready?',
+                message: `This bypasses consistency checks for ${portActionArtifact.nodeId}/${portActionArtifact.artifactName}.`,
+              })
+            }}
+          >
+            Mark ready
+          </button>
+          <button
+            className="secondary menu-item"
+            disabled={!portActionEdgeIds.length || Boolean(portDisconnectBlockedReason)}
+            title={portDisconnectBlockedReason}
+            onClick={() => void handleDisconnectPort(portActionMenu)}
+          >
+            Disconnect all
+          </button>
         </div>
       ) : null}
 
@@ -1740,12 +2929,14 @@ function App() {
             if (!projectId) {
               return
             }
-            await mutateGraph([
-              { type: 'update_node_title', node_id: fileNodeEdit.nodeId, title: payload.title },
-            ])
+            const redo = {
+              operations: [
+                { type: 'update_node_title', node_id: fileNodeEdit.nodeId, title: payload.title } satisfies GraphPatchOperation,
+              ],
+            }
+            await mutateGraph(redo.operations, { history: liveSnapshot ? simpleHistoryEntryForPlan(liveSnapshot, redo) : null })
             if (payload.file) {
-              await uploadFile(fileNodeEdit.nodeId, payload.file)
-              await refreshSnapshot()
+              await handleUploadFile(fileNodeEdit.nodeId, payload.file)
             }
           }}
         />
@@ -1840,10 +3031,62 @@ function App() {
         />
       ) : null}
 
+      {confirmationState?.kind === 'node-outputs-state' ? (
+        <ConfirmDialog
+          title={confirmationState.title}
+          message={confirmationState.message}
+          confirmLabel={confirmationState.state === 'ready' ? 'Mark ready' : 'Confirm'}
+          tone={confirmationState.state === 'ready' ? 'danger' : 'default'}
+          onClose={() => setConfirmationState(null)}
+          onConfirm={() => {
+            const pending = confirmationState
+            setConfirmationState(null)
+            void handleSetNodeOutputsStateForNodes(
+              pending.nodeIds,
+              pending.state,
+              pending.onlyCurrentState,
+            )
+          }}
+        />
+      ) : null}
+
+      {confirmationState?.kind === 'artifact-state' ? (
+        <ConfirmDialog
+          title={confirmationState.title}
+          message={confirmationState.message}
+          confirmLabel={confirmationState.state === 'ready' ? 'Mark ready' : 'Confirm'}
+          tone={confirmationState.state === 'ready' ? 'danger' : 'default'}
+          onClose={() => setConfirmationState(null)}
+          onConfirm={() => {
+            const pending = confirmationState
+            setConfirmationState(null)
+            void handleSetArtifactStateAction(
+              pending.nodeId,
+              pending.artifactName,
+              pending.state,
+            )
+          }}
+        />
+      ) : null}
+
+      {confirmationState?.kind === 'node-frozen' ? (
+        <ConfirmDialog
+          title={confirmationState.title}
+          message={confirmationState.message}
+          confirmLabel={confirmationState.frozen ? 'Freeze' : 'Unfreeze'}
+          onClose={() => setConfirmationState(null)}
+          onConfirm={() => {
+            const pending = confirmationState
+            setConfirmationState(null)
+            void handleSetNodesFrozen(pending.nodeIds, pending.frozen)
+          }}
+        />
+      ) : null}
+
       <NoticeOverlay
         notices={overlayNotices}
         onDismiss={(notice) => void handleDismissNotice(notice)}
-        onOpenNode={(nodeId) => setSelectedNodeId(nodeId)}
+        onOpenNode={(nodeId) => selectSingleNode(nodeId)}
         onOpenEditor={(notice) => void handleOpenEditorNotice(notice)}
         onKillEditor={(notice) => void handleKillEditorNotice(notice)}
       />
@@ -1922,29 +3165,17 @@ function BlockPalette({
       {sections.map((section) => (
         <section key={section.title} className="palette-section">
           <h3>{section.title}</h3>
-            <div className="stack-list templates-list">
-              {section.items.map((entry) => (
+          <div className="stack-list templates-list">
+            {section.items.map((entry) => {
+              return (
                 <div key={entry.key} className="template-tile palette-tile">
                   <button
                     className="palette-main draggable-block"
                     onClick={() => void onCreate(entry)}
                     draggable
                     onDragStart={(event) => {
-                      const dragImage = document.createElement('div')
-                      dragImage.textContent = ''
-                      dragImage.style.width = '1px'
-                      dragImage.style.height = '1px'
-                      dragImage.style.opacity = '0'
-                      dragImage.style.position = 'fixed'
-                      dragImage.style.top = '0'
-                      dragImage.style.left = '0'
-                      document.body.appendChild(dragImage)
-                      event.dataTransfer.effectAllowed = 'move'
+                      event.dataTransfer.effectAllowed = 'copy'
                       event.dataTransfer.setData('text/plain', entry.key)
-                      event.dataTransfer.setDragImage(dragImage, 0, 0)
-                      window.setTimeout(() => {
-                        dragImage.remove()
-                      }, 0)
                       onDragStart(entry, { x: event.clientX, y: event.clientY })
                     }}
                     onDragEnd={onDragEnd}
@@ -1952,18 +3183,19 @@ function BlockPalette({
                     <strong>{entry.title}</strong>
                     <span>{entry.description}</span>
                   </button>
-                {entry.kind === 'template' || entry.kind === 'value_input' || entry.kind === 'pipeline' ? (
-                  <button className="secondary small" onClick={(event) => {
-                    event.stopPropagation()
-                    if (entry.templateRef) {
-                      onInspectTemplate(entry.templateRef)
-                    }
-                  }}>
-                    View
-                  </button>
-                ) : null}
-              </div>
-            ))}
+                  {entry.kind === 'template' || entry.kind === 'value_input' || entry.kind === 'pipeline' ? (
+                    <button className="secondary small" onClick={(event) => {
+                      event.stopPropagation()
+                      if (entry.templateRef) {
+                        onInspectTemplate(entry.templateRef)
+                      }
+                    }}>
+                      View
+                    </button>
+                  ) : null}
+                </div>
+              )
+            })}
             {!section.items.length ? <p className="muted-copy">No matching blocks.</p> : null}
           </div>
         </section>
@@ -2105,6 +3337,41 @@ function NoticeOverlay({
   )
 }
 
+function ActionButtons({
+  actions,
+  itemClassName,
+}: {
+  actions: NodeActionItem[]
+  itemClassName: string
+}) {
+  return (
+    <>
+      {actions.map((action) => {
+        const className = `${itemClassName}${action.tone === 'danger' ? ' danger-text' : ''}`
+        if (action.href) {
+          if (action.disabled) {
+            return (
+              <button key={action.key} className={className} disabled title={action.title}>
+                {action.label}
+              </button>
+            )
+          }
+          return (
+            <a key={action.key} className={`${className} link-button`} href={action.href} onClick={action.onClick} title={action.title}>
+              {action.label}
+            </a>
+          )
+        }
+        return (
+          <button key={action.key} className={className} onClick={action.onClick} disabled={action.disabled} title={action.title}>
+            {action.label}
+          </button>
+        )
+      })}
+    </>
+  )
+}
+
 function NodeInspector({
   snapshot,
   node,
@@ -2113,11 +3380,10 @@ function NodeInspector({
   activeRunNodeId,
   queuedRunNodeIds,
   completedRunNodeIds,
+  nodeActions,
   onToggleHiddenInput,
   onUploadFile,
   onOpenTemplate,
-  onEditFileNode,
-  onDeleteNode,
 }: {
   snapshot: ProjectSnapshot
   node: NodeRecord
@@ -2126,11 +3392,10 @@ function NodeInspector({
   activeRunNodeId: string | null
   queuedRunNodeIds: string[]
   completedRunNodeIds: string[]
+  nodeActions: NodeActionItem[]
   onToggleHiddenInput: (node: NodeRecord, inputName: string) => Promise<void>
   onUploadFile: (nodeId: string, file: File) => Promise<void>
   onOpenTemplate: (templateRef: string) => void
-  onEditFileNode: (nodeId: string) => void
-  onDeleteNode: (nodeId: string) => Promise<void>
 }) {
   const badge = badgeForNode(snapshot, node)
   const counts = artifactCounts(snapshot, node.id)
@@ -2189,6 +3454,7 @@ function NodeInspector({
       <div className="stack-list subtle">
         <div><span>Node ID</span><strong>{node.id}</strong></div>
         <div><span>Kind</span><strong>{node.kind}</strong></div>
+        <div><span>Frozen</span><strong>{node.ui?.frozen ? 'yes' : 'no'}</strong></div>
         <div><span>State</span><strong>{displayedState}</strong></div>
         <div><span>Validation</span><strong>{blockingValidationIssues.length ? `${blockingValidationIssues.length} error${blockingValidationIssues.length === 1 ? '' : 's'}` : 'ok'}</strong></div>
         <div><span>Artifacts</span><ArtifactCounts counts={counts} showLabels /></div>
@@ -2359,9 +3625,8 @@ function NodeInspector({
 
       <div className="inspector-block">
         <h3>Actions</h3>
-        <div className="stack-list">
-          {node.kind === 'file_input' ? <button className="secondary" onClick={() => onEditFileNode(node.id)}>Edit block</button> : null}
-          <button className="danger" onClick={() => void onDeleteNode(node.id)}>Delete block</button>
+        <div className="stack-list inspector-actions">
+          <ActionButtons actions={nodeActions} itemClassName="secondary" />
         </div>
       </div>
     </div>

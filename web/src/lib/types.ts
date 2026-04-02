@@ -45,6 +45,7 @@ export type NodeRecord = {
     hidden_inputs?: string[]
     artifact_name?: string
     origin?: 'constant_value' | null
+    frozen?: boolean
   }
   interface?: {
     node_id: string
@@ -245,7 +246,7 @@ export type GraphPatchResponse = {
 export type ProjectOpenResponse = ProjectSnapshot
 
 export type GraphPatchOperation =
-  | { type: 'add_notebook_node'; node_id: string; title: string; x?: number; y?: number; w?: number; h?: number; template_ref?: string; source_text?: string; ui?: { origin?: 'constant_value' | null } }
+  | { type: 'add_notebook_node'; node_id: string; title: string; x?: number; y?: number; w?: number; h?: number; template_ref?: string; source_text?: string; ui?: { origin?: 'constant_value' | null; hidden_inputs?: string[]; frozen?: boolean } }
   | { type: 'add_file_input_node'; node_id: string; title: string; artifact_name?: string; x?: number; y?: number; w?: number; h?: number }
   | { type: 'add_pipeline_template'; template_ref: string; x?: number; y?: number; node_id_prefix?: string | null }
   | { type: 'add_edge'; source_node: string; source_port: string; target_node: string; target_port: string }
@@ -253,6 +254,7 @@ export type GraphPatchOperation =
   | { type: 'update_node_layout'; node_id: string; x: number; y: number; w?: number; h?: number }
   | { type: 'update_node_title'; node_id: string; title: string }
   | { type: 'update_node_hidden_inputs'; node_id: string; hidden_inputs: string[] }
+  | { type: 'update_node_frozen'; node_id: string; frozen: boolean }
   | { type: 'delete_node'; node_id: string }
 
 export type SessionRecord = {

@@ -519,6 +519,124 @@ def test_reparse_input_port_removal_disconnects_edges_and_stales_node_outputs(tm
 
     warning_codes = {notice['code'] for notice in snapshot['notices']}
     assert 'edges_removed_for_port_change' in warning_codes
+    warning = next(notice for notice in snapshot['notices'] if notice['code'] == 'edges_removed_for_port_change')
+    assert warning['details']['removed_edge_ids'] == ['value_source.value__table_sink.sample_count']
+    assert warning['details']['removed_edges'] == [
+        {
+            'id': 'value_source.value__table_sink.sample_count',
+            'source_node': 'value_source',
+            'source_port': 'value',
+            'target_node': 'table_sink',
+            'target_port': 'sample_count',
+        }
+    ]
+
+
+def test_recreating_same_edge_restores_matching_stale_outputs_to_ready(tmp_path) -> None:
+    project_root = init_project_root(tmp_path / 'project').root
+    app = create_app(project_path=project_root)
+    client = TestClient(app)
+
+    opened = client.get('/api/v1/project/snapshot')
+    graph_version = opened.json()['graph']['meta']['graph_version']
+
+    patch = client.patch(
+        '/api/v1/graph',
+        json={
+            'graph_version': graph_version,
+            'operations': [
+                {
+                    'type': 'add_notebook_node',
+                    'node_id': 'value_source',
+                    'title': 'Value Source',
+                    'template_ref': 'builtin/value_input',
+                },
+                {
+                    'type': 'add_notebook_node',
+                    'node_id': 'table_sink',
+                    'title': 'Table Sink',
+                    'template_ref': 'builtin/test_starter_notebook',
+                    'x': 420,
+                    'y': 80,
+                },
+            ],
+        },
+    )
+    assert patch.status_code == 200
+
+    connect = client.patch(
+        '/api/v1/graph',
+        json={
+            'graph_version': patch.json()['meta']['graph_version'],
+            'operations': [
+                {
+                    'type': 'add_edge',
+                    'source_node': 'value_source',
+                    'source_port': 'value',
+                    'target_node': 'table_sink',
+                    'target_port': 'sample_count',
+                }
+            ],
+        },
+    )
+    assert connect.status_code == 200
+
+    run = client.post(
+        '/api/v1/nodes/table_sink/run',
+        json={'mode': 'run_stale', 'action': 'run_upstream'},
+    )
+    assert run.status_code == 200
+    assert run.json()['status'] == 'succeeded'
+
+    ready_before_disconnect = client.get('/api/v1/artifacts/table_sink/sample_df')
+    assert ready_before_disconnect.status_code == 200
+    ready_payload = ready_before_disconnect.json()
+    assert ready_payload['state'] == 'ready'
+
+    disconnected = client.patch(
+        '/api/v1/graph',
+        json={
+            'graph_version': connect.json()['meta']['graph_version'],
+            'operations': [
+                {
+                    'type': 'remove_edge',
+                    'edge_id': 'value_source.value__table_sink.sample_count',
+                }
+            ],
+        },
+    )
+    assert disconnected.status_code == 200
+
+    stale_after_disconnect = client.get('/api/v1/artifacts/table_sink/sample_df')
+    assert stale_after_disconnect.status_code == 200
+    stale_payload = stale_after_disconnect.json()
+    assert stale_payload['state'] == 'stale'
+    assert stale_payload['artifact_hash'] == ready_payload['artifact_hash']
+
+    reconnected = client.patch(
+        '/api/v1/graph',
+        json={
+            'graph_version': disconnected.json()['meta']['graph_version'],
+            'operations': [
+                {
+                    'type': 'add_edge',
+                    'source_node': 'value_source',
+                    'source_port': 'value',
+                    'target_node': 'table_sink',
+                    'target_port': 'sample_count',
+                }
+            ],
+        },
+    )
+    assert reconnected.status_code == 200
+
+    ready_after_reconnect = client.get('/api/v1/artifacts/table_sink/sample_df')
+    assert ready_after_reconnect.status_code == 200
+    restored_payload = ready_after_reconnect.json()
+    assert restored_payload['state'] == 'ready'
+    assert restored_payload['artifact_hash'] == ready_payload['artifact_hash']
+    assert restored_payload['upstream_data_hash'] == ready_payload['upstream_data_hash']
+    assert restored_payload['upstream_code_hash'] == ready_payload['upstream_code_hash']
 
 
 def test_notebook_edit_interrupts_active_run_and_records_dismissible_warning(tmp_path) -> None:

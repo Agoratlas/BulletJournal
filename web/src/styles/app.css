@@ -205,6 +205,18 @@ label span,
   color: var(--muted);
 }
 
+.toggle-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--muted);
+}
+
+.toggle-row input {
+  width: auto;
+  margin: 0;
+}
+
 .eyebrow {
   margin: 0;
   text-transform: uppercase;
@@ -844,12 +856,16 @@ label span,
 
 .rf-node-titles {
   flex: 1;
+  min-width: 0;
 }
 
 .rf-node-titles h4 {
   margin: 0;
   font-size: 17px;
   line-height: 1.1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .rf-node-titles span {
@@ -859,6 +875,9 @@ label span,
   font-size: 11px;
   line-height: 1.15;
   font-family: var(--mono);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .rf-node-issue-pill {
@@ -868,6 +887,19 @@ label span,
   border: 1px solid rgba(197, 48, 48, 0.3);
   background: rgba(197, 48, 48, 0.12);
   color: #8f1d1d;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.rf-node-freeze-pill {
+  flex: 0 0 auto;
+  padding: 6px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(37, 99, 235, 0.24);
+  background: rgba(37, 99, 235, 0.08);
+  color: #1d4ed8;
   font-size: 11px;
   font-weight: 800;
   letter-spacing: 0.03em;
@@ -908,6 +940,12 @@ label span,
   border-color: rgba(242, 117, 117, 0.34);
   background: rgba(242, 117, 117, 0.16);
   color: #ffd7d7;
+}
+
+:root[data-theme='dark'] .rf-node-freeze-pill {
+  border-color: rgba(147, 197, 253, 0.28);
+  background: rgba(37, 99, 235, 0.18);
+  color: #dbeafe;
 }
 
 .rf-node-body {
@@ -951,6 +989,7 @@ label span,
   background: transparent;
   border: 0;
   min-width: 0;
+  cursor: context-menu;
 }
 
 .rf-port-row.incompatible {
@@ -1522,7 +1561,9 @@ label span,
   z-index: 40;
   display: grid;
   gap: 6px;
+  width: min(240px, calc(100vw - 24px));
   min-width: 180px;
+  max-width: calc(100vw - 24px);
   padding: 8px;
   border-radius: 16px;
   background: rgba(255, 250, 242, 0.94);
@@ -1531,12 +1572,34 @@ label span,
   backdrop-filter: blur(14px);
 }
 
+.node-action-menu .menu-item {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  white-space: nowrap;
+}
+
 :root[data-theme='dark'] .node-action-menu {
   background: rgba(24, 22, 19, 0.94);
 }
 
 .danger-text {
   color: var(--bad);
+  border-color: rgba(197, 48, 48, 0.32) !important;
+  background: rgba(197, 48, 48, 0.12) !important;
+}
+
+:root[data-theme='dark'] .danger-text {
+  border-color: rgba(242, 117, 117, 0.32) !important;
+  background: rgba(242, 117, 117, 0.14) !important;
+}
+
+.context-menu-label {
+  padding: 4px 6px 8px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.35;
 }
 
 .warning-chip.error {
@@ -1561,6 +1624,15 @@ label span,
 
 :root[data-theme='dark'] .warning-details {
   background: rgba(255, 255, 255, 0.06);
+}
+
+.inspector-actions > .secondary,
+.inspector-actions > .link-button {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
 }
 
 .port-pill {
@@ -1797,74 +1869,9 @@ input.invalid {
   z-index: 9;
 }
 
-.drag-cursor-preview {
-  position: fixed;
-  z-index: 12;
-  pointer-events: none;
-  transform: translate(-50%, -50%);
-}
-
-.drop-preview-card {
-  width: 240px;
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 14px 16px;
-  border-radius: 22px;
-  border: 1px dashed rgba(15, 118, 110, 0.44);
-  background: rgba(255, 250, 242, 0.95);
-  box-shadow: var(--shadow);
-  backdrop-filter: blur(14px);
-}
-
-:root[data-theme='dark'] .drop-preview-card {
-  background: rgba(29, 27, 25, 0.94);
-  border-color: rgba(92, 189, 180, 0.45);
-}
-
 :root[data-theme='dark'] .field-icon-note,
 :root[data-theme='dark'] .constant-output-card {
   background: rgba(255, 255, 255, 0.06);
-}
-
-.drop-preview-badge {
-  width: 34px;
-  height: 34px;
-  border-radius: 999px;
-  display: grid;
-  place-items: center;
-  font-weight: 800;
-  background: rgba(15, 118, 110, 0.14);
-  color: var(--accent-strong);
-  border: 1px solid rgba(15, 118, 110, 0.2);
-}
-
-.drop-preview-badge.tone-input {
-  background: rgba(59, 130, 246, 0.14);
-  color: #1d4ed8;
-  border-color: rgba(59, 130, 246, 0.22);
-}
-
-.drop-preview-badge.tone-template {
-  background: rgba(47, 133, 90, 0.14);
-  color: #1f6f49;
-  border-color: rgba(47, 133, 90, 0.22);
-}
-
-.drop-preview-badge.tone-custom {
-  background: rgba(194, 98, 24, 0.14);
-  color: #9a3412;
-  border-color: rgba(194, 98, 24, 0.22);
-}
-
-.drop-preview-copy {
-  display: grid;
-  gap: 2px;
-}
-
-.drop-preview-copy span {
-  color: var(--muted);
-  font-size: 12px;
 }
 
 .dialog-actions {

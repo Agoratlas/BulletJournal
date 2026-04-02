@@ -15,6 +15,7 @@ from bulletjournal.domain.models import (
     file_input_artifact_name,
 )
 from bulletjournal.domain.state_machine import derive_node_state
+from bulletjournal.execution.planner import downstream_closure, upstream_closure
 from bulletjournal.execution.watcher import NotebookWatcher
 from bulletjournal.storage.graph_store import GraphStore
 from bulletjournal.storage.object_store import ObjectStore
@@ -221,6 +222,78 @@ class ProjectService:
         if notice is None:
             raise RuntimeError(f'Failed to load persisted notice `{issue_id}`.')
         return notice
+
+    def node_is_frozen(self, node: Node) -> bool:
+        return node.kind == NodeKind.NOTEBOOK and bool(node.ui.get('frozen'))
+
+    def frozen_notebook_blockers_for_stale_roots(
+        self,
+        node_ids: list[str],
+        *,
+        graph: GraphData | None = None,
+    ) -> list[Node]:
+        resolved_graph = self.graph() if graph is None else graph
+        affected: set[str] = set(node_ids)
+        for node_id in node_ids:
+            affected.update(downstream_closure(resolved_graph, node_id))
+        return [node for node in resolved_graph.nodes if node.id in affected and self.node_is_frozen(node)]
+
+    def frozen_notebook_blockers_for_node_edit(
+        self,
+        node_id: str,
+        *,
+        graph: GraphData | None = None,
+    ) -> list[Node]:
+        return self.frozen_notebook_blockers_for_stale_roots([node_id], graph=graph)
+
+    @staticmethod
+    def freeze_block_message(blockers: list[Node]) -> str:
+        labels = ', '.join(f'`{node.title}` ({node.id})' for node in blockers)
+        if len(blockers) == 1:
+            return f'This change is blocked because it would affect the frozen notebook {labels}. Unfreeze it first.'
+        return f'This change is blocked because it would affect frozen notebooks {labels}. Unfreeze them first.'
+
+    def freeze_targets_for_node(
+        self,
+        node_id: str,
+        *,
+        graph: GraphData | None = None,
+    ) -> list[Node]:
+        resolved_graph = self.graph() if graph is None else graph
+        target = next((node for node in resolved_graph.nodes if node.id == node_id), None)
+        if target is None:
+            raise NotFoundError(f'Unknown node `{node_id}`.')
+        if target.kind != NodeKind.NOTEBOOK:
+            return []
+        target_ids = set(upstream_closure(resolved_graph, node_id)) | {node_id}
+        return [node for node in resolved_graph.nodes if node.id in target_ids and node.kind == NodeKind.NOTEBOOK]
+
+    def active_editor_upstream_blockers_for_freeze(
+        self,
+        node_id: str,
+        *,
+        graph: GraphData | None = None,
+    ) -> list[Node]:
+        if self.run_service is None:
+            return []
+        resolved_graph = self.graph() if graph is None else graph
+        upstream_ids = set(upstream_closure(resolved_graph, node_id))
+        if not upstream_ids:
+            return []
+        blockers: list[Node] = []
+        for node in resolved_graph.nodes:
+            if node.id not in upstream_ids or node.kind != NodeKind.NOTEBOOK:
+                continue
+            if self.run_service.session_manager.get_by_node(node.id) is not None:
+                blockers.append(node)
+        return blockers
+
+    @staticmethod
+    def freeze_upstream_editor_block_message(blockers: list[Node]) -> str:
+        labels = ', '.join(f'`{node.title}` ({node.id})' for node in blockers)
+        if len(blockers) == 1:
+            return f'Freeze is blocked because an upstream editor is open for {labels}. Close it first.'
+        return f'Freeze is blocked because upstream editors are open for {labels}. Close them first.'
 
     def snapshot(self) -> dict[str, Any]:
         project = self.require_project()

@@ -181,7 +181,7 @@ def test_warning_notice_can_be_dismissed_via_api(tmp_path) -> None:
     warning = next(issue for issue in snapshot['validation_issues'] if issue['severity'] == 'warning')
     assert any(issue['issue_id'] == warning['issue_id'] for issue in snapshot['notices'])
 
-    dismissed = client.post(f"/api/v1/notices/{warning['issue_id']}/dismiss")
+    dismissed = client.post(f'/api/v1/notices/{warning["issue_id"]}/dismiss')
 
     assert dismissed.status_code == 200
     refreshed = client.get('/api/v1/project/snapshot').json()
@@ -220,7 +220,7 @@ def test_error_notice_can_be_dismissed_via_api(tmp_path) -> None:
     snapshot = client.get('/api/v1/project/snapshot').json()
     error_issue = next(issue for issue in snapshot['validation_issues'] if issue['severity'] == 'error')
 
-    dismissed = client.post(f"/api/v1/notices/{error_issue['issue_id']}/dismiss")
+    dismissed = client.post(f'/api/v1/notices/{error_issue["issue_id"]}/dismiss')
 
     assert dismissed.status_code == 200
     refreshed = client.get('/api/v1/project/snapshot').json()
@@ -337,7 +337,11 @@ def test_invalid_notebook_changes_keep_previous_ports_and_surface_errors(tmp_pat
     node = next(item for item in snapshot['graph']['nodes'] if item['id'] == 'sample_node')
 
     assert [port['name'] for port in node['interface']['outputs']] == ['sample_df']
-    assert any(issue['code'] == 'invalid_syntax' for issue in snapshot['validation_issues'] if issue['node_id'] == 'sample_node')
+    assert any(
+        issue['code'] == 'invalid_syntax'
+        for issue in snapshot['validation_issues']
+        if issue['node_id'] == 'sample_node'
+    )
     assert node['state'] == 'error'
 
 
@@ -370,7 +374,7 @@ def test_unparsable_marimo_cell_keeps_previous_ports_and_surfaces_errors(tmp_pat
     notebook_path.write_text(
         original_source.replace(
             "@app.cell\ndef _(pd, sample_count):\n    frame = pd.DataFrame({'value': list(range(sample_count))})\n    artifacts.push(frame, name='sample_df', data_type=pd.DataFrame, is_output=True, description='Sample output frame')\n    return frame",
-            "app._unparsable_cell(\n    r\"\"\"\nframe = pd.DataFrame({'value': list(range(sample_count))})\nartifacts.push(frame, name='renamed_df', data_type=pd.DataFrame, is_output=True, description='Sample output frame')\nbroken =\nreturn frame\n\"\"\"\n)",
+            'app._unparsable_cell(\n    r"""\nframe = pd.DataFrame({\'value\': list(range(sample_count))})\nartifacts.push(frame, name=\'renamed_df\', data_type=pd.DataFrame, is_output=True, description=\'Sample output frame\')\nbroken =\nreturn frame\n"""\n)',
         ),
         encoding='utf-8',
     )
@@ -382,7 +386,11 @@ def test_unparsable_marimo_cell_keeps_previous_ports_and_surfaces_errors(tmp_pat
     node = next(item for item in snapshot['graph']['nodes'] if item['id'] == 'sample_node')
 
     assert [port['name'] for port in node['interface']['outputs']] == ['sample_df']
-    assert any(issue['code'] == 'invalid_syntax' for issue in snapshot['validation_issues'] if issue['node_id'] == 'sample_node')
+    assert any(
+        issue['code'] == 'invalid_syntax'
+        for issue in snapshot['validation_issues']
+        if issue['node_id'] == 'sample_node'
+    )
     assert node['state'] == 'error'
 
 
@@ -395,7 +403,8 @@ def test_graph_patch_accepts_inline_notebook_source(tmp_path) -> None:
     project_id = opened.json()['project']['project_id']
     graph_version = opened.json()['graph']['meta']['graph_version']
 
-    notebook_source = """
+    notebook_source = (
+        """
 import marimo
 
 app = marimo.App()
@@ -417,7 +426,9 @@ if __name__ == '__main__':
     from bulletjournal.runtime.standalone import run_notebook_app
 
     run_notebook_app(app, __file__)
-""".strip() + '\n'
+""".strip()
+        + '\n'
+    )
 
     created = client.patch(
         '/api/v1/graph',
@@ -569,7 +580,13 @@ def test_graph_patch_accepts_prefixed_pipeline_template(tmp_path) -> None:
     assert second.status_code == 200
     snapshot = client.get('/api/v1/project/snapshot').json()
     node_ids = {node['id'] for node in snapshot['graph']['nodes']}
-    assert {'study_b_file', 'study_b_example_1', 'study_b_example_2', 'study_b_example_3', 'study_b_example_4'} <= node_ids
+    assert {
+        'study_b_file',
+        'study_b_example_1',
+        'study_b_example_2',
+        'study_b_example_3',
+        'study_b_example_4',
+    } <= node_ids
 
 
 def test_file_input_node_can_use_custom_artifact_name(tmp_path) -> None:
@@ -777,3 +794,575 @@ def test_file_artifact_content_endpoint_renders_inline_image(tmp_path) -> None:
     assert content.headers['content-type'].startswith('image/png')
     assert 'attachment' not in content.headers.get('content-disposition', '')
     assert content.content == png_bytes
+
+
+def test_notebook_download_endpoint_returns_python_source(tmp_path) -> None:
+    project_root = init_project_root(tmp_path / 'project').root
+    app = create_app(project_path=project_root)
+    client = TestClient(app)
+
+    opened = client.get('/api/v1/project/snapshot')
+    graph_version = opened.json()['graph']['meta']['graph_version']
+
+    created = client.patch(
+        '/api/v1/graph',
+        json={
+            'graph_version': graph_version,
+            'operations': [
+                {
+                    'type': 'add_notebook_node',
+                    'node_id': 'sample_node',
+                    'title': 'Sample Node',
+                }
+            ],
+        },
+    )
+    assert created.status_code == 200
+
+    response = client.get('/api/v1/nodes/sample_node/notebook/download')
+
+    assert response.status_code == 200
+    assert response.headers['content-type'].startswith('text/x-python')
+    assert 'filename="sample_node.py"' in response.headers['content-disposition']
+    assert 'import marimo' in response.text
+
+
+def test_artifact_state_endpoints_can_mark_outputs_stale_and_ready(tmp_path) -> None:
+    project_root = init_project_root(tmp_path / 'project').root
+    app = create_app(project_path=project_root)
+    client = TestClient(app)
+
+    opened = client.get('/api/v1/project/snapshot')
+    graph_version = opened.json()['graph']['meta']['graph_version']
+
+    created = client.patch(
+        '/api/v1/graph',
+        json={
+            'graph_version': graph_version,
+            'operations': [
+                {
+                    'type': 'add_notebook_node',
+                    'node_id': 'sample_node',
+                    'title': 'Sample Node',
+                }
+            ],
+        },
+    )
+    assert created.status_code == 200
+
+    run = client.post(
+        '/api/v1/nodes/sample_node/run',
+        json={'mode': 'run_stale', 'action': 'use_stale'},
+    )
+    assert run.status_code == 200
+    assert run.json()['status'] == 'succeeded'
+
+    stale = client.post(
+        '/api/v1/artifacts/sample_node/sample_df/state',
+        json={'state': 'stale'},
+    )
+    assert stale.status_code == 200
+    assert stale.json()['state'] == 'stale'
+
+    ready = client.post(
+        '/api/v1/artifacts/sample_node/sample_df/state',
+        json={'state': 'ready'},
+    )
+    assert ready.status_code == 200
+    assert ready.json()['state'] == 'ready'
+
+    bulk_stale = client.post(
+        '/api/v1/nodes/sample_node/outputs/state',
+        json={'state': 'stale'},
+    )
+    assert bulk_stale.status_code == 200
+    assert 'sample_df' in bulk_stale.json()['artifact_names']
+
+    bulk_ready = client.post(
+        '/api/v1/nodes/sample_node/outputs/state',
+        json={'state': 'ready', 'only_current_state': 'stale'},
+    )
+    assert bulk_ready.status_code == 200
+    assert 'sample_df' in bulk_ready.json()['artifact_names']
+
+    refreshed = client.get('/api/v1/artifacts/sample_node/sample_df')
+    assert refreshed.status_code == 200
+    assert refreshed.json()['state'] == 'ready'
+
+
+def test_marking_node_outputs_stale_also_stales_downstream_nodes(tmp_path) -> None:
+    project_root = init_project_root(tmp_path / 'project').root
+    app = create_app(project_path=project_root)
+    client = TestClient(app)
+
+    opened = client.get('/api/v1/project/snapshot')
+    graph_version = opened.json()['graph']['meta']['graph_version']
+
+    created = client.patch(
+        '/api/v1/graph',
+        json={
+            'graph_version': graph_version,
+            'operations': [
+                {
+                    'type': 'add_notebook_node',
+                    'node_id': 'value_source',
+                    'title': 'Value Source',
+                    'template_ref': 'builtin/value_input',
+                },
+                {
+                    'type': 'add_notebook_node',
+                    'node_id': 'table_sink',
+                    'title': 'Table Sink',
+                    'template_ref': 'builtin/test_starter_notebook',
+                },
+            ],
+        },
+    )
+    assert created.status_code == 200
+
+    connected = client.patch(
+        '/api/v1/graph',
+        json={
+            'graph_version': created.json()['meta']['graph_version'],
+            'operations': [
+                {
+                    'type': 'add_edge',
+                    'source_node': 'value_source',
+                    'source_port': 'value',
+                    'target_node': 'table_sink',
+                    'target_port': 'sample_count',
+                }
+            ],
+        },
+    )
+    assert connected.status_code == 200
+
+    run = client.post(
+        '/api/v1/nodes/table_sink/run',
+        json={'mode': 'run_stale', 'action': 'run_upstream'},
+    )
+    assert run.status_code == 200
+    assert run.json()['status'] == 'succeeded'
+
+    bulk_stale = client.post(
+        '/api/v1/nodes/value_source/outputs/state',
+        json={'state': 'stale'},
+    )
+    assert bulk_stale.status_code == 200
+
+    upstream = client.get('/api/v1/artifacts/value_source/value')
+    downstream = client.get('/api/v1/artifacts/table_sink/sample_df')
+    assert upstream.status_code == 200
+    assert downstream.status_code == 200
+    assert upstream.json()['state'] == 'stale'
+    assert downstream.json()['state'] == 'stale'
+
+
+def test_marking_outputs_ready_is_blocked_when_inputs_are_stale(tmp_path) -> None:
+    project_root = init_project_root(tmp_path / 'project').root
+    app = create_app(project_path=project_root)
+    client = TestClient(app)
+
+    opened = client.get('/api/v1/project/snapshot')
+    graph_version = opened.json()['graph']['meta']['graph_version']
+
+    created = client.patch(
+        '/api/v1/graph',
+        json={
+            'graph_version': graph_version,
+            'operations': [
+                {
+                    'type': 'add_notebook_node',
+                    'node_id': 'value_source',
+                    'title': 'Value Source',
+                    'template_ref': 'builtin/value_input',
+                },
+                {
+                    'type': 'add_notebook_node',
+                    'node_id': 'table_sink',
+                    'title': 'Table Sink',
+                    'template_ref': 'builtin/test_starter_notebook',
+                },
+            ],
+        },
+    )
+    assert created.status_code == 200
+
+    connected = client.patch(
+        '/api/v1/graph',
+        json={
+            'graph_version': created.json()['meta']['graph_version'],
+            'operations': [
+                {
+                    'type': 'add_edge',
+                    'source_node': 'value_source',
+                    'source_port': 'value',
+                    'target_node': 'table_sink',
+                    'target_port': 'sample_count',
+                }
+            ],
+        },
+    )
+    assert connected.status_code == 200
+
+    run = client.post(
+        '/api/v1/nodes/table_sink/run',
+        json={'mode': 'run_stale', 'action': 'run_upstream'},
+    )
+    assert run.status_code == 200
+
+    stale_source = client.post(
+        '/api/v1/nodes/value_source/outputs/state',
+        json={'state': 'stale'},
+    )
+    assert stale_source.status_code == 200
+
+    blocked = client.post(
+        '/api/v1/nodes/table_sink/outputs/state',
+        json={'state': 'ready', 'only_current_state': 'stale'},
+    )
+    assert blocked.status_code == 400
+    assert 'stale or pending inputs' in blocked.json()['detail']
+
+
+def test_frozen_notebook_blocks_upstream_graph_edits_and_editor_sessions(tmp_path) -> None:
+    project_root = init_project_root(tmp_path / 'project').root
+    app = create_app(project_path=project_root)
+    client = TestClient(app)
+
+    opened = client.get('/api/v1/project/snapshot')
+    graph_version = opened.json()['graph']['meta']['graph_version']
+
+    created = client.patch(
+        '/api/v1/graph',
+        json={
+            'graph_version': graph_version,
+            'operations': [
+                {
+                    'type': 'add_notebook_node',
+                    'node_id': 'value_source',
+                    'title': 'Value Source',
+                    'template_ref': 'builtin/value_input',
+                },
+                {
+                    'type': 'add_notebook_node',
+                    'node_id': 'table_sink',
+                    'title': 'Table Sink',
+                    'template_ref': 'builtin/test_starter_notebook',
+                },
+            ],
+        },
+    )
+    assert created.status_code == 200
+
+    connected = client.patch(
+        '/api/v1/graph',
+        json={
+            'graph_version': created.json()['meta']['graph_version'],
+            'operations': [
+                {
+                    'type': 'add_edge',
+                    'source_node': 'value_source',
+                    'source_port': 'value',
+                    'target_node': 'table_sink',
+                    'target_port': 'sample_count',
+                }
+            ],
+        },
+    )
+    assert connected.status_code == 200
+
+    frozen = client.patch(
+        '/api/v1/graph',
+        json={
+            'graph_version': connected.json()['meta']['graph_version'],
+            'operations': [
+                {
+                    'type': 'update_node_frozen',
+                    'node_id': 'table_sink',
+                    'frozen': True,
+                }
+            ],
+        },
+    )
+    assert frozen.status_code == 200
+
+    snapshot = client.get('/api/v1/project/snapshot').json()
+    nodes = {node['id']: node for node in snapshot['graph']['nodes']}
+    assert nodes['table_sink']['ui']['frozen'] is True
+    assert nodes['value_source']['ui']['frozen'] is True
+
+    blocked_edit = client.post(
+        '/api/v1/nodes/value_source/run',
+        json={'mode': 'edit_run', 'action': None},
+    )
+    assert blocked_edit.status_code == 400
+    assert 'frozen notebook' in blocked_edit.json()['detail']
+    assert 'table_sink' in blocked_edit.json()['detail']
+
+    blocked_graph_edit = client.patch(
+        '/api/v1/graph',
+        json={
+            'graph_version': frozen.json()['meta']['graph_version'],
+            'operations': [
+                {
+                    'type': 'remove_edge',
+                    'edge_id': 'value_source.value__table_sink.sample_count',
+                }
+            ],
+        },
+    )
+    assert blocked_graph_edit.status_code == 409
+    assert 'frozen notebook' in blocked_graph_edit.json()['detail']
+    assert 'table_sink' in blocked_graph_edit.json()['detail']
+
+
+def test_freezing_notebook_is_blocked_when_upstream_editor_is_open(tmp_path) -> None:
+    project_root = init_project_root(tmp_path / 'project').root
+    app = create_app(project_path=project_root)
+    client = TestClient(app)
+
+    opened = client.get('/api/v1/project/snapshot')
+    graph_version = opened.json()['graph']['meta']['graph_version']
+
+    created = client.patch(
+        '/api/v1/graph',
+        json={
+            'graph_version': graph_version,
+            'operations': [
+                {
+                    'type': 'add_notebook_node',
+                    'node_id': 'value_source',
+                    'title': 'Value Source',
+                    'template_ref': 'builtin/value_input',
+                },
+                {
+                    'type': 'add_notebook_node',
+                    'node_id': 'table_sink',
+                    'title': 'Table Sink',
+                    'template_ref': 'builtin/test_starter_notebook',
+                },
+            ],
+        },
+    )
+    assert created.status_code == 200
+
+    connected = client.patch(
+        '/api/v1/graph',
+        json={
+            'graph_version': created.json()['meta']['graph_version'],
+            'operations': [
+                {
+                    'type': 'add_edge',
+                    'source_node': 'value_source',
+                    'source_port': 'value',
+                    'target_node': 'table_sink',
+                    'target_port': 'sample_count',
+                }
+            ],
+        },
+    )
+    assert connected.status_code == 200
+
+    started = client.post(
+        '/api/v1/nodes/value_source/run',
+        json={'mode': 'edit_run', 'action': None},
+    )
+    assert started.status_code == 200
+
+    frozen = client.patch(
+        '/api/v1/graph',
+        json={
+            'graph_version': connected.json()['meta']['graph_version'],
+            'operations': [
+                {
+                    'type': 'update_node_frozen',
+                    'node_id': 'table_sink',
+                    'frozen': True,
+                }
+            ],
+        },
+    )
+    assert frozen.status_code == 409
+    assert 'upstream editor' in frozen.json()['detail']
+    assert 'value_source' in frozen.json()['detail']
+
+
+def test_unfreezing_upstream_notebook_also_unfreezes_frozen_descendants(tmp_path) -> None:
+    project_root = init_project_root(tmp_path / 'project').root
+    app = create_app(project_path=project_root)
+    client = TestClient(app)
+
+    opened = client.get('/api/v1/project/snapshot')
+    graph_version = opened.json()['graph']['meta']['graph_version']
+
+    created = client.patch(
+        '/api/v1/graph',
+        json={
+            'graph_version': graph_version,
+            'operations': [
+                {
+                    'type': 'add_notebook_node',
+                    'node_id': 'value_source',
+                    'title': 'Value Source',
+                    'template_ref': 'builtin/value_input',
+                },
+                {
+                    'type': 'add_notebook_node',
+                    'node_id': 'table_sink',
+                    'title': 'Table Sink',
+                    'template_ref': 'builtin/test_starter_notebook',
+                },
+            ],
+        },
+    )
+    assert created.status_code == 200
+
+    connected = client.patch(
+        '/api/v1/graph',
+        json={
+            'graph_version': created.json()['meta']['graph_version'],
+            'operations': [
+                {
+                    'type': 'add_edge',
+                    'source_node': 'value_source',
+                    'source_port': 'value',
+                    'target_node': 'table_sink',
+                    'target_port': 'sample_count',
+                }
+            ],
+        },
+    )
+    assert connected.status_code == 200
+
+    frozen = client.patch(
+        '/api/v1/graph',
+        json={
+            'graph_version': connected.json()['meta']['graph_version'],
+            'operations': [
+                {
+                    'type': 'update_node_frozen',
+                    'node_id': 'table_sink',
+                    'frozen': True,
+                }
+            ],
+        },
+    )
+    assert frozen.status_code == 200
+
+    unfrozen = client.patch(
+        '/api/v1/graph',
+        json={
+            'graph_version': frozen.json()['meta']['graph_version'],
+            'operations': [
+                {
+                    'type': 'update_node_frozen',
+                    'node_id': 'value_source',
+                    'frozen': False,
+                }
+            ],
+        },
+    )
+    assert unfrozen.status_code == 200
+
+    snapshot = client.get('/api/v1/project/snapshot').json()
+    nodes = {node['id']: node for node in snapshot['graph']['nodes']}
+    assert nodes['value_source']['ui']['frozen'] is False
+    assert nodes['table_sink']['ui']['frozen'] is False
+
+
+def test_deleting_node_stops_active_editor_session(tmp_path) -> None:
+    project_root = init_project_root(tmp_path / 'project').root
+    app = create_app(project_path=project_root)
+    client = TestClient(app)
+    container = app.state.container
+
+    opened = client.get('/api/v1/project/snapshot')
+    graph_version = opened.json()['graph']['meta']['graph_version']
+
+    created = client.patch(
+        '/api/v1/graph',
+        json={
+            'graph_version': graph_version,
+            'operations': [
+                {
+                    'type': 'add_notebook_node',
+                    'node_id': 'sample_node',
+                    'title': 'Sample Node',
+                }
+            ],
+        },
+    )
+    assert created.status_code == 200
+
+    started = client.post(
+        '/api/v1/nodes/sample_node/run',
+        json={'mode': 'edit_run', 'action': None},
+    )
+    assert started.status_code == 200
+    session_id = started.json()['session_id']
+    assert container.run_service.session_manager.get(session_id) is not None
+
+    deleted = client.patch(
+        '/api/v1/graph',
+        json={
+            'graph_version': created.json()['meta']['graph_version'],
+            'operations': [
+                {
+                    'type': 'delete_node',
+                    'node_id': 'sample_node',
+                }
+            ],
+        },
+    )
+    assert deleted.status_code == 200
+    assert container.run_service.session_manager.get(session_id) is None
+
+
+def test_freezing_node_stops_active_editor_session(tmp_path) -> None:
+    project_root = init_project_root(tmp_path / 'project').root
+    app = create_app(project_path=project_root)
+    client = TestClient(app)
+    container = app.state.container
+
+    opened = client.get('/api/v1/project/snapshot')
+    graph_version = opened.json()['graph']['meta']['graph_version']
+
+    created = client.patch(
+        '/api/v1/graph',
+        json={
+            'graph_version': graph_version,
+            'operations': [
+                {
+                    'type': 'add_notebook_node',
+                    'node_id': 'sample_node',
+                    'title': 'Sample Node',
+                }
+            ],
+        },
+    )
+    assert created.status_code == 200
+
+    started = client.post(
+        '/api/v1/nodes/sample_node/run',
+        json={'mode': 'edit_run', 'action': None},
+    )
+    assert started.status_code == 200
+    session_id = started.json()['session_id']
+    assert container.run_service.session_manager.get(session_id) is not None
+
+    frozen = client.patch(
+        '/api/v1/graph',
+        json={
+            'graph_version': created.json()['meta']['graph_version'],
+            'operations': [
+                {
+                    'type': 'update_node_frozen',
+                    'node_id': 'sample_node',
+                    'frozen': True,
+                }
+            ],
+        },
+    )
+    assert frozen.status_code == 200
+    assert container.run_service.session_manager.get(session_id) is None

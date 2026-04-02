@@ -89,6 +89,13 @@ class SessionManager:
         if session.process.poll() is None:
             session.process.terminate()
 
+    def stop_by_node(self, node_id: str) -> bool:
+        session = self.get_by_node(node_id)
+        if session is None:
+            return False
+        self.stop(session.session_id)
+        return True
+
     def stop_all(self) -> None:
         for session_id in list(self._sessions):
             self.stop(session_id)

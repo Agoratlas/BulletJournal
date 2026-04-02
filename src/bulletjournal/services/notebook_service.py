@@ -27,7 +27,7 @@ class NotebookService:
         interface_payload = interface.to_dict()
         blocking_errors = [issue for issue in interface.issues if issue.severity == ValidationSeverity.ERROR]
         project.state_db.replace_validation_issues(node_id, interface.issues)
-        removed_edges: list[str] = []
+        removed_edges: list[dict[str, Any]] = []
         if not blocking_errors:
             removed_edges = self._sync_ports(node_id, previous, interface)
             durable_warnings = self._removed_edge_warnings(node_id=node_id, removed_edges=removed_edges)
@@ -81,7 +81,12 @@ class NotebookService:
         path.write_text(source, encoding='utf-8')
         return path
 
-    def _sync_ports(self, node_id: str, previous: dict[str, Any] | None, current: NotebookInterface) -> list[str]:
+    def _sync_ports(
+        self,
+        node_id: str,
+        previous: dict[str, Any] | None,
+        current: NotebookInterface,
+    ) -> list[dict[str, Any]]:
         project = self.project_service.require_project()
         previous_outputs = _output_ports(previous)
         current_outputs = {port.name: port for port in [*current.outputs, *current.assets]}
@@ -114,7 +119,12 @@ class NotebookService:
         )
         return removed_edges
 
-    def _removed_edge_warnings(self, *, node_id: str, removed_edges: list[str]) -> list[ValidationIssue]:
+    def _removed_edge_warnings(
+        self,
+        *,
+        node_id: str,
+        removed_edges: list[dict[str, Any]],
+    ) -> list[ValidationIssue]:
         if not removed_edges:
             return []
         return [
@@ -122,8 +132,18 @@ class NotebookService:
                 node_id=node_id,
                 severity=ValidationSeverity.WARNING,
                 code='edges_removed_for_port_change',
-                message='One or more graph edges were removed after notebook port changes.',
-                details={'removed_edges': removed_edges},
+                message=(
+                    'Graph edges were removed after notebook port changes: '
+                    + '; '.join(
+                        f'{edge["source_node"]}/{edge["source_port"]} -> {edge["target_node"]}/{edge["target_port"]}'
+                        for edge in removed_edges
+                    )
+                ),
+                details={
+                    'removed_edge_ids': [str(edge['id']) for edge in removed_edges],
+                    'removed_edge_count': len(removed_edges),
+                    'removed_edges': removed_edges,
+                },
             )
         ]
 

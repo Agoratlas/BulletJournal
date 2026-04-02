@@ -28,6 +28,19 @@ export function executionLogDownloadUrl(nodeId: string, stream: 'stdout' | 'stde
   return appUrl(`/api/v1/nodes/${encodeURIComponent(nodeId)}/execution-logs/${stream}/download`)
 }
 
+export function notebookDownloadUrl(nodeId: string): string {
+  return appUrl(`/api/v1/nodes/${encodeURIComponent(nodeId)}/notebook/download`)
+}
+
+export async function downloadNotebookSource(nodeId: string): Promise<string> {
+  const response = await fetch(notebookDownloadUrl(nodeId))
+  if (!response.ok) {
+    const text = await response.text()
+    throw new Error(text || `HTTP ${response.status}`)
+  }
+  return response.text()
+}
+
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(appUrl(url), {
     ...init,
@@ -144,6 +157,20 @@ export async function uploadFile(nodeId: string, file: File) {
     throw new Error(text)
   }
   return response.json() as Promise<Record<string, unknown>>
+}
+
+export async function setArtifactState(nodeId: string, artifactName: string, state: 'ready' | 'stale') {
+  return request<Record<string, unknown>>(`/api/v1/artifacts/${encodeURIComponent(nodeId)}/${encodeURIComponent(artifactName)}/state`, {
+    method: 'POST',
+    body: JSON.stringify({ state }),
+  })
+}
+
+export async function setNodeOutputsState(nodeId: string, state: 'ready' | 'stale', onlyCurrentState: 'ready' | 'stale' | 'pending' | null = null) {
+  return request<Record<string, unknown>>(`/api/v1/nodes/${encodeURIComponent(nodeId)}/outputs/state`, {
+    method: 'POST',
+    body: JSON.stringify({ state, only_current_state: onlyCurrentState }),
+  })
 }
 
 export async function listSessions(): Promise<SessionRecord[]> {

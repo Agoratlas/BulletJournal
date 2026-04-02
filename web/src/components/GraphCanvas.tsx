@@ -6,12 +6,13 @@ import ReactFlow, {
   Handle,
   MarkerType,
   Position,
-  applyNodeChanges,
+  SelectionMode,
+  type NodeChange,
   useStore,
+  useUpdateNodeInternals,
   type Connection,
   type Edge,
   type EdgeChange,
-  type NodeChange,
   type Node,
   type NodeDragHandler,
   type OnConnectStartParams,
@@ -28,14 +29,19 @@ type GraphCanvasProps = {
   snapshot: ProjectSnapshot
   serverNowMs?: number
   serverNowClientAnchorMs?: number
+  selectedNodeIds: string[]
+  selectedEdgeIds: string[]
   activeRunNodeId?: string | null
   queuedRunNodeIds?: string[]
   completedRunNodeIds?: string[]
   activeEditorNodeIds?: string[]
   onConnect: (connection: Connection) => void
   onEdgesChange: (changes: EdgeChange[]) => void
+  onSelectionChange: (nodeIds: string[], edgeIds: string[]) => void
   onNodeSelect: (nodeId: string) => void
+  onEdgeSelect: (edgeId: string) => void
   onNodeContextMenu: (nodeId: string, position: { x: number; y: number }) => void
+  onPortContextMenu: (nodeId: string, portName: string, side: 'input' | 'output', position: { x: number; y: number }) => void
   onEditFileNode: (nodeId: string) => void
   onOpenEditor: (nodeId: string) => void
   onKillEditor: (nodeId: string) => void
@@ -65,6 +71,7 @@ type BulletJournalNodeData = {
   completedRunNodeIds: string[]
   onSelect: (nodeId: string) => void
   onNodeContextMenu: (nodeId: string, position: { x: number; y: number }) => void
+  onPortContextMenu: (nodeId: string, portName: string, side: 'input' | 'output', position: { x: number; y: number }) => void
   onEditFileNode: (nodeId: string) => void
   onOpenEditor: (nodeId: string) => void
   onKillEditor: (nodeId: string) => void
@@ -117,6 +124,7 @@ function PortRow({
   side,
   connectionIntent,
   index,
+  onPortContextMenu,
 }: {
   node: NodeRecord
   snapshot: ProjectSnapshot
@@ -124,6 +132,7 @@ function PortRow({
   side: 'input' | 'output'
   connectionIntent: ConnectionIntent
   index: number
+  onPortContextMenu: (nodeId: string, portName: string, side: 'input' | 'output', position: { x: number; y: number }) => void
 }) {
   const state =
     side === 'input'
@@ -138,7 +147,15 @@ function PortRow({
   const isCompatible = !connectionIntent || isCompatibleWithIntent(snapshot, node, port, side, connectionIntent)
 
   return (
-    <div className={`rf-port-row ${side} ${isConnecting ? 'connecting' : ''} ${isCompatible ? '' : 'incompatible'}`} title={`${port.name} (${port.data_type})`}>
+    <div
+      className={`rf-port-row ${side} ${isConnecting ? 'connecting' : ''} ${isCompatible ? '' : 'incompatible'}`}
+      title={`${port.name} (${port.data_type})`}
+      onContextMenu={(event) => {
+        event.preventDefault()
+        event.stopPropagation()
+        onPortContextMenu(node.id, port.name, side, { x: event.clientX, y: event.clientY })
+      }}
+    >
       {side === 'input' ? (
         <Handle
           type="target"
@@ -166,7 +183,7 @@ function PortRow({
 }
 
 const BulletJournalNodeCard = memo(({ data, selected }: NodeProps<BulletJournalNodeData>) => {
-  const { node, snapshot, onSelect, onNodeContextMenu, onEditFileNode, onOpenEditor, onKillEditor, onRunNode, onOpenArtifacts } = data
+  const { node, snapshot, onSelect, onNodeContextMenu, onPortContextMenu, onEditFileNode, onOpenEditor, onKillEditor, onRunNode, onOpenArtifacts } = data
   const visible = visibleInputs(node)
   const hidden = hiddenInputs(node)
   const outputs = outputsForNode(node)
@@ -252,10 +269,19 @@ const BulletJournalNodeCard = memo(({ data, selected }: NodeProps<BulletJournalN
     <div
       className={`rf-node state-${node.state} ${selected ? 'is-selected' : ''} ${hasBlockingValidationIssues ? 'has-validation-error' : ''} ${isExecutionActive ? 'execution-active' : ''} ${isExecutionQueued ? 'execution-queued' : ''} ${isExecutionComplete ? 'execution-complete' : ''}`}
       title={validationSummary || undefined}
-      onClick={() => onSelect(node.id)}
+      onDoubleClick={(event) => {
+        event.stopPropagation()
+        if (node.kind === 'notebook') {
+          onOpenEditor(node.id)
+          return
+        }
+        if (node.kind === 'file_input') {
+          onEditFileNode(node.id)
+        }
+      }}
       onContextMenu={(event) => {
         event.preventDefault()
-        onSelect(node.id)
+        event.stopPropagation()
         onNodeContextMenu(node.id, { x: event.clientX, y: event.clientY })
       }}
     >
@@ -265,6 +291,7 @@ const BulletJournalNodeCard = memo(({ data, selected }: NodeProps<BulletJournalN
           <h4>{node.title}</h4>
           <span>{node.id}</span>
         </div>
+        {node.ui?.frozen ? <div className="rf-node-freeze-pill">Frozen</div> : null}
         {hasBlockingValidationIssues ? <div className="rf-node-issue-pill" title={validationSummary}>{blockingValidationIssues.length} error{blockingValidationIssues.length === 1 ? '' : 's'}</div> : null}
         {executionTimerLabel ? <div className={`rf-node-timer ${isExecutionActive ? 'running' : 'complete'}`} title={isExecutionActive ? 'Current orchestrated run time' : 'Most recent orchestrated run time'}>{executionTimerLabel}</div> : null}
       </div>
@@ -288,13 +315,13 @@ const BulletJournalNodeCard = memo(({ data, selected }: NodeProps<BulletJournalN
       <div className="rf-node-body">
         <div className="rf-port-column">
           {visible.map((port, index) => (
-            <PortRow key={`in-${port.name}`} node={node} snapshot={snapshot} port={port} side="input" connectionIntent={connectionIntent} index={index} />
+            <PortRow key={`in-${port.name}`} node={node} snapshot={snapshot} port={port} side="input" connectionIntent={connectionIntent} index={index} onPortContextMenu={onPortContextMenu} />
           ))}
           {hidden.length ? <div className="rf-hidden-inputs">+ {hidden.length} hidden inputs</div> : null}
         </div>
         <div className="rf-port-column output">
           {outputs.map((port, index) => (
-            <PortRow key={`out-${port.name}`} node={node} snapshot={snapshot} port={port} side="output" connectionIntent={connectionIntent} index={index} />
+            <PortRow key={`out-${port.name}`} node={node} snapshot={snapshot} port={port} side="output" connectionIntent={connectionIntent} index={index} onPortContextMenu={onPortContextMenu} />
           ))}
           {assets.length ? <div className="rf-asset-note">+ {assets.length} asset{assets.length === 1 ? '' : 's'}</div> : null}
         </div>
@@ -371,12 +398,13 @@ function isCompatibleWithIntent(snapshot: ProjectSnapshot, node: NodeRecord, por
   return targetPort?.data_type === port.data_type
 }
 
-export function GraphCanvas({ snapshot, serverNowMs = Date.now(), serverNowClientAnchorMs = Date.now(), activeRunNodeId = null, queuedRunNodeIds = [], completedRunNodeIds = [], activeEditorNodeIds = [], onConnect, onEdgesChange, onNodeSelect, onNodeContextMenu, onEditFileNode, onOpenEditor, onKillEditor, onRunNode, onOpenArtifacts, onCanvasInteract, onCanvasClear, onNodeMove, onNodesDelete, draggedBlock, onBlockDrop }: GraphCanvasProps) {
-  const { fitView, screenToFlowPosition } = useReactFlow()
-  const [selectedEdgeIds, setSelectedEdgeIds] = useState<string[]>([])
+export function GraphCanvas({ snapshot, serverNowMs = Date.now(), serverNowClientAnchorMs = Date.now(), selectedNodeIds, selectedEdgeIds, activeRunNodeId = null, queuedRunNodeIds = [], completedRunNodeIds = [], activeEditorNodeIds = [], onConnect, onEdgesChange, onSelectionChange, onNodeSelect, onEdgeSelect, onNodeContextMenu, onPortContextMenu, onEditFileNode, onOpenEditor, onKillEditor, onRunNode, onOpenArtifacts, onCanvasInteract, onCanvasClear, onNodeMove, onNodesDelete, draggedBlock, onBlockDrop }: GraphCanvasProps) {
+  const { screenToFlowPosition } = useReactFlow()
+  const updateNodeInternals = useUpdateNodeInternals()
   const pendingPositionsRef = useRef<Record<string, { x: number; y: number }>>({})
-  const hasFitViewRef = useRef(false)
-  const shouldAutoFitOnMountRef = useRef(snapshot.graph.nodes.length > 0)
+  const [pendingPositionVersion, setPendingPositionVersion] = useState(0)
+  const [nodeDimensions, setNodeDimensions] = useState<Record<string, { width: number; height: number }>>({})
+  const lastHandleSignatureRef = useRef<Record<string, string>>({})
 
   const mappedNodes = useMemo<Node<BulletJournalNodeData>[]>(() => {
     const layoutByNode = Object.fromEntries(snapshot.graph.layout.map((entry) => [entry.node_id, entry]))
@@ -396,6 +424,7 @@ export function GraphCanvas({ snapshot, serverNowMs = Date.now(), serverNowClien
             activeEditorNodeIds,
             onSelect: onNodeSelect,
             onNodeContextMenu,
+            onPortContextMenu,
             onEditFileNode,
             onOpenEditor,
             onKillEditor,
@@ -404,44 +433,68 @@ export function GraphCanvas({ snapshot, serverNowMs = Date.now(), serverNowClien
         },
         position: { x: layout?.x ?? 80, y: layout?.y ?? 80 },
         style: { width: layout?.w ?? 360 },
+        width: nodeDimensions[node.id]?.width,
+        height: nodeDimensions[node.id]?.height,
+        selected: selectedNodeIds.includes(node.id),
       }
     })
-  }, [snapshot, serverNowMs, serverNowClientAnchorMs, activeRunNodeId, queuedRunNodeIds, completedRunNodeIds, activeEditorNodeIds, onNodeContextMenu, onEditFileNode, onKillEditor, onNodeSelect, onOpenArtifacts, onOpenEditor, onRunNode])
-
-  const [nodes, setNodes] = useState<Node<BulletJournalNodeData>[]>(mappedNodes)
+  }, [snapshot, serverNowMs, serverNowClientAnchorMs, selectedNodeIds, activeRunNodeId, queuedRunNodeIds, completedRunNodeIds, activeEditorNodeIds, onNodeContextMenu, onPortContextMenu, onEditFileNode, onKillEditor, onNodeSelect, onOpenArtifacts, onOpenEditor, onRunNode, nodeDimensions])
 
   useEffect(() => {
-    setNodes((current) => {
-      const currentById = new Map(current.map((node) => [node.id, node]))
-      return mappedNodes.map((node) => {
-        const currentNode = currentById.get(node.id)
-        const pendingPosition = pendingPositionsRef.current[node.id]
-
-        if (pendingPosition) {
-          const snapshotCaughtUp = node.position.x === pendingPosition.x && node.position.y === pendingPosition.y
-          if (snapshotCaughtUp) {
-            delete pendingPositionsRef.current[node.id]
-          } else {
-            return {
-              ...node,
-              position: pendingPosition,
-              dragging: currentNode?.dragging,
-            }
-          }
-        }
-
-        if (currentNode?.dragging) {
-          return {
-            ...node,
-            position: currentNode.position,
-            dragging: true,
-          }
-        }
-
-        return node
-      })
+    const currentNodeIds = new Set(snapshot.graph.nodes.map((node) => node.id))
+    setNodeDimensions((current) => {
+      const next = Object.fromEntries(
+        Object.entries(current).filter(([nodeId]) => currentNodeIds.has(nodeId)),
+      )
+      return Object.keys(next).length === Object.keys(current).length ? current : next
     })
-  }, [mappedNodes])
+  }, [snapshot.graph.nodes])
+
+  useEffect(() => {
+    const nextSignatureById = Object.fromEntries(
+      snapshot.graph.nodes.map((node) => [
+        node.id,
+        JSON.stringify({
+          inputs: (node.interface?.inputs ?? []).map((port) => [port.name, port.data_type, port.declaration_index ?? null]),
+          outputs: (node.interface?.outputs ?? []).map((port) => [port.name, port.data_type, port.declaration_index ?? null]),
+          assets: (node.interface?.assets ?? []).map((port) => [port.name, port.data_type, port.declaration_index ?? null]),
+        }),
+      ]),
+    )
+    const changedNodeIds = Object.entries(nextSignatureById)
+      .filter(([nodeId, signature]) => lastHandleSignatureRef.current[nodeId] !== signature)
+      .map(([nodeId]) => nodeId)
+    lastHandleSignatureRef.current = nextSignatureById
+    if (!changedNodeIds.length) {
+      return
+    }
+    const frame = window.requestAnimationFrame(() => updateNodeInternals(changedNodeIds))
+    return () => window.cancelAnimationFrame(frame)
+  }, [snapshot.graph.nodes, updateNodeInternals])
+
+  const nodes = useMemo(() => {
+    let changed = false
+    const nextNodes = mappedNodes.map((node) => {
+      const pendingPosition = pendingPositionsRef.current[node.id]
+      if (!pendingPosition) {
+        return node
+      }
+      const snapshotCaughtUp = node.position.x === pendingPosition.x && node.position.y === pendingPosition.y
+      if (snapshotCaughtUp) {
+        changed = true
+        delete pendingPositionsRef.current[node.id]
+        return node
+      }
+      return {
+        ...node,
+        position: pendingPosition,
+      }
+    })
+    if (changed) {
+      window.setTimeout(() => setPendingPositionVersion((current) => current + 1), 0)
+    }
+    return nextNodes
+  }, [mappedNodes, pendingPositionVersion])
 
   const edges = useMemo<Edge[]>(() => {
     return snapshot.graph.edges.map((edge) => ({
@@ -461,6 +514,7 @@ export function GraphCanvas({ snapshot, serverNowMs = Date.now(), serverNowClien
   const handleNodeDragStop: NodeDragHandler = (_event, node) => {
     onCanvasInteract()
     pendingPositionsRef.current[node.id] = { x: node.position.x, y: node.position.y }
+    setPendingPositionVersion((current) => current + 1)
     onNodeMove(node.id, node.position.x, node.position.y)
   }
 
@@ -472,6 +526,7 @@ export function GraphCanvas({ snapshot, serverNowMs = Date.now(), serverNowClien
         nodeTypes={nodeTypes}
         minZoom={0.18}
         maxZoom={1.35}
+        defaultViewport={{ x: 0, y: 0, zoom: 1 }}
         zoomOnDoubleClick={false}
         connectionMode={ConnectionMode.Strict}
         snapToGrid
@@ -479,22 +534,69 @@ export function GraphCanvas({ snapshot, serverNowMs = Date.now(), serverNowClien
         nodesDraggable
         nodesConnectable
         elementsSelectable
+        selectionOnDrag
+        selectionMode={SelectionMode.Partial}
+        selectionKeyCode={['Shift']}
+        multiSelectionKeyCode={['Meta', 'Shift', 'Control']}
         deleteKeyCode={['Backspace', 'Delete']}
         onNodesChange={(changes: NodeChange[]) => {
-          setNodes((current) => applyNodeChanges(changes, current))
+          let positionChanged = false
+          for (const change of changes) {
+            if (change.type !== 'position' || !change.position) {
+              continue
+            }
+            const previous = pendingPositionsRef.current[change.id]
+            if (previous?.x === change.position.x && previous?.y === change.position.y) {
+              continue
+            }
+            pendingPositionsRef.current[change.id] = {
+              x: change.position.x,
+              y: change.position.y,
+            }
+            positionChanged = true
+          }
+          const dimensionChanges = changes.filter(
+            (change): change is NodeChange & { type: 'dimensions'; dimensions: { width: number; height: number } } => {
+              return change.type === 'dimensions'
+                && typeof change.dimensions?.width === 'number'
+                && typeof change.dimensions?.height === 'number'
+            },
+          )
+          if (dimensionChanges.length) {
+            setNodeDimensions((current) => {
+              const next = { ...current }
+              let changed = false
+              for (const change of dimensionChanges) {
+                const previous = current[change.id]
+                if (previous?.width === change.dimensions.width && previous?.height === change.dimensions.height) {
+                  continue
+                }
+                next[change.id] = {
+                  width: change.dimensions.width,
+                  height: change.dimensions.height,
+                }
+                changed = true
+              }
+              return changed ? next : current
+            })
+          }
+          if (positionChanged) {
+            setPendingPositionVersion((current) => current + 1)
+          }
         }}
         onEdgesChange={(changes) => {
           onEdgesChange(changes)
         }}
         onEdgeClick={(_event, edge) => {
           onCanvasInteract()
-          onNodeSelect('')
-          setSelectedEdgeIds([edge.id])
+          onEdgeSelect(edge.id)
         }}
-        onNodeClick={(_event, node) => {
+        onNodeClick={(event, node) => {
           onCanvasInteract()
+          if (event.metaKey || event.ctrlKey || event.shiftKey) {
+            return
+          }
           onNodeSelect(node.id)
-          setSelectedEdgeIds([])
         }}
         onNodesDelete={onNodesDelete}
         onConnect={onConnect}
@@ -513,22 +615,16 @@ export function GraphCanvas({ snapshot, serverNowMs = Date.now(), serverNowClien
           const targetPort = [...visibleInputs(targetNode), ...hiddenInputs(targetNode)].find((item) => item.name === targetPortName)
           return Boolean(sourcePort && targetPort && sourcePort.data_type === targetPort.data_type)
         }}
-        onNodeDoubleClick={(_event, node) => {
-          const current = snapshot.graph.nodes.find((item) => item.id === node.id)
-          if (current?.kind === 'notebook') {
-            onOpenEditor(node.id)
-          } else if (current?.kind === 'file_input') {
-            onEditFileNode(node.id)
-          }
-        }}
         onNodeDragStop={handleNodeDragStop}
         onPaneClick={() => {
           onCanvasInteract()
           onCanvasClear()
-          setSelectedEdgeIds([])
         }}
         onSelectionChange={({ nodes: selectedNodes, edges: selectedEdges }) => {
-          setSelectedEdgeIds(selectedEdges.map((edge) => edge.id))
+          onSelectionChange(
+            selectedNodes.map((node) => node.id),
+            selectedEdges.map((edge) => edge.id),
+          )
         }}
         onMoveStart={onCanvasInteract}
         onNodeDragStart={onCanvasInteract}
@@ -536,22 +632,12 @@ export function GraphCanvas({ snapshot, serverNowMs = Date.now(), serverNowClien
           onCanvasInteract()
         }}
         defaultEdgeOptions={{ markerEnd: { type: MarkerType.ArrowClosed } }}
-        onInit={() => {
-          if (hasFitViewRef.current || !shouldAutoFitOnMountRef.current) {
-            return
-          }
-          const frame = window.requestAnimationFrame(() => {
-            fitView({ padding: 0.18, minZoom: 0.18, duration: 0 })
-            hasFitViewRef.current = true
-          })
-          return () => window.cancelAnimationFrame(frame)
-        }}
         onDragOver={(event) => {
           if (!draggedBlock) {
             return
           }
           event.preventDefault()
-          event.dataTransfer.dropEffect = 'move'
+          event.dataTransfer.dropEffect = 'copy'
         }}
         onDragEnter={(event) => {
           if (!draggedBlock) {

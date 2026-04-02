@@ -5,6 +5,11 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse, Response
 
+from bulletjournal.api.schemas import (
+    ArtifactStateChangeRequest,
+    NodeOutputsStateChangeRequest,
+)
+
 router = APIRouter(tags=['artifacts'])
 
 
@@ -71,3 +76,32 @@ def download_execution_log(node_id: str, stream: str, request: Request):
     if not log_path.exists() or not log_path.is_file():
         raise HTTPException(status_code=404, detail='No execution log found for node.')
     return FileResponse(Path(log_path), media_type='text/plain; charset=utf-8', filename=log_path.name)
+
+
+@router.post('/artifacts/{node_id}/{artifact_name}/state')
+def set_artifact_state(
+    node_id: str,
+    artifact_name: str,
+    payload: ArtifactStateChangeRequest,
+    request: Request,
+):
+    container = request.app.state.container
+    return container.artifact_service.set_artifact_state(
+        node_id,
+        artifact_name,
+        state=payload.state,
+    )
+
+
+@router.post('/nodes/{node_id}/outputs/state')
+def set_node_output_states(
+    node_id: str,
+    payload: NodeOutputsStateChangeRequest,
+    request: Request,
+):
+    container = request.app.state.container
+    return container.artifact_service.set_node_output_states(
+        node_id,
+        state=payload.state,
+        only_current_state=payload.only_current_state,
+    )

@@ -236,7 +236,7 @@ class StateDB:
                 'message = excluded.message, '
                 'details_json = excluded.details_json, '
                 'created_at = excluded.created_at, '
-                'dismissed_at = persistent_notices.dismissed_at',
+                'dismissed_at = NULL',
                 (issue_id, node_id, severity.value, code, message, json_dumps(details), now),
             )
             connection.commit()

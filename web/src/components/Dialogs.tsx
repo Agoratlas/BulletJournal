@@ -1,5 +1,5 @@
 import type { ChangeEvent, FormEvent, ReactNode } from 'react'
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 
 import { Info, Plus, X } from './Icons'
 
@@ -12,9 +12,29 @@ type ModalProps = {
 }
 
 export function Modal({ title, onClose, children, contentClassName, showCloseButton = true }: ModalProps) {
+  const shouldCloseOnClickRef = useRef(false)
+
   return (
-    <div className="modal-backdrop" onClick={onClose}>
-      <div className={`modal-card${contentClassName ? ` ${contentClassName}` : ''}`} onClick={(event) => event.stopPropagation()}>
+    <div
+      className="modal-backdrop"
+      onPointerDown={(event) => {
+        shouldCloseOnClickRef.current = event.target === event.currentTarget
+      }}
+      onClick={(event) => {
+        const shouldClose = shouldCloseOnClickRef.current && event.target === event.currentTarget
+        shouldCloseOnClickRef.current = false
+        if (shouldClose) {
+          onClose()
+        }
+      }}
+    >
+      <div
+        className={`modal-card${contentClassName ? ` ${contentClassName}` : ''}`}
+        onPointerDown={() => {
+          shouldCloseOnClickRef.current = false
+        }}
+        onClick={(event) => event.stopPropagation()}
+      >
         <div className="modal-header">
           <h3>{title}</h3>
           {showCloseButton ? <button className="ghost-button modal-close-button" onClick={onClose} aria-label="Close dialog"><X width={18} height={18} /></button> : null}
