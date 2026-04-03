@@ -1,0 +1,579 @@
+import { appUrl } from './api'
+import { GRID_SIZE, inputBindingSource } from './helpers'
+import type { ArtifactRecord, GraphPatchOperation, LayoutRecord, NodeRecord, ProjectSnapshot, TemplateRecord } from './types'
+import type { AppNotice, ConstantValueType, GraphMutationPlan, OptimisticGraphState, PaletteEntry, PortActionMenuState, SnapshotLike } from '../appTypes'
+
+type EditorSessionNoticeDetails = {
+  session_id: string
+  session_url: string
+  ready?: boolean
+}
+
+export const DATAFRAME_CSV_DOWNLOAD_MAX_BYTES = 100_000_000
+
+export function blockCreateMode(entry: PaletteEntry): 'notebook' | 'constant_value' | 'file' | 'pipeline' | null {
+  if (entry.kind === 'pipeline') {
+    return 'pipeline'
+  }
+  if (entry.kind === 'value_input') {
+    return 'constant_value'
+  }
+  if (entry.kind === 'file_input') {
+    return 'file'
+  }
+  return 'notebook'
+}
+
+export function normalizeNodeId(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+}
+
+export function edgeIdForPorts(sourceNode: string, sourcePort: string, targetNode: string, targetPort: string): string {
+  return `${sourceNode}.${sourcePort}__${targetNode}.${targetPort}`
+}
+
+export function copiedTitle(title: string): string {
+  return title.endsWith(' Copy') ? title : `${title} Copy`
+}
+
+export function uniqueCopiedNodeId(baseNodeId: string, existingNodeIds: Set<string>): string {
+  const baseCopyId = normalizeNodeId(`${baseNodeId}_copy`) || 'node_copy'
+  if (!existingNodeIds.has(baseCopyId)) {
+    return baseCopyId
+  }
+  let index = 2
+  while (existingNodeIds.has(`${baseCopyId}_${index}`)) {
+    index += 1
+  }
+  return `${baseCopyId}_${index}`
+}
+
+export function isEditableTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) {
+    return false
+  }
+  return target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName)
+}
+
+function prefixedNodeId(nodeIdPrefix: string | null | undefined, templateNodeId: string): string {
+  const normalizedPrefix = normalizeNodeId(nodeIdPrefix ?? '')
+  return normalizedPrefix ? `${normalizedPrefix}_${templateNodeId}` : templateNodeId
+}
+
+export function artifactEndpoint(artifact: ArtifactRecord, action: 'download' | 'content'): string {
+  const nodeId = encodeURIComponent(artifact.node_id)
+  const artifactName = encodeURIComponent(artifact.artifact_name)
+  return appUrl(`/api/v1/artifacts/${nodeId}/${artifactName}/${action}`)
+}
+
+export function createClientNotice(
+  issueId: string,
+  severity: 'error' | 'warning',
+  code: string,
+  message: string,
+  options: { nodeId?: string | null; details?: Record<string, unknown> } = {},
+): AppNotice {
+  return {
+    issue_id: issueId,
+    node_id: options.nodeId ?? null,
+    severity,
+    code,
+    message,
+    details: options.details ?? {},
+    created_at: new Date().toISOString(),
+    origin: 'client',
+  }
+}
+
+export function runFailureMessage(response: Record<string, unknown>, fallback: string): string {
+  const directError = response.error
+  if (typeof directError === 'string' && directError.trim()) {
+    return directError
+  }
+  const nodeResults = response.node_results
+  if (nodeResults && typeof nodeResults === 'object') {
+    const nestedError = (nodeResults as { error?: unknown }).error
+    if (typeof nestedError === 'string' && nestedError.trim()) {
+      return nestedError
+    }
+  }
+  return fallback
+}
+
+export function isManagedRunFailure(response: Record<string, unknown>): boolean {
+  return response.status === 'failed' && typeof response.run_id === 'string'
+}
+
+export function isEditorOpenConflict(message: string): boolean {
+  return message.includes('An editor is open for this notebook.')
+}
+
+export function isFreezeConflict(message: string): boolean {
+  return message.toLowerCase().includes('frozen') && message.includes('Unfreeze')
+}
+
+export function editorSessionDetails(details: Record<string, unknown>): EditorSessionNoticeDetails | null {
+  if (typeof details.session_id !== 'string' || typeof details.session_url !== 'string') {
+    return null
+  }
+  return {
+    session_id: details.session_id,
+    session_url: details.session_url,
+    ready: typeof details.ready === 'boolean' ? details.ready : undefined,
+  }
+}
+
+export function artifactTargetForPort(snapshot: ProjectSnapshot, menu: PortActionMenuState): { nodeId: string; artifactName: string } | null {
+  if (menu.side === 'output') {
+    return { nodeId: menu.nodeId, artifactName: menu.portName }
+  }
+  const binding = inputBindingSource(snapshot, menu.nodeId, menu.portName)
+  if (!binding) {
+    return null
+  }
+  return { nodeId: binding.source_node, artifactName: binding.source_port }
+}
+
+export function edgeIdsForPort(snapshot: ProjectSnapshot, menu: PortActionMenuState): string[] {
+  return snapshot.graph.edges
+    .filter((edge) => {
+      if (menu.side === 'output') {
+        return edge.source_node === menu.nodeId && edge.source_port === menu.portName
+      }
+      return edge.target_node === menu.nodeId && edge.target_port === menu.portName
+    })
+    .map((edge) => edge.id)
+}
+
+function downstreamNodeIds(snapshot: ProjectSnapshot, rootNodeIds: string[]): Set<string> {
+  const queue = [...rootNodeIds]
+  const visited = new Set(rootNodeIds)
+  const downstreamByNodeId = new Map<string, string[]>()
+  for (const edge of snapshot.graph.edges) {
+    const targets = downstreamByNodeId.get(edge.source_node) ?? []
+    targets.push(edge.target_node)
+    downstreamByNodeId.set(edge.source_node, targets)
+  }
+  while (queue.length) {
+    const nodeId = queue.shift() as string
+    for (const targetNodeId of downstreamByNodeId.get(nodeId) ?? []) {
+      if (visited.has(targetNodeId)) {
+        continue
+      }
+      visited.add(targetNodeId)
+      queue.push(targetNodeId)
+    }
+  }
+  return visited
+}
+
+export function frozenBlockBlockersForStaleRoots(snapshot: ProjectSnapshot, rootNodeIds: string[]): NodeRecord[] {
+  const affectedNodeIds = downstreamNodeIds(snapshot, rootNodeIds)
+  return snapshot.graph.nodes.filter((node) => Boolean(node.ui?.frozen) && affectedNodeIds.has(node.id))
+}
+
+export function frozenBlockBlockersForDelete(snapshot: ProjectSnapshot, nodeId: string): NodeRecord[] {
+  const blockers: NodeRecord[] = []
+  const seen = new Set<string>()
+  const node = snapshot.graph.nodes.find((entry) => entry.id === nodeId) ?? null
+  if (node?.ui?.frozen) {
+    blockers.push(node)
+    seen.add(node.id)
+  }
+  const staleRoots = Array.from(new Set(
+    snapshot.graph.edges
+      .filter((edge) => edge.source_node === nodeId)
+      .map((edge) => edge.target_node),
+  ))
+  for (const blocker of frozenBlockBlockersForStaleRoots(snapshot, staleRoots)) {
+    if (seen.has(blocker.id)) {
+      continue
+    }
+    blockers.push(blocker)
+    seen.add(blocker.id)
+  }
+  return blockers
+}
+
+export function frozenBlockBlockersForRemovedEdges(snapshot: ProjectSnapshot, edgeIds: string[]): NodeRecord[] {
+  const staleRoots = Array.from(new Set(
+    snapshot.graph.edges
+      .filter((edge) => edgeIds.includes(edge.id))
+      .map((edge) => edge.target_node),
+  ))
+  return frozenBlockBlockersForStaleRoots(snapshot, staleRoots)
+}
+
+export function freezeBlockMessage(blockers: NodeRecord[]): string {
+  const labels = blockers.map((node) => `\`${node.title}\` (${node.id})`).join(', ')
+  if (blockers.length === 1) {
+    return `This change is blocked because it would affect the frozen block ${labels}. Unfreeze it first.`
+  }
+  return `This change is blocked because it would affect frozen blocks ${labels}. Unfreeze them first.`
+}
+
+export function frozenFileBlockMessage(node: NodeRecord): string {
+  return `This block is frozen. Unfreeze ${node.title} (${node.id}) before replacing the file.`
+}
+
+export function cloneSnapshot(snapshot: ProjectSnapshot): ProjectSnapshot {
+  return {
+    ...snapshot,
+    project: { ...snapshot.project },
+    graph: {
+      meta: { ...snapshot.graph.meta },
+      nodes: snapshot.graph.nodes.map((node) => ({
+        ...node,
+        template: node.template ? { ...node.template } : node.template,
+        ui: node.ui ? { ...node.ui } : node.ui,
+        interface: node.interface
+          ? {
+              ...node.interface,
+              inputs: node.interface.inputs.map((port) => ({ ...port })),
+              outputs: node.interface.outputs.map((port) => ({ ...port })),
+              assets: node.interface.assets.map((port) => ({ ...port })),
+              issues: node.interface.issues.map((issue) => ({ ...issue })),
+            }
+          : node.interface,
+      })),
+      edges: snapshot.graph.edges.map((edge) => ({ ...edge })),
+      layout: snapshot.graph.layout.map((entry) => ({ ...entry })),
+    },
+    validation_issues: snapshot.validation_issues.map((issue) => ({ ...issue })),
+    notices: snapshot.notices.map((notice) => ({ ...notice })),
+    artifacts: snapshot.artifacts.map((artifact) => ({ ...artifact, warnings: artifact.warnings.map((warning) => ({ ...warning })) })),
+    runs: snapshot.runs.map((run) => ({ ...run, target_json: run.target_json, source_snapshot_json: run.source_snapshot_json })),
+    checkpoints: snapshot.checkpoints.map((checkpoint) => ({ ...checkpoint })),
+    templates: snapshot.templates.map((template) => ({ ...template })),
+  }
+}
+
+export function mergeGraphIntoSnapshot(snapshot: SnapshotLike, graph: { meta: ProjectSnapshot['graph']['meta']; nodes: ProjectSnapshot['graph']['nodes']; edges: ProjectSnapshot['graph']['edges']; layout: ProjectSnapshot['graph']['layout'] }): ProjectSnapshot {
+  const merged = cloneSnapshot(snapshot as ProjectSnapshot)
+  merged.graph = {
+    meta: { ...graph.meta },
+    nodes: graph.nodes.map((node) => ({
+      ...node,
+      template: node.template ? { ...node.template } : node.template,
+      ui: node.ui ? { ...node.ui } : node.ui,
+      interface: node.interface
+        ? {
+            ...node.interface,
+            inputs: node.interface.inputs.map((port) => ({ ...port })),
+            outputs: node.interface.outputs.map((port) => ({ ...port })),
+            assets: node.interface.assets.map((port) => ({ ...port })),
+            issues: node.interface.issues.map((issue) => ({ ...issue })),
+          }
+        : node.interface,
+    })),
+    edges: graph.edges.map((edge) => ({ ...edge })),
+    layout: graph.layout.map((entry) => ({ ...entry })),
+  }
+  return merged
+}
+
+export function clampContextMenuPosition(position: { x: number; y: number }, estimatedSize: { width: number; height: number } = { width: 260, height: 320 }) {
+  const margin = 12
+  return {
+    x: Math.max(margin, Math.min(position.x, window.innerWidth - estimatedSize.width - margin)),
+    y: Math.max(margin, Math.min(position.y, window.innerHeight - estimatedSize.height - margin)),
+  }
+}
+
+export function pipelineTemplateNodeRecords(
+  snapshot: ProjectSnapshot,
+  templateRef: string,
+  nodeIdPrefix?: string | null,
+): Array<{ nodeId: string; title: string }> {
+  const template = snapshot.templates.find((entry) => entry.ref === templateRef && entry.kind === 'pipeline')
+  return (template?.definition?.nodes ?? []).map((node) => ({
+    nodeId: prefixedNodeId(nodeIdPrefix, node.id),
+    title: nodeIdPrefix?.trim() ? `${nodeIdPrefix.trim()} ${node.title}` : node.title,
+  }))
+}
+
+export function expandMutationPlan(plan: GraphMutationPlan): GraphPatchOperation[] {
+  return [...plan.operations, ...(plan.followUpOperations ?? [])]
+}
+
+function cloneNodeUi(node: NodeRecord): NonNullable<GraphPatchOperation & { type: 'add_notebook_node' }>['ui'] {
+  return {
+    hidden_inputs: [...(node.ui?.hidden_inputs ?? [])],
+    origin: node.ui?.origin ?? null,
+    frozen: Boolean(node.ui?.frozen),
+  }
+}
+
+export function notebookAddOperationForNode(
+  node: NodeRecord,
+  layout: LayoutRecord,
+  sourceText: string | null,
+  nodeId: string,
+  title: string,
+): GraphPatchOperation {
+  return {
+    type: 'add_notebook_node',
+    node_id: nodeId,
+    title,
+    template_ref: sourceText === null ? node.template?.ref : undefined,
+    source_text: sourceText ?? undefined,
+    ui: cloneNodeUi(node),
+    x: layout.x,
+    y: layout.y,
+    w: layout.w,
+    h: layout.h,
+  }
+}
+
+export function fileInputAddOperationForNode(node: NodeRecord, layout: LayoutRecord, nodeId: string, title: string): GraphPatchOperation {
+  return {
+    type: 'add_file_input_node',
+    node_id: nodeId,
+    title,
+    artifact_name: node.ui?.artifact_name ?? 'file',
+    ui: { frozen: Boolean(node.ui?.frozen) },
+    x: layout.x,
+    y: layout.y,
+    w: layout.w,
+    h: layout.h,
+  }
+}
+
+export function applyOptimisticGraphOperations(snapshot: ProjectSnapshot, operations: Array<Record<string, unknown>>): OptimisticGraphState | null {
+  const next = cloneSnapshot(snapshot)
+  let changed = false
+  let clearSelection = false
+  let clearArtifacts = false
+
+  for (const operation of operations) {
+    const type = operation.type
+    if (type === 'add_pipeline_template') {
+      continue
+    }
+    if (type === 'update_node_layout') {
+      const nodeId = String(operation.node_id)
+      const layout = next.graph.layout.find((entry) => entry.node_id === nodeId)
+      if (layout) {
+        layout.x = Number(operation.x)
+        layout.y = Number(operation.y)
+        changed = true
+      }
+      continue
+    }
+    if (type === 'delete_node') {
+      const nodeId = String(operation.node_id)
+      next.graph.nodes = next.graph.nodes.filter((node) => node.id !== nodeId)
+      next.graph.layout = next.graph.layout.filter((entry) => entry.node_id !== nodeId)
+      next.graph.edges = next.graph.edges.filter((edge) => edge.source_node !== nodeId && edge.target_node !== nodeId)
+      next.artifacts = next.artifacts.filter((artifact) => artifact.node_id !== nodeId)
+      next.validation_issues = next.validation_issues.filter((issue) => issue.node_id !== nodeId)
+      next.notices = next.notices.filter((notice) => notice.node_id !== nodeId)
+      clearSelection = true
+      clearArtifacts = true
+      changed = true
+      continue
+    }
+    if (type === 'remove_edge') {
+      const edgeId = String(operation.edge_id)
+      next.graph.edges = next.graph.edges.filter((edge) => edge.id !== edgeId)
+      changed = true
+      continue
+    }
+    if (type === 'add_edge') {
+      const sourceNode = String(operation.source_node)
+      const sourcePort = String(operation.source_port)
+      const targetNode = String(operation.target_node)
+      const targetPort = String(operation.target_port)
+      const id = edgeIdForPorts(sourceNode, sourcePort, targetNode, targetPort)
+      if (!next.graph.edges.some((edge) => edge.id === id)) {
+        next.graph.edges.push({ id, source_node: sourceNode, source_port: sourcePort, target_node: targetNode, target_port: targetPort })
+        changed = true
+      }
+      continue
+    }
+    if (type === 'update_node_hidden_inputs') {
+      const node = next.graph.nodes.find((entry) => entry.id === String(operation.node_id))
+      if (node) {
+        node.ui = { ...(node.ui ?? {}), hidden_inputs: Array.isArray(operation.hidden_inputs) ? operation.hidden_inputs.map(String) : [] }
+        changed = true
+      }
+      continue
+    }
+    if (type === 'update_node_frozen') {
+      const node = next.graph.nodes.find((entry) => entry.id === String(operation.node_id))
+      if (node) {
+        node.ui = { ...(node.ui ?? {}), frozen: Boolean(operation.frozen) }
+        changed = true
+      }
+    }
+  }
+
+  if (!changed) {
+    return null
+  }
+
+  next.graph.meta = {
+    ...next.graph.meta,
+    graph_version: next.graph.meta.graph_version + 1,
+    updated_at: new Date().toISOString(),
+  }
+
+  return {
+    snapshot: next,
+    clearSelection,
+    clearArtifacts,
+  }
+}
+
+export const SNAPSHOT_REFRESH_EVENTS = [
+  'artifact.state_changed',
+  'checkpoint.created',
+  'checkpoint.restored',
+  'graph.updated',
+  'notebook.reparsed',
+  'notice.created',
+  'notice.dismissed',
+  'project.opened',
+  'run.failed',
+  'run.finished',
+  'run.progress',
+  'run.queued',
+  'run.started',
+  'validation.updated',
+]
+
+export const SNAPSHOT_REFRESH_THROTTLE_MS = 1000
+
+export function validationIssuesForNode(snapshot: ProjectSnapshot, nodeId: string) {
+  return snapshot.validation_issues.filter((issue) => issue.node_id === nodeId)
+}
+
+export function formatIssueDetails(details: Record<string, unknown>): string | null {
+  const removedEdges = details.removed_edges
+  if (Array.isArray(removedEdges) && removedEdges.length > 0) {
+    return removedEdges
+      .map((edge) => {
+        if (!edge || typeof edge !== 'object') {
+          return JSON.stringify(edge)
+        }
+        const record = edge as Record<string, unknown>
+        return [
+          `Removed edge ${record.id ?? '?'}`,
+          `from ${record.source_node ?? '?'}/${record.source_port ?? '?'}`,
+          `to ${record.target_node ?? '?'}/${record.target_port ?? '?'}`,
+        ].join('\n')
+      })
+      .join('\n\n')
+  }
+  const entries = Object.entries(details)
+  if (!entries.length) {
+    return null
+  }
+  return JSON.stringify(details, null, 2)
+}
+
+export function nodeRunFailures(snapshot: ProjectSnapshot, nodeId: string) {
+  return snapshot.runs.filter((run) => {
+    if (run.status !== 'failed' || !run.failure_json) {
+      return false
+    }
+    if (typeof run.failure_json.node_id === 'string') {
+      return run.failure_json.node_id === nodeId
+    }
+    const target = run.target_json
+    if (typeof target.node_id === 'string') {
+      return target.node_id === nodeId
+    }
+    if (Array.isArray(target.plan)) {
+      return target.plan.includes(nodeId)
+    }
+    if (Array.isArray(target.node_ids)) {
+      return target.node_ids.includes(nodeId)
+    }
+    return false
+  })
+}
+
+export function pipelineDefinitionNodeIds(template: TemplateRecord | null | undefined): string[] {
+  if (!template) {
+    return []
+  }
+  return (template.definition?.nodes ?? []).map((node) => node.id)
+}
+
+export function pipelineTopLeftForCenter(template: TemplateRecord, center: { x: number; y: number }): { x: number; y: number } {
+  const layout = template.definition?.layout ?? []
+  if (!layout.length) {
+    return center
+  }
+  const minX = Math.min(...layout.map((entry) => entry.x))
+  const minY = Math.min(...layout.map((entry) => entry.y))
+  const maxRight = Math.max(...layout.map((entry) => entry.x + entry.w))
+  const maxBottom = Math.max(...layout.map((entry) => entry.y + entry.h))
+  const width = maxRight - minX
+  const height = maxBottom - minY
+  return {
+    x: center.x - width / 2,
+    y: center.y - height / 2,
+  }
+}
+
+export function snapToGrid(value: number): number {
+  return Math.round(value / GRID_SIZE) * GRID_SIZE
+}
+
+function pythonTypeExpression(dataType: Exclude<ConstantValueType, 'object'>): string {
+  return dataType
+}
+
+export function buildConstantValueNotebookSource(
+  title: string,
+  outputs: Array<{ name: string; dataType: ConstantValueType; value: string }>,
+): string {
+  const setupImports = new Set(['from bulletjournal.runtime import artifacts'])
+
+  const cells = outputs.flatMap((output) => {
+    const variableName = `${output.name}_value`
+    if (output.dataType === 'object') {
+      return [
+        '@app.cell',
+        'def _():',
+        `    placeholder_note_${output.name} = \'Edit this notebook to set ${output.name} to a custom object.\'`,
+        `    ${variableName} = None`,
+        `    artifacts.push(${variableName}, name='${output.name}', data_type='object', is_output=True, description='Constant value output')`,
+        `    return placeholder_note_${output.name}, ${variableName}`,
+        '',
+      ]
+    }
+    const dataTypeExpression = pythonTypeExpression(output.dataType)
+    return [
+      '@app.cell',
+      'def _():',
+      `    ${variableName} = ${output.value}`,
+      `    artifacts.push(${variableName}, name='${output.name}', data_type=${dataTypeExpression}, is_output=True, description='Constant value output')`,
+      `    return ${variableName}`,
+      '',
+    ]
+  })
+
+  return [
+    'import marimo',
+    '',
+    "__generated_with = '0.20.4'",
+    `app = marimo.App(width='medium', app_title=${JSON.stringify(title)})`,
+    '',
+    'with app.setup:',
+    ...Array.from(setupImports).sort().map((line) => `    ${line}`),
+    '',
+    ...cells,
+    "if __name__ == '__main__':",
+    '    from bulletjournal.runtime.standalone import run_notebook_app',
+    '',
+    "    run_notebook_app(app, __file__)",
+    '',
+  ].join('\n')
+}
