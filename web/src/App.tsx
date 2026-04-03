@@ -32,12 +32,15 @@ type FileNodeEditState = {
   nodeId: string
   title: string
   artifactName: string
+  frozen: boolean
 }
 
 type NodeActionMenuState = {
   nodeIds: string[]
   x: number
   y: number
+  grouped?: boolean
+  selectionCount?: number
 }
 
 type PortActionMenuState = {
@@ -280,7 +283,7 @@ function isEditorOpenConflict(message: string): boolean {
 }
 
 function isFreezeConflict(message: string): boolean {
-  return message.includes('frozen notebook') && message.includes('Unfreeze')
+  return message.toLowerCase().includes('frozen') && message.includes('Unfreeze')
 }
 
 function editorSessionDetails(details: Record<string, unknown>): EditorSessionNoticeDetails | null {
@@ -338,16 +341,16 @@ function downstreamNodeIds(snapshot: ProjectSnapshot, rootNodeIds: string[]): Se
   return visited
 }
 
-function frozenNotebookBlockersForStaleRoots(snapshot: ProjectSnapshot, rootNodeIds: string[]): NodeRecord[] {
+function frozenBlockBlockersForStaleRoots(snapshot: ProjectSnapshot, rootNodeIds: string[]): NodeRecord[] {
   const affectedNodeIds = downstreamNodeIds(snapshot, rootNodeIds)
-  return snapshot.graph.nodes.filter((node) => node.kind === 'notebook' && Boolean(node.ui?.frozen) && affectedNodeIds.has(node.id))
+  return snapshot.graph.nodes.filter((node) => Boolean(node.ui?.frozen) && affectedNodeIds.has(node.id))
 }
 
-function frozenNotebookBlockersForDelete(snapshot: ProjectSnapshot, nodeId: string): NodeRecord[] {
+function frozenBlockBlockersForDelete(snapshot: ProjectSnapshot, nodeId: string): NodeRecord[] {
   const blockers: NodeRecord[] = []
   const seen = new Set<string>()
   const node = snapshot.graph.nodes.find((entry) => entry.id === nodeId) ?? null
-  if (node?.kind === 'notebook' && node.ui?.frozen) {
+  if (node?.ui?.frozen) {
     blockers.push(node)
     seen.add(node.id)
   }
@@ -356,7 +359,7 @@ function frozenNotebookBlockersForDelete(snapshot: ProjectSnapshot, nodeId: stri
       .filter((edge) => edge.source_node === nodeId)
       .map((edge) => edge.target_node),
   ))
-  for (const blocker of frozenNotebookBlockersForStaleRoots(snapshot, staleRoots)) {
+  for (const blocker of frozenBlockBlockersForStaleRoots(snapshot, staleRoots)) {
     if (seen.has(blocker.id)) {
       continue
     }
@@ -366,21 +369,25 @@ function frozenNotebookBlockersForDelete(snapshot: ProjectSnapshot, nodeId: stri
   return blockers
 }
 
-function frozenNotebookBlockersForRemovedEdges(snapshot: ProjectSnapshot, edgeIds: string[]): NodeRecord[] {
+function frozenBlockBlockersForRemovedEdges(snapshot: ProjectSnapshot, edgeIds: string[]): NodeRecord[] {
   const staleRoots = Array.from(new Set(
     snapshot.graph.edges
       .filter((edge) => edgeIds.includes(edge.id))
       .map((edge) => edge.target_node),
   ))
-  return frozenNotebookBlockersForStaleRoots(snapshot, staleRoots)
+  return frozenBlockBlockersForStaleRoots(snapshot, staleRoots)
 }
 
 function freezeBlockMessage(blockers: NodeRecord[]): string {
   const labels = blockers.map((node) => `\`${node.title}\` (${node.id})`).join(', ')
   if (blockers.length === 1) {
-    return `This change is blocked because it would affect the frozen notebook ${labels}. Unfreeze it first.`
+    return `This change is blocked because it would affect the frozen block ${labels}. Unfreeze it first.`
   }
-  return `This change is blocked because it would affect frozen notebooks ${labels}. Unfreeze them first.`
+  return `This change is blocked because it would affect frozen blocks ${labels}. Unfreeze them first.`
+}
+
+function frozenFileBlockMessage(node: NodeRecord): string {
+  return `This block is frozen. Unfreeze ${node.title} (${node.id}) before replacing the file.`
 }
 
 function cloneSnapshot(snapshot: ProjectSnapshot): ProjectSnapshot {
@@ -498,6 +505,7 @@ function fileInputAddOperationForNode(node: NodeRecord, layout: LayoutRecord, no
     node_id: nodeId,
     title,
     artifact_name: node.ui?.artifact_name ?? 'file',
+    ui: { frozen: Boolean(node.ui?.frozen) },
     x: layout.x,
     y: layout.y,
     w: layout.w,
@@ -716,6 +724,8 @@ function App() {
   const snapshotRefreshTimeoutRef = useRef<number | null>(null)
   const snapshotRefreshInFlightRef = useRef<Promise<void> | null>(null)
   const snapshotRefreshQueuedRef = useRef(false)
+  const pendingClickSelectionRef = useRef<{ nodeIds: string[]; edgeIds: string[]; token: number } | null>(null)
+  const pendingClickSelectionTokenRef = useRef(0)
   const lastSnapshotRefreshAtRef = useRef(0)
   const startupSearch = useMemo(() => new URLSearchParams(window.location.search), [])
   const loadingSession = startupSearch.get('session_id')
@@ -760,6 +770,69 @@ function App() {
 
   function selectSingleNode(nodeId: string | null, options: { openInspector?: boolean } = {}) {
     applySelection(nodeId ? [nodeId] : [], [], { openInspector: options.openInspector ?? Boolean(nodeId) })
+  }
+
+  function selectionMatches(left: string[], right: string[]): boolean {
+    if (left.length !== right.length) {
+      return false
+    }
+    const leftSet = new Set(left)
+    return right.every((item) => leftSet.has(item))
+  }
+
+  function rememberPendingClickSelection(nodeIds: string[], edgeIds: string[]) {
+    const token = pendingClickSelectionTokenRef.current + 1
+    pendingClickSelectionTokenRef.current = token
+    pendingClickSelectionRef.current = { nodeIds, edgeIds, token }
+    window.requestAnimationFrame(() => {
+      if (pendingClickSelectionRef.current?.token === token) {
+        pendingClickSelectionRef.current = null
+      }
+    })
+  }
+
+  function toggleSelectionItem(items: string[], itemId: string): string[] {
+    return items.includes(itemId) ? items.filter((item) => item !== itemId) : [...items, itemId]
+  }
+
+  function handleNodeSelection(nodeId: string, options: { additive?: boolean } = {}) {
+    if (options.additive) {
+      const nextNodeIds = toggleSelectionItem(selectedNodeIds, nodeId)
+      rememberPendingClickSelection(nextNodeIds, selectedEdgeIds)
+      applySelection(nextNodeIds, selectedEdgeIds, { openInspector: false })
+      return
+    }
+    rememberPendingClickSelection([nodeId], [])
+    selectSingleNode(nodeId)
+  }
+
+  function handleEdgeSelection(edgeId: string, options: { additive?: boolean } = {}) {
+    if (options.additive) {
+      const nextEdgeIds = toggleSelectionItem(selectedEdgeIds, edgeId)
+      rememberPendingClickSelection(selectedNodeIds, nextEdgeIds)
+      applySelection(selectedNodeIds, nextEdgeIds, { openInspector: false })
+      return
+    }
+    rememberPendingClickSelection([], [edgeId])
+    applySelection([], [edgeId], { openInspector: false })
+  }
+
+  function openSelectedNodeActionMenu(position: { x: number; y: number }, nodeIds = selectedNodeIds) {
+    if (!nodeIds.length) {
+      return
+    }
+    const clamped = clampContextMenuPosition(position)
+    const usesCurrentSelection = nodeIds.length === selectedNodeIds.length
+      && nodeIds.every((nodeId) => selectedNodeIds.includes(nodeId))
+    const selectionCount = usesCurrentSelection ? selectedNodeIds.length + selectedEdgeIds.length : nodeIds.length
+    setPortActionMenu(null)
+    setNodeActionMenu({
+      nodeIds,
+      x: clamped.x,
+      y: clamped.y,
+      grouped: selectionCount > 1,
+      selectionCount,
+    })
   }
 
   useEffect(() => {
@@ -1013,14 +1086,14 @@ function App() {
 
   const portActionMutationFrozenBlockers = useMemo(
     () => (liveSnapshot && portActionArtifact
-      ? frozenNotebookBlockersForStaleRoots(liveSnapshot, [portActionArtifact.nodeId])
+      ? frozenBlockBlockersForStaleRoots(liveSnapshot, [portActionArtifact.nodeId])
       : []),
     [liveSnapshot, portActionArtifact],
   )
 
   const portDisconnectFrozenBlockers = useMemo(
     () => (liveSnapshot && portActionEdgeIds.length
-      ? frozenNotebookBlockersForRemovedEdges(liveSnapshot, portActionEdgeIds)
+      ? frozenBlockBlockersForRemovedEdges(liveSnapshot, portActionEdgeIds)
       : []),
     [liveSnapshot, portActionEdgeIds],
   )
@@ -1085,10 +1158,10 @@ function App() {
       kind: 'node-frozen',
       nodeIds,
       frozen: false,
-      title: nodeIds.length === 1 ? 'Unfreeze notebook?' : 'Unfreeze selected notebooks?',
+      title: nodeIds.length === 1 ? 'Unfreeze block?' : 'Unfreeze selected blocks?',
       message: nodeIds.length === 1
-        ? 'This will unfreeze the notebook and any frozen descendants downstream of it.'
-        : `This will unfreeze ${nodeIds.length} selected notebooks and any frozen descendants downstream of them.`,
+        ? 'This will unfreeze the block and any frozen descendants downstream of it.'
+        : `This will unfreeze ${nodeIds.length} selected blocks and any frozen descendants downstream of them.`,
     })
   }
 
@@ -1116,8 +1189,8 @@ function App() {
 
   function nodeActionsForNode(node: NodeRecord, options: { dismissMenu?: () => void } = {}): NodeActionItem[] {
     const dismissMenu = options.dismissMenu ?? (() => undefined)
-    const freezeBlockedOutputMutations = liveSnapshot ? frozenNotebookBlockersForStaleRoots(liveSnapshot, [node.id]) : []
-    const deleteFrozenBlockers = liveSnapshot ? frozenNotebookBlockersForDelete(liveSnapshot, node.id) : []
+    const freezeBlockedOutputMutations = liveSnapshot ? frozenBlockBlockersForStaleRoots(liveSnapshot, [node.id]) : []
+    const deleteFrozenBlockers = liveSnapshot ? frozenBlockBlockersForDelete(liveSnapshot, node.id) : []
     const outputMutationBlockedReason = freezeBlockedOutputMutations.length ? freezeBlockMessage(freezeBlockedOutputMutations) : undefined
     const deleteBlockedReason = deleteFrozenBlockers.length ? freezeBlockMessage(deleteFrozenBlockers) : undefined
     const artifactHeads = liveSnapshot
@@ -1179,16 +1252,14 @@ function App() {
       },
     )
 
-    if (node.kind === 'notebook') {
-      actions.push({
-        key: 'toggle-frozen',
-        label: node.ui?.frozen ? 'Unfreeze notebook' : 'Freeze notebook',
-        onClick: () => {
-          dismissMenu()
-          requestSetNodesFrozen([node.id], !node.ui?.frozen)
-        },
-      })
-    }
+    actions.push({
+      key: 'toggle-frozen',
+      label: node.ui?.frozen ? 'Unfreeze block' : 'Freeze block',
+      onClick: () => {
+        dismissMenu()
+        requestSetNodesFrozen([node.id], !node.ui?.frozen)
+      },
+    })
 
     actions.push({
       key: 'delete-node',
@@ -1210,14 +1281,14 @@ function App() {
     const menuNodes = nodeIds
       .map((nodeId) => liveSnapshot?.graph.nodes.find((node) => node.id === nodeId) ?? null)
       .filter((node): node is NodeRecord => node !== null)
-    if (menuNodes.length === 1) {
+    if (menuNodes.length === 1 && !nodeActionMenu?.grouped) {
       return nodeActionsForNode(menuNodes[0], options)
     }
     if (!menuNodes.length) {
       return []
     }
 
-    const notebookNodes = menuNodes.filter((node) => node.kind === 'notebook')
+    const freezableNodes = menuNodes
     const affectedOutputNodeIds = menuNodes.filter((node) => {
       if (!liveSnapshot) {
         return false
@@ -1244,21 +1315,21 @@ function App() {
     const readyEligibleNodeIds = readyMutationNodes.map((node) => node.id)
     const outputMutationFrozenBlockers = liveSnapshot
       ? Array.from(new Map(
-          staleMutationNodes.flatMap((node) => frozenNotebookBlockersForStaleRoots(liveSnapshot, [node.id]).map((blocker) => [blocker.id, blocker] as const)),
+          staleMutationNodes.flatMap((node) => frozenBlockBlockersForStaleRoots(liveSnapshot, [node.id]).map((blocker) => [blocker.id, blocker] as const)),
         ).values())
       : []
     const readyMutationFrozenBlockers = liveSnapshot
       ? Array.from(new Map(
-          readyMutationNodes.flatMap((node) => frozenNotebookBlockersForStaleRoots(liveSnapshot, [node.id]).map((blocker) => [blocker.id, blocker] as const)),
+          readyMutationNodes.flatMap((node) => frozenBlockBlockersForStaleRoots(liveSnapshot, [node.id]).map((blocker) => [blocker.id, blocker] as const)),
         ).values())
       : []
     const deleteFrozenBlockers = liveSnapshot
       ? Array.from(new Map(
-          menuNodes.flatMap((node) => frozenNotebookBlockersForDelete(liveSnapshot, node.id).map((blocker) => [blocker.id, blocker] as const)),
+          menuNodes.flatMap((node) => frozenBlockBlockersForDelete(liveSnapshot, node.id).map((blocker) => [blocker.id, blocker] as const)),
         ).values())
       : []
-    const freezableNodeIds = notebookNodes.filter((node) => !node.ui?.frozen).map((node) => node.id)
-    const unfreezableNodeIds = notebookNodes.filter((node) => node.ui?.frozen).map((node) => node.id)
+    const freezableNodeIds = freezableNodes.filter((node) => !node.ui?.frozen).map((node) => node.id)
+    const unfreezableNodeIds = freezableNodes.filter((node) => node.ui?.frozen).map((node) => node.id)
     const outputMutationBlockedReason = outputMutationFrozenBlockers.length ? freezeBlockMessage(outputMutationFrozenBlockers) : undefined
     const readyMutationBlockedReason = readyMutationFrozenBlockers.length ? freezeBlockMessage(readyMutationFrozenBlockers) : undefined
     const deleteBlockedReason = deleteFrozenBlockers.length ? freezeBlockMessage(deleteFrozenBlockers) : undefined
@@ -1266,7 +1337,7 @@ function App() {
     return [
       {
         key: 'mark-selected-outputs-stale',
-        label: 'Mark selected outputs stale',
+        label: 'Mark outputs stale',
         disabled: staleEligibleNodeIds.length === 0 || affectedOutputNodeIds.length === 0 || Boolean(outputMutationBlockedReason),
         title: outputMutationBlockedReason,
         onClick: () => {
@@ -1276,7 +1347,7 @@ function App() {
       },
       {
         key: 'mark-selected-stale-outputs-ready',
-        label: 'Mark selected stale outputs ready',
+        label: 'Mark stale outputs ready',
         disabled: readyEligibleNodeIds.length === 0 || Boolean(readyMutationBlockedReason),
         title: readyMutationBlockedReason,
         onClick: () => {
@@ -1292,8 +1363,8 @@ function App() {
         },
       },
       {
-        key: 'freeze-selected-notebooks',
-        label: 'Freeze selected notebooks',
+        key: 'freeze-selected-blocks',
+        label: 'Freeze blocks',
         disabled: freezableNodeIds.length === 0,
         onClick: () => {
           dismissMenu()
@@ -1301,8 +1372,8 @@ function App() {
         },
       },
       {
-        key: 'unfreeze-selected-notebooks',
-        label: 'Unfreeze selected notebooks',
+        key: 'unfreeze-selected-blocks',
+        label: 'Unfreeze blocks',
         disabled: unfreezableNodeIds.length === 0,
         onClick: () => {
           dismissMenu()
@@ -1311,7 +1382,7 @@ function App() {
       },
       {
         key: 'delete-selected-nodes',
-        label: 'Delete selected blocks',
+        label: 'Delete blocks',
         tone: 'danger',
         disabled: Boolean(deleteBlockedReason),
         title: deleteBlockedReason,
@@ -1791,7 +1862,7 @@ function App() {
       setSnapshotData(queryClient, rollbackSnapshot, () => rollbackSnapshot)
       const message = err instanceof Error ? err.message : 'Graph update failed.'
       if (isFreezeConflict(message)) {
-        reportClientWarning('graph-update-frozen', 'frozen_notebook', message)
+        reportClientWarning('graph-update-frozen', 'frozen_block', message)
       } else {
         reportClientError('graph-update', 'graph_update_failed', message)
       }
@@ -2190,7 +2261,7 @@ function App() {
         return
       }
       if (isFreezeConflict(message)) {
-        reportClientWarning(`run-frozen:${nodeId}:${mode}`, 'frozen_notebook', message, { nodeId })
+        reportClientWarning(`run-frozen:${nodeId}:${mode}`, 'frozen_block', message, { nodeId })
       } else {
         reportClientError(`run:${nodeId}:${mode}`, 'run_failed', message, { nodeId })
       }
@@ -2319,7 +2390,7 @@ function App() {
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Upload failed.'
       if (isFreezeConflict(message)) {
-        reportClientWarning(`upload-frozen:${nodeId}`, 'frozen_notebook', message, { nodeId })
+        reportClientWarning(`upload-frozen:${nodeId}`, 'frozen_block', message, { nodeId })
       } else {
         reportClientError(`upload:${nodeId}`, 'upload_failed', message, { nodeId })
       }
@@ -2392,6 +2463,7 @@ function App() {
       nodeId,
       title: node.title,
       artifactName: node.ui?.artifact_name ?? 'file',
+      frozen: Boolean(node.ui?.frozen),
     })
   }
 
@@ -2695,16 +2767,28 @@ function App() {
               completedRunNodeIds={completedNodeIds}
               onConnect={handleConnect}
               onEdgesChange={handleEdgeChanges}
-                onSelectionChange={(nodeIds, edgeIds) => applySelection(nodeIds, edgeIds)}
-                onNodeSelect={(nodeId) => selectSingleNode(nodeId)}
-                onEdgeSelect={(edgeId) => applySelection([], [edgeId], { openInspector: false })}
+                onSelectionChange={(nodeIds, edgeIds, options) => {
+                  const pending = pendingClickSelectionRef.current
+                  if (pending) {
+                    if (selectionMatches(nodeIds, pending.nodeIds) && selectionMatches(edgeIds, pending.edgeIds)) {
+                      pendingClickSelectionRef.current = null
+                      applySelection(nodeIds, edgeIds, { openInspector: options?.additive ? false : undefined })
+                      return
+                    }
+                    return
+                  }
+                  applySelection(nodeIds, edgeIds, { openInspector: options?.additive ? false : undefined })
+                }}
+                onNodeSelect={handleNodeSelection}
+                onEdgeSelect={handleEdgeSelection}
                 onNodeContextMenu={(nodeId, position) => {
-                  const clamped = clampContextMenuPosition(position)
-                  const menuNodeIds = selectedNodeIds.includes(nodeId) && selectedNodeIds.length > 1
+                  const menuNodeIds = selectedNodeIds.includes(nodeId) && selectedNodeIds.length + selectedEdgeIds.length > 1
                     ? selectedNodeIds
                     : [nodeId]
-                  setPortActionMenu(null)
-                  setNodeActionMenu({ nodeIds: menuNodeIds, x: clamped.x, y: clamped.y })
+                  openSelectedNodeActionMenu(position, menuNodeIds)
+                }}
+                onSelectionContextMenu={(position) => {
+                  openSelectedNodeActionMenu(position)
                 }}
                 onPortContextMenu={(nodeId, portName, side, position) => {
                   const clamped = clampContextMenuPosition(position)
@@ -2773,7 +2857,11 @@ function App() {
           style={{ left: nodeActionMenu.x, top: nodeActionMenu.y }}
           onClick={(event) => event.stopPropagation()}
         >
-          {nodeActionMenuNode.length > 1 ? (
+          {nodeActionMenu.grouped ? (
+            <div className="context-menu-label">
+              {nodeActionMenuNode.length} selected block{nodeActionMenuNode.length === 1 ? '' : 's'}
+            </div>
+          ) : nodeActionMenuNode.length > 1 ? (
             <div className="context-menu-label">
               {nodeActionMenuNode.length} selected blocks
             </div>
@@ -2923,6 +3011,7 @@ function App() {
           existingIds={existingNodeIds.filter((nodeId) => nodeId !== fileNodeEdit.nodeId)}
           fixedNodeId={fileNodeEdit.nodeId}
           initialArtifactName={fileNodeEdit.artifactName}
+          uploadDisabledMessage={fileNodeEdit.frozen ? 'This block is frozen. Unfreeze it before replacing the file.' : null}
           onClose={() => setFileNodeEdit(null)}
           onCreate={async (payload) => {
             setFileNodeEdit(null)
@@ -3613,6 +3702,7 @@ function NodeInspector({
           <input
             ref={fileInputRef}
             type="file"
+            disabled={Boolean(node.ui?.frozen)}
             onChange={(event) => {
               const file = event.target.files?.[0]
               if (file) {
@@ -3620,6 +3710,7 @@ function NodeInspector({
               }
             }}
           />
+          {node.ui?.frozen ? <p className="muted-copy">{frozenFileBlockMessage(node)}</p> : null}
         </div>
       ) : null}
 

@@ -444,10 +444,11 @@ type CreateFileDialogProps = {
   mode?: 'create' | 'edit'
   fixedNodeId?: string
   initialArtifactName?: string
+  uploadDisabledMessage?: string | null
   onCreate: (payload: { nodeId: string; title: string; file: File | null; artifactName: string }) => Promise<void>
 }
 
-export function CreateFileDialog({ suggestedTitle, existingIds, onClose, mode = 'create', fixedNodeId, initialArtifactName = 'file', onCreate }: CreateFileDialogProps) {
+export function CreateFileDialog({ suggestedTitle, existingIds, onClose, mode = 'create', fixedNodeId, initialArtifactName = 'file', uploadDisabledMessage = null, onCreate }: CreateFileDialogProps) {
   const [title, setTitle] = useState(suggestedTitle)
   const [nodeId, setNodeId] = useState(fixedNodeId ?? normalizeNodeId(suggestedTitle))
   const [nodeIdTouched, setNodeIdTouched] = useState(false)
@@ -540,12 +541,15 @@ export function CreateFileDialog({ suggestedTitle, existingIds, onClose, mode = 
           <span>Upload file</span>
           <input
             type="file"
+            disabled={Boolean(uploadDisabledMessage)}
             onChange={(event) => {
               const nextFile = event.target.files?.[0] ?? null
               setFile(nextFile)
             }}
           />
-          {!file
+          {uploadDisabledMessage
+            ? <span className="field-note">{uploadDisabledMessage}</span>
+            : !file
             ? <span className="field-note">{mode === 'edit' ? 'Optional. Leave blank to keep the current file state.' : 'Optional. Leave blank to create a pending file input.'}</span>
             : <span className="field-note">{mode === 'edit' ? 'The new file uploads after saving changes.' : 'The file node is created, then the file is uploaded.'}</span>}
         </label>

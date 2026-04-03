@@ -13,6 +13,10 @@
   --warn: #c97c00;
   --bad: #c53030;
   --run: #2563eb;
+  --freeze-edge: #53c9d6;
+  --freeze-border: rgba(66, 192, 206, 0.72);
+  --freeze-glow: rgba(83, 201, 214, 0.24);
+  --freeze-film: linear-gradient(180deg, rgba(127, 229, 237, 0.18), rgba(56, 182, 194, 0.14));
   --shadow: 0 18px 50px rgba(60, 44, 18, 0.1);
   --radius: 24px;
   --radius-sm: 18px;
@@ -37,6 +41,10 @@
   --warn: #e6ab3b;
   --bad: #f27575;
   --run: #7aa6ff;
+  --freeze-edge: #69c8d3;
+  --freeze-border: rgba(105, 200, 211, 0.52);
+  --freeze-glow: rgba(105, 200, 211, 0.12);
+  --freeze-film: linear-gradient(180deg, rgba(105, 200, 211, 0.12), rgba(43, 169, 182, 0.08));
   --shadow: 0 18px 50px rgba(0, 0, 0, 0.28);
 }
 
@@ -665,6 +673,18 @@ label span,
   height: 100%;
 }
 
+.react-flow__nodesselection,
+.react-flow__nodesselection-rect {
+  pointer-events: none;
+}
+
+.react-flow__nodesselection-rect {
+  opacity: 0;
+  border-color: transparent !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
 :root[data-theme='dark'] .graph-canvas-shell {
   background:
     radial-gradient(circle at top left, rgba(92, 189, 180, 0.06), transparent 32%),
@@ -688,6 +708,12 @@ label span,
   z-index: 3;
   border-width: 2px;
   border-style: solid;
+  isolation: isolate;
+}
+
+.rf-node > * {
+  position: relative;
+  z-index: 1;
 }
 
 .rf-node.state-ready { border-color: rgba(47, 133, 90, 0.48); }
@@ -718,14 +744,83 @@ label span,
   box-shadow: 0 0 0 1px rgba(47, 133, 90, 0.12), 0 20px 52px rgba(47, 133, 90, 0.12);
 }
 
+.rf-node.is-frozen {
+  border-color: var(--freeze-border);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--freeze-edge) 22%, transparent), 0 18px 44px var(--freeze-glow);
+}
+
+:root[data-theme='dark'] .rf-node.is-frozen {
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--freeze-edge) 16%, transparent), 0 12px 28px var(--freeze-glow);
+}
+
+.rf-node.is-frozen::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: var(--freeze-film);
+  pointer-events: none;
+  z-index: 0;
+}
+
+.rf-node.is-frozen .rf-node-header,
+.rf-node.is-frozen .rf-node-body,
+.rf-node.is-frozen .rf-node-footer {
+  filter: grayscale(0.18) saturate(0.52) contrast(0.88) brightness(0.98);
+}
+
+.rf-node.is-frozen .rf-port-row,
+.rf-node.is-frozen .artifact-button,
+.rf-node.is-frozen .round-node-action,
+.rf-node.is-frozen .rf-badge,
+.rf-node.is-frozen .rf-hidden-inputs,
+.rf-node.is-frozen .rf-asset-note,
+.rf-node.is-frozen .rf-node-issue-pill,
+.rf-node.is-frozen .rf-node-timer {
+  opacity: 0.82;
+}
+
+:root[data-theme='dark'] .rf-node.is-frozen .rf-node-header,
+:root[data-theme='dark'] .rf-node.is-frozen .rf-node-body,
+:root[data-theme='dark'] .rf-node.is-frozen .rf-node-footer {
+  filter: grayscale(0.14) saturate(0.62) contrast(0.92) brightness(0.97);
+}
+
+:root[data-theme='dark'] .rf-node.is-frozen .rf-port-row,
+:root[data-theme='dark'] .rf-node.is-frozen .artifact-button,
+:root[data-theme='dark'] .rf-node.is-frozen .round-node-action,
+:root[data-theme='dark'] .rf-node.is-frozen .rf-badge,
+:root[data-theme='dark'] .rf-node.is-frozen .rf-hidden-inputs,
+:root[data-theme='dark'] .rf-node.is-frozen .rf-asset-note,
+:root[data-theme='dark'] .rf-node.is-frozen .rf-node-issue-pill,
+:root[data-theme='dark'] .rf-node.is-frozen .rf-node-timer {
+  opacity: 0.86;
+}
+
 .rf-node.is-selected {
   border-color: rgba(15, 118, 110, 0.9);
   box-shadow: 0 0 0 2px rgba(15, 118, 110, 0.2), 0 20px 52px rgba(15, 118, 110, 0.18);
 }
 
+.rf-node.is-frozen.is-selected {
+  box-shadow:
+    0 0 0 2px rgba(15, 118, 110, 0.2),
+    0 0 0 3px color-mix(in srgb, var(--freeze-edge) 18%, transparent),
+    0 20px 52px rgba(15, 118, 110, 0.16),
+    0 18px 44px var(--freeze-glow);
+}
+
 :root[data-theme='dark'] .rf-node.is-selected {
   border-color: rgba(92, 189, 180, 0.94);
   box-shadow: 0 0 0 2px rgba(92, 189, 180, 0.26), 0 20px 52px rgba(0, 0, 0, 0.34);
+}
+
+:root[data-theme='dark'] .rf-node.is-frozen.is-selected {
+  box-shadow:
+    0 0 0 2px rgba(92, 189, 180, 0.2),
+    0 0 0 3px color-mix(in srgb, var(--freeze-edge) 14%, transparent),
+    0 16px 36px rgba(0, 0, 0, 0.28),
+    0 12px 28px var(--freeze-glow);
 }
 
 @keyframes pulse-border {
@@ -897,9 +992,9 @@ label span,
   flex: 0 0 auto;
   padding: 6px 10px;
   border-radius: 999px;
-  border: 1px solid rgba(37, 99, 235, 0.24);
-  background: rgba(37, 99, 235, 0.08);
-  color: #1d4ed8;
+  border: 1px solid color-mix(in srgb, var(--freeze-edge) 34%, transparent);
+  background: color-mix(in srgb, var(--freeze-edge) 14%, transparent);
+  color: color-mix(in srgb, var(--freeze-edge) 78%, #0f172a 22%);
   font-size: 11px;
   font-weight: 800;
   letter-spacing: 0.03em;
@@ -943,9 +1038,9 @@ label span,
 }
 
 :root[data-theme='dark'] .rf-node-freeze-pill {
-  border-color: rgba(147, 197, 253, 0.28);
-  background: rgba(37, 99, 235, 0.18);
-  color: #dbeafe;
+  border-color: color-mix(in srgb, var(--freeze-edge) 38%, transparent);
+  background: color-mix(in srgb, var(--freeze-edge) 12%, transparent);
+  color: #c8edf1;
 }
 
 .rf-node-body {
@@ -1215,10 +1310,20 @@ label span,
   filter: drop-shadow(0 0 5px rgba(29, 143, 120, 0.26));
 }
 
+.react-flow__edge.rf-edge-frozen .react-flow__edge-path {
+  stroke: var(--freeze-edge);
+  filter: drop-shadow(0 0 6px color-mix(in srgb, var(--freeze-edge) 28%, transparent));
+}
+
 :root[data-theme='dark'] .react-flow__edge.rf-edge-selected .react-flow__edge-path,
 :root[data-theme='dark'] .react-flow__edge.selected .react-flow__edge-path {
   stroke: #5cbdb4;
   filter: drop-shadow(0 0 6px rgba(92, 189, 180, 0.34));
+}
+
+:root[data-theme='dark'] .react-flow__edge.rf-edge-frozen .react-flow__edge-path {
+  stroke: var(--freeze-edge);
+  filter: drop-shadow(0 0 4px color-mix(in srgb, var(--freeze-edge) 16%, transparent));
 }
 
 :root[data-theme='dark'] .split-menu,
@@ -1561,8 +1666,8 @@ label span,
   z-index: 40;
   display: grid;
   gap: 6px;
-  width: min(240px, calc(100vw - 24px));
-  min-width: 180px;
+  width: min(280px, calc(100vw - 24px));
+  min-width: 220px;
   max-width: calc(100vw - 24px);
   padding: 8px;
   border-radius: 16px;
@@ -1577,7 +1682,8 @@ label span,
   display: flex;
   align-items: center;
   justify-content: center;
-  white-space: nowrap;
+  white-space: normal;
+  text-align: center;
 }
 
 :root[data-theme='dark'] .node-action-menu {

@@ -223,10 +223,10 @@ class ProjectService:
             raise RuntimeError(f'Failed to load persisted notice `{issue_id}`.')
         return notice
 
-    def node_is_frozen(self, node: Node) -> bool:
-        return node.kind == NodeKind.NOTEBOOK and bool(node.ui.get('frozen'))
+    def block_is_frozen(self, node: Node) -> bool:
+        return bool(node.ui.get('frozen'))
 
-    def frozen_notebook_blockers_for_stale_roots(
+    def frozen_block_blockers_for_stale_roots(
         self,
         node_ids: list[str],
         *,
@@ -236,22 +236,22 @@ class ProjectService:
         affected: set[str] = set(node_ids)
         for node_id in node_ids:
             affected.update(downstream_closure(resolved_graph, node_id))
-        return [node for node in resolved_graph.nodes if node.id in affected and self.node_is_frozen(node)]
+        return [node for node in resolved_graph.nodes if node.id in affected and self.block_is_frozen(node)]
 
-    def frozen_notebook_blockers_for_node_edit(
+    def frozen_block_blockers_for_node_edit(
         self,
         node_id: str,
         *,
         graph: GraphData | None = None,
     ) -> list[Node]:
-        return self.frozen_notebook_blockers_for_stale_roots([node_id], graph=graph)
+        return self.frozen_block_blockers_for_stale_roots([node_id], graph=graph)
 
     @staticmethod
     def freeze_block_message(blockers: list[Node]) -> str:
         labels = ', '.join(f'`{node.title}` ({node.id})' for node in blockers)
         if len(blockers) == 1:
-            return f'This change is blocked because it would affect the frozen notebook {labels}. Unfreeze it first.'
-        return f'This change is blocked because it would affect frozen notebooks {labels}. Unfreeze them first.'
+            return f'This change is blocked because it would affect the frozen block {labels}. Unfreeze it first.'
+        return f'This change is blocked because it would affect frozen blocks {labels}. Unfreeze them first.'
 
     def freeze_targets_for_node(
         self,
@@ -263,10 +263,8 @@ class ProjectService:
         target = next((node for node in resolved_graph.nodes if node.id == node_id), None)
         if target is None:
             raise NotFoundError(f'Unknown node `{node_id}`.')
-        if target.kind != NodeKind.NOTEBOOK:
-            return []
         target_ids = set(upstream_closure(resolved_graph, node_id)) | {node_id}
-        return [node for node in resolved_graph.nodes if node.id in target_ids and node.kind == NodeKind.NOTEBOOK]
+        return [node for node in resolved_graph.nodes if node.id in target_ids]
 
     def active_editor_upstream_blockers_for_freeze(
         self,

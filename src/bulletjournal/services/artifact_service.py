@@ -28,12 +28,12 @@ class ArtifactService:
 
     def upload_file(self, node_id: str, filename: str, content: bytes, mime_type: str | None = None) -> dict[str, Any]:
         project = self.project_service.require_project()
-        blockers = self.project_service.frozen_notebook_blockers_for_stale_roots([node_id])
-        if blockers:
-            raise InvalidRequestError(self.project_service.freeze_block_message(blockers))
         node = self.project_service.get_node(node_id)
         if node.kind != NodeKind.FILE_INPUT:
             raise InvalidRequestError(f'Node `{node_id}` is not a file input node.')
+        blockers = self.project_service.frozen_block_blockers_for_stale_roots([node_id])
+        if blockers:
+            raise InvalidRequestError(self.project_service.freeze_block_message(blockers))
         artifact_name = file_input_artifact_name(node)
         temp_path = project.object_store.create_temp_file(Path(filename).suffix)
         try:

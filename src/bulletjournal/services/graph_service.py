@@ -36,7 +36,7 @@ class GraphService:
         graph = self.project_service.graph()
         if int(graph.meta['graph_version']) != graph_version:
             raise GraphValidationError('Graph version conflict.')
-        self._assert_operations_allowed_with_frozen_notebooks(graph, operations)
+        self._assert_operations_allowed_with_frozen_blocks(graph, operations)
         active_run_interruption = None
         reparse_all = False
         stale_roots: set[str] = set()
@@ -346,12 +346,15 @@ class GraphService:
         if any(node.id == node_id for node in graph.nodes):
             raise GraphValidationError(f'Node `{node_id}` already exists.')
         artifact_name = str(operation.get('artifact_name', 'file'))
+        ui = operation.get('ui')
         graph.nodes.append(
             Node(
                 id=node_id,
                 kind=NodeKind.FILE_INPUT,
                 title=title,
-                ui={'hidden_inputs': [], 'artifact_name': artifact_name},
+                ui={**({'hidden_inputs': [], 'artifact_name': artifact_name}), **ui}
+                if isinstance(ui, dict)
+                else {'hidden_inputs': [], 'artifact_name': artifact_name},
             )
         )
         graph.layout.append(self._layout_entry(node_id, operation))
@@ -424,6 +427,7 @@ class GraphService:
                     'artifact_name': raw_node.get('artifact_name') or raw_node.get('ui', {}).get('artifact_name')
                     if isinstance(raw_node.get('ui'), dict)
                     else 'file',
+                    'ui': raw_node.get('ui') if isinstance(raw_node.get('ui'), dict) else None,
                     'x': int(layout.get('x', 80)) + offset_x,
                     'y': int(layout.get('y', 80)) + offset_y,
                     'w': int(layout.get('w', 320)),
@@ -583,12 +587,10 @@ class GraphService:
         target_node = next((node for node in graph.nodes if node.id == node_id), None)
         if target_node is None:
             raise GraphValidationError(f'Unknown node `{node_id}`.')
-        if target_node.kind != NodeKind.NOTEBOOK:
-            raise GraphValidationError(f'Only notebook nodes can be frozen. `{node_id}` is {target_node.kind.value}.')
         if not frozen:
             unfrozen_ids = set(downstream_closure(graph, node_id)) | {node_id}
             for node in graph.nodes:
-                if node.id not in unfrozen_ids or node.kind != NodeKind.NOTEBOOK:
+                if node.id not in unfrozen_ids:
                     continue
                 node.ui = {**node.ui, 'frozen': False}
             return []
@@ -604,24 +606,24 @@ class GraphService:
             node.ui = {**node.ui, 'frozen': True}
         return frozen_ids
 
-    def _assert_operations_allowed_with_frozen_notebooks(
+    def _assert_operations_allowed_with_frozen_blocks(
         self,
         graph: GraphData,
         operations: list[dict[str, Any]],
     ) -> None:
         for operation in operations:
-            blockers = self._frozen_notebook_blockers_for_operation(graph, operation)
+            blockers = self._frozen_block_blockers_for_operation(graph, operation)
             if blockers:
                 raise GraphValidationError(self.project_service.freeze_block_message(blockers))
 
-    def _frozen_notebook_blockers_for_operation(
+    def _frozen_block_blockers_for_operation(
         self,
         graph: GraphData,
         operation: dict[str, Any],
     ) -> list[Node]:
         op_type = operation['type']
         if op_type == 'add_edge':
-            return self.project_service.frozen_notebook_blockers_for_stale_roots(
+            return self.project_service.frozen_block_blockers_for_stale_roots(
                 [str(operation['target_node'])], graph=graph
             )
         if op_type == 'remove_edge':
@@ -629,16 +631,16 @@ class GraphService:
             edge = next((item for item in graph.edges if item.id == edge_id), None)
             if edge is None:
                 return []
-            return self.project_service.frozen_notebook_blockers_for_stale_roots([edge.target_node], graph=graph)
+            return self.project_service.frozen_block_blockers_for_stale_roots([edge.target_node], graph=graph)
         if op_type != 'delete_node':
             return []
         node_id = str(operation['node_id'])
         node = next((item for item in graph.nodes if item.id == node_id), None)
         blockers = []
-        if node is not None and self.project_service.node_is_frozen(node):
+        if node is not None and self.project_service.block_is_frozen(node):
             blockers.append(node)
         stale_roots = sorted({edge.target_node for edge in graph.edges if edge.source_node == node_id})
-        downstream_blockers = self.project_service.frozen_notebook_blockers_for_stale_roots(
+        downstream_blockers = self.project_service.frozen_block_blockers_for_stale_roots(
             stale_roots,
             graph=graph,
         )

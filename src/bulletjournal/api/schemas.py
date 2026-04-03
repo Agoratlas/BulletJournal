@@ -34,6 +34,7 @@ class AddFileInputNodeOperation(StrictModel):
     w: int = 320
     h: int = 220
     artifact_name: str = 'file'
+    ui: dict[str, Any] | None = None
 
 
 class AddPipelineTemplateOperation(StrictModel):

@@ -1025,7 +1025,7 @@ def test_marking_outputs_ready_is_blocked_when_inputs_are_stale(tmp_path) -> Non
     assert 'stale or pending inputs' in blocked.json()['detail']
 
 
-def test_frozen_notebook_blocks_upstream_graph_edits_and_editor_sessions(tmp_path) -> None:
+def test_frozen_block_blocks_upstream_graph_edits_and_editor_sessions(tmp_path) -> None:
     project_root = init_project_root(tmp_path / 'project').root
     app = create_app(project_path=project_root)
     client = TestClient(app)
@@ -1097,7 +1097,7 @@ def test_frozen_notebook_blocks_upstream_graph_edits_and_editor_sessions(tmp_pat
         json={'mode': 'edit_run', 'action': None},
     )
     assert blocked_edit.status_code == 400
-    assert 'frozen notebook' in blocked_edit.json()['detail']
+    assert 'frozen block' in blocked_edit.json()['detail']
     assert 'table_sink' in blocked_edit.json()['detail']
 
     blocked_graph_edit = client.patch(
@@ -1113,7 +1113,7 @@ def test_frozen_notebook_blocks_upstream_graph_edits_and_editor_sessions(tmp_pat
         },
     )
     assert blocked_graph_edit.status_code == 409
-    assert 'frozen notebook' in blocked_graph_edit.json()['detail']
+    assert 'frozen block' in blocked_graph_edit.json()['detail']
     assert 'table_sink' in blocked_graph_edit.json()['detail']
 
 
@@ -1269,6 +1269,147 @@ def test_unfreezing_upstream_notebook_also_unfreezes_frozen_descendants(tmp_path
     nodes = {node['id']: node for node in snapshot['graph']['nodes']}
     assert nodes['value_source']['ui']['frozen'] is False
     assert nodes['table_sink']['ui']['frozen'] is False
+
+
+def test_freezing_downstream_block_also_freezes_upstream_file_blocks(tmp_path) -> None:
+    project_root = init_project_root(tmp_path / 'project').root
+    app = create_app(project_path=project_root)
+    client = TestClient(app)
+    container = app.state.container
+
+    opened = client.get('/api/v1/project/snapshot')
+    graph_version = opened.json()['graph']['meta']['graph_version']
+
+    created = client.patch(
+        '/api/v1/graph',
+        json={
+            'graph_version': graph_version,
+            'operations': [
+                {
+                    'type': 'add_file_input_node',
+                    'node_id': 'source_file',
+                    'title': 'Source File',
+                },
+                {
+                    'type': 'add_notebook_node',
+                    'node_id': 'table_sink',
+                    'title': 'Table Sink',
+                    'source_text': (
+                        'import marimo\n\n'
+                        'app = marimo.App()\n\n'
+                        'with app.setup:\n'
+                        '    from bulletjournal.runtime import artifacts\n\n'
+                        '@app.cell\n'
+                        'def _():\n'
+                        "    file_path = artifacts.pull_file(name='incoming')\n"
+                        '    return file_path\n\n'
+                        '@app.cell\n'
+                        'def _(file_path):\n'
+                        "    artifacts.push(len(file_path), name='path_length', data_type=int, is_output=True)\n"
+                        '    return\n\n'
+                        "if __name__ == '__main__':\n"
+                        '    from bulletjournal.runtime.standalone import run_notebook_app\n\n'
+                        '    run_notebook_app(app, __file__)\n'
+                    ),
+                },
+            ],
+        },
+    )
+    assert created.status_code == 200
+
+    container.project_service.reparse_notebook_by_path(project_root / 'notebooks' / 'table_sink.py')
+
+    connected = client.patch(
+        '/api/v1/graph',
+        json={
+            'graph_version': created.json()['meta']['graph_version'],
+            'operations': [
+                {
+                    'type': 'add_edge',
+                    'source_node': 'source_file',
+                    'source_port': 'file',
+                    'target_node': 'table_sink',
+                    'target_port': 'incoming',
+                }
+            ],
+        },
+    )
+    assert connected.status_code == 200
+
+    frozen = client.patch(
+        '/api/v1/graph',
+        json={
+            'graph_version': connected.json()['meta']['graph_version'],
+            'operations': [
+                {
+                    'type': 'update_node_frozen',
+                    'node_id': 'table_sink',
+                    'frozen': True,
+                }
+            ],
+        },
+    )
+    assert frozen.status_code == 200
+
+    snapshot = client.get('/api/v1/project/snapshot').json()
+    nodes = {node['id']: node for node in snapshot['graph']['nodes']}
+    assert nodes['source_file']['ui']['frozen'] is True
+    assert nodes['table_sink']['ui']['frozen'] is True
+
+
+def test_frozen_file_input_blocks_upload_and_shows_frozen_state(tmp_path) -> None:
+    project_root = init_project_root(tmp_path / 'project').root
+    app = create_app(project_path=project_root)
+    client = TestClient(app)
+
+    opened = client.get('/api/v1/project/snapshot')
+    graph_version = opened.json()['graph']['meta']['graph_version']
+
+    created = client.patch(
+        '/api/v1/graph',
+        json={
+            'graph_version': graph_version,
+            'operations': [
+                {
+                    'type': 'add_file_input_node',
+                    'node_id': 'source_file',
+                    'title': 'Source File',
+                }
+            ],
+        },
+    )
+    assert created.status_code == 200
+
+    frozen = client.patch(
+        '/api/v1/graph',
+        json={
+            'graph_version': created.json()['meta']['graph_version'],
+            'operations': [
+                {
+                    'type': 'update_node_frozen',
+                    'node_id': 'source_file',
+                    'frozen': True,
+                }
+            ],
+        },
+    )
+    assert frozen.status_code == 200
+
+    snapshot = client.get('/api/v1/project/snapshot').json()
+    nodes = {node['id']: node for node in snapshot['graph']['nodes']}
+    assert nodes['source_file']['ui']['frozen'] is True
+
+    blocked = client.post(
+        '/api/v1/file-inputs/source_file/upload',
+        data=b'hello world',
+        headers={
+            'content-type': 'text/plain',
+            'x-filename': 'hello.txt',
+        },
+    )
+    assert blocked.status_code == 400
+    assert 'frozen block' in blocked.json()['detail']
+    assert 'frozen' in blocked.json()['detail']
 
 
 def test_deleting_node_stops_active_editor_session(tmp_path) -> None:

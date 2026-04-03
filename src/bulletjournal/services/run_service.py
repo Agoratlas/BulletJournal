@@ -596,7 +596,7 @@ class RunService:
 
     def _start_edit_session(self, node_id: str) -> dict[str, Any]:
         project = self.project_service.require_project()
-        blockers = self.project_service.frozen_notebook_blockers_for_node_edit(node_id)
+        blockers = self.project_service.frozen_block_blockers_for_node_edit(node_id)
         if blockers:
             raise InvalidRequestError(self.project_service.freeze_block_message(blockers))
         notebook_path = project.paths.notebook_path(node_id)

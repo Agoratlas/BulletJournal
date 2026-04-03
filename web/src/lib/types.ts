@@ -247,7 +247,7 @@ export type ProjectOpenResponse = ProjectSnapshot
 
 export type GraphPatchOperation =
   | { type: 'add_notebook_node'; node_id: string; title: string; x?: number; y?: number; w?: number; h?: number; template_ref?: string; source_text?: string; ui?: { origin?: 'constant_value' | null; hidden_inputs?: string[]; frozen?: boolean } }
-  | { type: 'add_file_input_node'; node_id: string; title: string; artifact_name?: string; x?: number; y?: number; w?: number; h?: number }
+  | { type: 'add_file_input_node'; node_id: string; title: string; artifact_name?: string; ui?: { frozen?: boolean }; x?: number; y?: number; w?: number; h?: number }
   | { type: 'add_pipeline_template'; template_ref: string; x?: number; y?: number; node_id_prefix?: string | null }
   | { type: 'add_edge'; source_node: string; source_port: string; target_node: string; target_port: string }
   | { type: 'remove_edge'; edge_id: string }

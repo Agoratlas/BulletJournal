@@ -9,6 +9,7 @@ import ReactFlow, {
   SelectionMode,
   type NodeChange,
   useStore,
+  useStoreApi,
   useUpdateNodeInternals,
   type Connection,
   type Edge,
@@ -37,10 +38,11 @@ type GraphCanvasProps = {
   activeEditorNodeIds?: string[]
   onConnect: (connection: Connection) => void
   onEdgesChange: (changes: EdgeChange[]) => void
-  onSelectionChange: (nodeIds: string[], edgeIds: string[]) => void
-  onNodeSelect: (nodeId: string) => void
-  onEdgeSelect: (edgeId: string) => void
+  onSelectionChange: (nodeIds: string[], edgeIds: string[], options?: { additive?: boolean }) => void
+  onNodeSelect: (nodeId: string, options?: { additive?: boolean }) => void
+  onEdgeSelect: (edgeId: string, options?: { additive?: boolean }) => void
   onNodeContextMenu: (nodeId: string, position: { x: number; y: number }) => void
+  onSelectionContextMenu: (position: { x: number; y: number }) => void
   onPortContextMenu: (nodeId: string, portName: string, side: 'input' | 'output', position: { x: number; y: number }) => void
   onEditFileNode: (nodeId: string) => void
   onOpenEditor: (nodeId: string) => void
@@ -69,7 +71,7 @@ type BulletJournalNodeData = {
   activeRunNodeId: string | null
   queuedRunNodeIds: string[]
   completedRunNodeIds: string[]
-  onSelect: (nodeId: string) => void
+  onSelect: (nodeId: string, options?: { additive?: boolean }) => void
   onNodeContextMenu: (nodeId: string, position: { x: number; y: number }) => void
   onPortContextMenu: (nodeId: string, portName: string, side: 'input' | 'output', position: { x: number; y: number }) => void
   onEditFileNode: (nodeId: string) => void
@@ -90,6 +92,16 @@ type FlowConnectionState = {
   connectionNodeId: string | null
   connectionHandleId: string | null
   connectionHandleType: 'source' | 'target' | null
+}
+
+type FlowSelectionState = {
+  userSelectionRect: {
+    x: number
+    y: number
+    width: number
+    height: number
+  } | null
+  transform: [number, number, number]
 }
 
 const PORT_TOP_OFFSET = 82
@@ -115,6 +127,43 @@ const STATE_COLORS: Record<ArtifactState | 'mixed', string> = {
   stale: '#c97c00',
   pending: '#98a2a3',
   mixed: '#2563eb',
+}
+
+function pointInRect(x: number, y: number, rect: { left: number; top: number; right: number; bottom: number }) {
+  return x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom
+}
+
+function toggleIds(baseIds: string[], toggledIds: string[]): string[] {
+  const next = new Set(baseIds)
+  for (const id of toggledIds) {
+    if (next.has(id)) {
+      next.delete(id)
+    } else {
+      next.add(id)
+    }
+  }
+  return Array.from(next)
+}
+
+function portAnchorForSelection(
+  snapshot: ProjectSnapshot,
+  node: NodeRecord,
+  nodeDimensions: Record<string, { width: number; height: number }>,
+  side: 'input' | 'output',
+  portName: string,
+): { x: number; y: number } | null {
+  const layout = snapshot.graph.layout.find((entry) => entry.node_id === node.id)
+  const width = nodeDimensions[node.id]?.width ?? layout?.w ?? 360
+  const inputs = visibleInputs(node)
+  const outputs = outputsForNode(node)
+  const ports = side === 'input' ? inputs : outputs
+  const index = ports.findIndex((port) => port.name === portName)
+  if (index === -1) {
+    return null
+  }
+  const x = (layout?.x ?? 80) + (side === 'output' ? width : 0)
+  const y = (layout?.y ?? 80) + PORT_TOP_OFFSET + index * PORT_STEP
+  return { x, y }
 }
 
 function PortRow({
@@ -146,15 +195,16 @@ function PortRow({
   const isConnecting = Boolean(connectionIntent)
   const isCompatible = !connectionIntent || isCompatibleWithIntent(snapshot, node, port, side, connectionIntent)
 
+  function handlePortCircleContextMenu(event: React.MouseEvent) {
+    event.preventDefault()
+    event.stopPropagation()
+    onPortContextMenu(node.id, port.name, side, { x: event.clientX, y: event.clientY })
+  }
+
   return (
     <div
       className={`rf-port-row ${side} ${isConnecting ? 'connecting' : ''} ${isCompatible ? '' : 'incompatible'}`}
       title={`${port.name} (${port.data_type})`}
-      onContextMenu={(event) => {
-        event.preventDefault()
-        event.stopPropagation()
-        onPortContextMenu(node.id, port.name, side, { x: event.clientX, y: event.clientY })
-      }}
     >
       {side === 'input' ? (
         <Handle
@@ -163,6 +213,7 @@ function PortRow({
           position={Position.Left}
           className={`rf-handle ${isConnectionStart ? 'connection-start' : ''} ${isConnecting ? 'connecting' : ''}`}
           style={{ borderColor: typeColor, background: fillColor, top: PORT_TOP_OFFSET + index * PORT_STEP }}
+          onContextMenu={handlePortCircleContextMenu}
         />
       ) : null}
       <div className="rf-port-copy">
@@ -176,6 +227,7 @@ function PortRow({
           position={Position.Right}
           className={`rf-handle ${isConnectionStart ? 'connection-start' : ''} ${isConnecting ? 'connecting' : ''}`}
           style={{ borderColor: typeColor, background: fillColor, top: PORT_TOP_OFFSET + index * PORT_STEP }}
+          onContextMenu={handlePortCircleContextMenu}
         />
       ) : null}
     </div>
@@ -267,7 +319,7 @@ const BulletJournalNodeCard = memo(({ data, selected }: NodeProps<BulletJournalN
 
   return (
     <div
-      className={`rf-node state-${node.state} ${selected ? 'is-selected' : ''} ${hasBlockingValidationIssues ? 'has-validation-error' : ''} ${isExecutionActive ? 'execution-active' : ''} ${isExecutionQueued ? 'execution-queued' : ''} ${isExecutionComplete ? 'execution-complete' : ''}`}
+      className={`rf-node state-${node.state} ${node.ui?.frozen ? 'is-frozen' : ''} ${selected ? 'is-selected' : ''} ${hasBlockingValidationIssues ? 'has-validation-error' : ''} ${isExecutionActive ? 'execution-active' : ''} ${isExecutionQueued ? 'execution-queued' : ''} ${isExecutionComplete ? 'execution-complete' : ''}`}
       title={validationSummary || undefined}
       onDoubleClick={(event) => {
         event.stopPropagation()
@@ -398,10 +450,15 @@ function isCompatibleWithIntent(snapshot: ProjectSnapshot, node: NodeRecord, por
   return targetPort?.data_type === port.data_type
 }
 
-export function GraphCanvas({ snapshot, serverNowMs = Date.now(), serverNowClientAnchorMs = Date.now(), selectedNodeIds, selectedEdgeIds, activeRunNodeId = null, queuedRunNodeIds = [], completedRunNodeIds = [], activeEditorNodeIds = [], onConnect, onEdgesChange, onSelectionChange, onNodeSelect, onEdgeSelect, onNodeContextMenu, onPortContextMenu, onEditFileNode, onOpenEditor, onKillEditor, onRunNode, onOpenArtifacts, onCanvasInteract, onCanvasClear, onNodeMove, onNodesDelete, draggedBlock, onBlockDrop }: GraphCanvasProps) {
+export function GraphCanvas({ snapshot, serverNowMs = Date.now(), serverNowClientAnchorMs = Date.now(), selectedNodeIds, selectedEdgeIds, activeRunNodeId = null, queuedRunNodeIds = [], completedRunNodeIds = [], activeEditorNodeIds = [], onConnect, onEdgesChange, onSelectionChange, onNodeSelect, onEdgeSelect, onNodeContextMenu, onSelectionContextMenu, onPortContextMenu, onEditFileNode, onOpenEditor, onKillEditor, onRunNode, onOpenArtifacts, onCanvasInteract, onCanvasClear, onNodeMove, onNodesDelete, draggedBlock, onBlockDrop }: GraphCanvasProps) {
   const { screenToFlowPosition } = useReactFlow()
+  const store = useStoreApi()
   const updateNodeInternals = useUpdateNodeInternals()
   const pendingPositionsRef = useRef<Record<string, { x: number; y: number }>>({})
+  const selectionStateRef = useRef<{ additive: boolean; baseNodeIds: string[]; baseEdgeIds: string[] } | null>(null)
+  const suppressNativeSelectionRef = useRef(false)
+  const userSelectionRect = useStore((state: FlowSelectionState) => state.userSelectionRect)
+  const transform = useStore((state: FlowSelectionState) => state.transform)
   const [pendingPositionVersion, setPendingPositionVersion] = useState(0)
   const [nodeDimensions, setNodeDimensions] = useState<Record<string, { width: number; height: number }>>({})
   const lastHandleSignatureRef = useRef<Record<string, string>>({})
@@ -497,19 +554,28 @@ export function GraphCanvas({ snapshot, serverNowMs = Date.now(), serverNowClien
   }, [mappedNodes, pendingPositionVersion])
 
   const edges = useMemo<Edge[]>(() => {
-    return snapshot.graph.edges.map((edge) => ({
-      id: edge.id,
-      source: edge.source_node,
-      target: edge.target_node,
-      sourceHandle: `out:${edge.source_port}`,
-      targetHandle: `in:${edge.target_port}`,
-      className: selectedEdgeIds.includes(edge.id) ? 'rf-edge-selected' : undefined,
-      selected: selectedEdgeIds.includes(edge.id),
-      animated: false,
-      markerEnd: { type: MarkerType.ArrowClosed, color: selectedEdgeIds.includes(edge.id) ? '#1d8f78' : '#75858a' },
-      style: { strokeWidth: selectedEdgeIds.includes(edge.id) ? 3.6 : 2.2, stroke: selectedEdgeIds.includes(edge.id) ? '#1d8f78' : '#75858a' },
-    }))
-  }, [snapshot.graph.edges, selectedEdgeIds])
+    const nodeById = new Map(snapshot.graph.nodes.map((node) => [node.id, node]))
+    return snapshot.graph.edges.map((edge) => {
+      const isSelected = selectedEdgeIds.includes(edge.id)
+      const isFrozen = Boolean(nodeById.get(edge.source_node)?.ui?.frozen && nodeById.get(edge.target_node)?.ui?.frozen)
+      const stroke = isSelected ? '#1d8f78' : isFrozen ? 'var(--freeze-edge)' : '#75858a'
+      const className = [isSelected ? 'rf-edge-selected' : null, isFrozen ? 'rf-edge-frozen' : null]
+        .filter(Boolean)
+        .join(' ') || undefined
+      return {
+        id: edge.id,
+        source: edge.source_node,
+        target: edge.target_node,
+        sourceHandle: `out:${edge.source_port}`,
+        targetHandle: `in:${edge.target_port}`,
+        className,
+        selected: isSelected,
+        animated: false,
+        markerEnd: { type: MarkerType.ArrowClosed, color: stroke },
+        style: { strokeWidth: isSelected ? 3.6 : isFrozen ? 2.8 : 2.2, stroke },
+      }
+    })
+  }, [snapshot.graph.edges, snapshot.graph.nodes, selectedEdgeIds])
 
   const handleNodeDragStop: NodeDragHandler = (_event, node) => {
     onCanvasInteract()
@@ -517,6 +583,59 @@ export function GraphCanvas({ snapshot, serverNowMs = Date.now(), serverNowClien
     setPendingPositionVersion((current) => current + 1)
     onNodeMove(node.id, node.position.x, node.position.y)
   }
+
+  useEffect(() => {
+    const selectionState = selectionStateRef.current
+    if (!selectionState || !userSelectionRect) {
+      return
+    }
+
+    const [translateX, translateY, zoom] = transform
+    const left = (userSelectionRect.x - translateX) / zoom
+    const top = (userSelectionRect.y - translateY) / zoom
+    const right = left + userSelectionRect.width / zoom
+    const bottom = top + userSelectionRect.height / zoom
+    const layoutByNodeId = new Map(snapshot.graph.layout.map((entry) => [entry.node_id, entry]))
+
+    const rectSelectedNodeIds = snapshot.graph.nodes
+      .filter((node) => {
+        const layout = layoutByNodeId.get(node.id)
+        const width = nodeDimensions[node.id]?.width ?? layout?.w ?? 360
+        const height = nodeDimensions[node.id]?.height ?? layout?.h ?? 220
+        const x = layout?.x ?? 80
+        const y = layout?.y ?? 80
+        return x >= left && y >= top && x + width <= right && y + height <= bottom
+      })
+      .map((node) => node.id)
+
+    const rectSelectedEdgeIds = snapshot.graph.edges
+      .filter((edge) => {
+        const sourceNode = snapshot.graph.nodes.find((node) => node.id === edge.source_node)
+        const targetNode = snapshot.graph.nodes.find((node) => node.id === edge.target_node)
+        if (!sourceNode || !targetNode) {
+          return false
+        }
+        const sourceAnchor = portAnchorForSelection(snapshot, sourceNode, nodeDimensions, 'output', edge.source_port)
+        const targetAnchor = portAnchorForSelection(snapshot, targetNode, nodeDimensions, 'input', edge.target_port)
+        if (!sourceAnchor || !targetAnchor) {
+          return false
+        }
+        const rect = { left, top, right, bottom }
+        return pointInRect(sourceAnchor.x, sourceAnchor.y, rect) && pointInRect(targetAnchor.x, targetAnchor.y, rect)
+      })
+      .map((edge) => edge.id)
+
+    if (selectionState.additive) {
+      onSelectionChange(
+        toggleIds(selectionState.baseNodeIds, rectSelectedNodeIds),
+        toggleIds(selectionState.baseEdgeIds, rectSelectedEdgeIds),
+        { additive: true },
+      )
+      return
+    }
+
+    onSelectionChange(rectSelectedNodeIds, rectSelectedEdgeIds)
+  }, [nodeDimensions, onSelectionChange, snapshot.graph.edges, snapshot.graph.layout, snapshot.graph.nodes, transform, userSelectionRect])
 
   return (
     <div className="graph-canvas-shell">
@@ -535,9 +654,9 @@ export function GraphCanvas({ snapshot, serverNowMs = Date.now(), serverNowClien
         nodesConnectable
         elementsSelectable
         selectionOnDrag
-        selectionMode={SelectionMode.Partial}
+        selectionMode={SelectionMode.Full}
         selectionKeyCode={['Shift']}
-        multiSelectionKeyCode={['Meta', 'Shift', 'Control']}
+        multiSelectionKeyCode={['Shift']}
         deleteKeyCode={['Backspace', 'Delete']}
         onNodesChange={(changes: NodeChange[]) => {
           let positionChanged = false
@@ -589,14 +708,19 @@ export function GraphCanvas({ snapshot, serverNowMs = Date.now(), serverNowClien
         }}
         onEdgeClick={(_event, edge) => {
           onCanvasInteract()
-          onEdgeSelect(edge.id)
+          onEdgeSelect(edge.id, { additive: _event.shiftKey })
+        }}
+        onEdgeContextMenu={(event, edge) => {
+          if (!(selectedEdgeIds.includes(edge.id) && selectedNodeIds.length > 0 && selectedNodeIds.length + selectedEdgeIds.length > 1)) {
+            return
+          }
+          event.preventDefault()
+          event.stopPropagation()
+          onSelectionContextMenu({ x: event.clientX, y: event.clientY })
         }}
         onNodeClick={(event, node) => {
           onCanvasInteract()
-          if (event.metaKey || event.ctrlKey || event.shiftKey) {
-            return
-          }
-          onNodeSelect(node.id)
+          onNodeSelect(node.id, { additive: event.shiftKey })
         }}
         onNodesDelete={onNodesDelete}
         onConnect={onConnect}
@@ -616,15 +740,58 @@ export function GraphCanvas({ snapshot, serverNowMs = Date.now(), serverNowClien
           return Boolean(sourcePort && targetPort && sourcePort.data_type === targetPort.data_type)
         }}
         onNodeDragStop={handleNodeDragStop}
-        onPaneClick={() => {
+        onPaneClick={(event) => {
+          if (event.shiftKey) {
+            return
+          }
           onCanvasInteract()
           onCanvasClear()
         }}
+        onPaneContextMenu={(event) => {
+          if (selectedNodeIds.length === 0 || selectedNodeIds.length + selectedEdgeIds.length <= 1) {
+            return
+          }
+          event.preventDefault()
+          onSelectionContextMenu({ x: event.clientX, y: event.clientY })
+        }}
+        onSelectionContextMenu={(event) => {
+          if (selectedNodeIds.length === 0 || selectedNodeIds.length + selectedEdgeIds.length <= 1) {
+            return
+          }
+          event.preventDefault()
+          onSelectionContextMenu({ x: event.clientX, y: event.clientY })
+        }}
+        onSelectionStart={(event) => {
+          selectionStateRef.current = {
+            additive: event.shiftKey,
+            baseNodeIds: selectedNodeIds,
+            baseEdgeIds: selectedEdgeIds,
+          }
+        }}
+        onSelectionEnd={() => {
+          selectionStateRef.current = null
+          store.setState({ nodesSelectionActive: false })
+          suppressNativeSelectionRef.current = true
+          window.requestAnimationFrame(() => {
+            suppressNativeSelectionRef.current = false
+          })
+        }}
         onSelectionChange={({ nodes: selectedNodes, edges: selectedEdges }) => {
-          onSelectionChange(
-            selectedNodes.map((node) => node.id),
-            selectedEdges.map((edge) => edge.id),
-          )
+          if (suppressNativeSelectionRef.current || (selectionStateRef.current && userSelectionRect)) {
+            return
+          }
+          const selectionState = selectionStateRef.current
+          const nextNodeIds = selectedNodes.map((node) => node.id)
+          const nextEdgeIds = selectedEdges.map((edge) => edge.id)
+          if (selectionState?.additive) {
+            onSelectionChange(
+              toggleIds(selectionState.baseNodeIds, nextNodeIds),
+              toggleIds(selectionState.baseEdgeIds, nextEdgeIds),
+              { additive: true },
+            )
+            return
+          }
+          onSelectionChange(nextNodeIds, nextEdgeIds)
         }}
         onMoveStart={onCanvasInteract}
         onNodeDragStart={onCanvasInteract}
