@@ -249,7 +249,13 @@ const BulletJournalNodeCard = memo(({ data, selected }: NodeProps<BulletJournalN
   const hasActiveEditor = data.activeEditorNodeIds.includes(node.id)
   const isExecutionActive = data.activeRunNodeId === node.id
   const isExecutionQueued = data.queuedRunNodeIds.includes(node.id)
+  const isEditorBlockedByExecution = !hasActiveEditor && (isExecutionActive || isExecutionQueued)
   const isExecutionComplete = data.completedRunNodeIds.includes(node.id)
+  const editorBlockedReason = isExecutionActive
+    ? 'Cannot open the editor while this notebook is executing.'
+    : isExecutionQueued
+      ? 'Cannot open the editor while this notebook is queued for execution.'
+      : undefined
   const executionMeta = node.execution_meta
   const serverNowMs = data.serverNowMs
   const [now, setNow] = useState(() => Date.now())
@@ -324,6 +330,9 @@ const BulletJournalNodeCard = memo(({ data, selected }: NodeProps<BulletJournalN
       onDoubleClick={(event) => {
         event.stopPropagation()
         if (node.kind === 'notebook') {
+          if (isEditorBlockedByExecution) {
+            return
+          }
           onOpenEditor(node.id)
           return
         }
@@ -395,10 +404,10 @@ const BulletJournalNodeCard = memo(({ data, selected }: NodeProps<BulletJournalN
                       return
                     }
                     onOpenEditor(node.id)
-                  }} aria-label={hasActiveEditor ? 'Editor actions' : 'Open editor'}><Pencil width={18} height={18} /></button>
+                  }} aria-label={hasActiveEditor ? 'Editor actions' : 'Open editor'} disabled={isEditorBlockedByExecution} title={editorBlockedReason}><Pencil width={18} height={18} /></button>
                   {menuOpen ? (
                     <div className="split-menu editor-menu" onClick={(event) => event.stopPropagation()}>
-                      <button className="secondary menu-item" onClick={() => {
+                      <button className="secondary menu-item" disabled={Boolean(editorBlockedReason)} title={editorBlockedReason} onClick={() => {
                         setMenuOpen(false)
                         onOpenEditor(node.id)
                       }}>Open editor</button>

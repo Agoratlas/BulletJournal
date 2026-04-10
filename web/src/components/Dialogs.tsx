@@ -52,6 +52,9 @@ type ConfirmDialogProps = {
   cancelLabel?: string
   alternateLabel?: string
   tone?: 'default' | 'danger'
+  confirmTone?: 'default' | 'danger' | 'success' | 'warning'
+  alternateTone?: 'default' | 'danger' | 'success' | 'warning'
+  cancelTone?: 'default' | 'danger' | 'success' | 'warning'
   onConfirm: () => void
   onAlternate?: () => void
   onClose: () => void
@@ -64,18 +67,48 @@ export function ConfirmDialog({
   cancelLabel = 'Cancel',
   alternateLabel,
   tone = 'default',
+  confirmTone,
+  alternateTone = 'default',
+  cancelTone = 'default',
   onConfirm,
   onAlternate,
   onClose,
 }: ConfirmDialogProps) {
+  const resolvedConfirmTone = confirmTone ?? tone
+  const actionButtonClassName = (buttonTone: 'default' | 'danger' | 'success' | 'warning') => {
+    if (buttonTone === 'danger') {
+      return 'danger'
+    }
+    if (buttonTone === 'success') {
+      return 'success'
+    }
+    if (buttonTone === 'warning') {
+      return 'warning'
+    }
+    return undefined
+  }
+
+  const neutralButtonClassName = (buttonTone: 'default' | 'danger' | 'success' | 'warning') => {
+    if (buttonTone === 'danger') {
+      return 'danger'
+    }
+    if (buttonTone === 'success') {
+      return 'success'
+    }
+    if (buttonTone === 'warning') {
+      return 'warning'
+    }
+    return 'secondary'
+  }
+
   return (
     <Modal title={title} onClose={onClose} contentClassName="confirm-dialog-card" showCloseButton={false}>
       <div className="confirm-dialog-body">
         <div className="confirm-dialog-copy">{message}</div>
         <div className="dialog-actions">
-          <button type="button" className="secondary" onClick={onClose}>{cancelLabel}</button>
-          {alternateLabel && onAlternate ? <button type="button" className="secondary" onClick={onAlternate}>{alternateLabel}</button> : null}
-          <button type="button" className={tone === 'danger' ? 'danger' : undefined} onClick={onConfirm}>{confirmLabel}</button>
+          <button type="button" className={neutralButtonClassName(cancelTone)} onClick={onClose}>{cancelLabel}</button>
+          {alternateLabel && onAlternate ? <button type="button" className={neutralButtonClassName(alternateTone)} onClick={onAlternate}>{alternateLabel}</button> : null}
+          <button type="button" className={actionButtonClassName(resolvedConfirmTone)} onClick={onConfirm}>{confirmLabel}</button>
         </div>
       </div>
     </Modal>

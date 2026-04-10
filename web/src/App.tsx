@@ -4,7 +4,7 @@ import type { Connection, EdgeChange, Node } from 'reactflow'
 
 import { appUrl, cancelRun, createCheckpoint, currentProject, dismissNotice, downloadNotebookSource, getSnapshot, listSessions, notebookDownloadUrl, patchGraph, restoreCheckpoint, runAll, runNode, setArtifactState, setNodeOutputsState, stopSession, uploadFile } from './lib/api'
 import { activeRunNodeId, artifactFor, artifactsForDisplay, currentRun, formatTimestamp, globalArtifactCounts, hiddenInputNames, inputState, queuedRunNodeIds, templateByRef } from './lib/helpers'
-import type { ArtifactRecord, GraphPatchOperation, LayoutRecord, NodeRecord, ProjectSnapshot, TemplateRecord } from './lib/types'
+import type { ArtifactRecord, GraphPatchOperation, LayoutRecord, NodeRecord, ProjectSnapshot, SessionRecord, TemplateRecord } from './lib/types'
 import type { AppNotice, ClipboardGraph, ClipboardNodeRecord, ConstantValueType, GraphHistoryEntry, GraphMutationPlan, NodeActionItem, OptimisticGraphState, PaletteEntry, PortActionMenuState } from './appTypes'
 import { applyOptimisticGraphOperations, artifactTargetForPort, blockCreateMode, buildConstantValueNotebookSource, clampContextMenuPosition, cloneSnapshot, copiedTitle, createClientNotice, edgeIdForPorts, edgeIdsForPort, editorSessionDetails, expandMutationPlan, fileInputAddOperationForNode, freezeBlockMessage, frozenBlockBlockersForDelete, frozenBlockBlockersForRemovedEdges, frozenBlockBlockersForStaleRoots, isEditableTarget, isEditorOpenConflict, isFreezeConflict, isManagedRunFailure, mergeGraphIntoSnapshot, normalizeNodeId, notebookAddOperationForNode, pipelineDefinitionNodeIds, pipelineTemplateNodeRecords, pipelineTopLeftForCenter, runFailureMessage, SNAPSHOT_REFRESH_EVENTS, SNAPSHOT_REFRESH_THROTTLE_MS, snapToGrid, uniqueCopiedNodeId } from './lib/appHelpers'
 import { ArtifactCard } from './components/ArtifactCard'
@@ -532,6 +532,124 @@ function App() {
       return true
     }
     return (node.interface?.inputs ?? []).every((port) => inputState(liveSnapshot, node.id, port) === 'ready')
+  }
+
+  function nodeTitle(nodeId: string): string {
+    return liveSnapshot?.graph.nodes.find((node) => node.id === nodeId)?.title ?? nodeId
+  }
+
+  function isNodeQueuedForExecution(nodeId: string): boolean {
+    if (!liveSnapshot) {
+      return false
+    }
+    const node = liveSnapshot.graph.nodes.find((entry) => entry.id === nodeId)
+    return node?.orchestrator_state?.status === 'queued' || node?.orchestrator_state?.status === 'running'
+  }
+
+  function plannedNotebookIdsForRunUpstream(nodeId: string): string[] {
+    if (!liveSnapshot) {
+      return []
+    }
+    const nodeById = new Map(liveSnapshot.graph.nodes.map((node) => [node.id, node]))
+    const upstreamByNodeId = new Map<string, string[]>()
+    for (const edge of liveSnapshot.graph.edges) {
+      const sources = upstreamByNodeId.get(edge.target_node) ?? []
+      sources.push(edge.source_node)
+      upstreamByNodeId.set(edge.target_node, sources)
+    }
+
+    const planned = new Set<string>()
+    const queue = [nodeId]
+    const visited = new Set<string>()
+    while (queue.length) {
+      const currentNodeId = queue.shift() as string
+      if (visited.has(currentNodeId)) {
+        continue
+      }
+      visited.add(currentNodeId)
+      const node = nodeById.get(currentNodeId)
+      if (!node) {
+        continue
+      }
+      if (node.kind === 'notebook') {
+        planned.add(currentNodeId)
+      }
+      const shouldTraverseUpstream = currentNodeId === nodeId
+        || node.state !== 'ready'
+        || node.orchestrator_state?.status === 'queued'
+        || node.orchestrator_state?.status === 'running'
+      if (!shouldTraverseUpstream) {
+        continue
+      }
+      for (const upstreamNodeId of upstreamByNodeId.get(currentNodeId) ?? []) {
+        queue.push(upstreamNodeId)
+      }
+    }
+    return Array.from(planned)
+  }
+
+  function plannedNotebookIdsForRunAll(): string[] {
+    if (!liveSnapshot) {
+      return []
+    }
+    return liveSnapshot.graph.nodes
+      .filter((node) => node.kind === 'notebook' && (
+        node.state !== 'ready'
+        || node.orchestrator_state?.status === 'queued'
+        || node.orchestrator_state?.status === 'running'
+      ))
+      .map((node) => node.id)
+  }
+
+  async function openEditorSessionsForNodeIds(nodeIds: string[]): Promise<SessionRecord[]> {
+    if (!nodeIds.length) {
+      return []
+    }
+    const targetNodeIds = new Set(nodeIds)
+    try {
+      const sessions = await listSessions()
+      return sessions.filter((session) => targetNodeIds.has(session.node_id))
+    } catch {
+      return activeEditorNodeIds
+        .filter((nodeId) => targetNodeIds.has(nodeId))
+        .map((nodeId) => ({ session_id: '', node_id: nodeId, run_id: '', url: '' }))
+    }
+  }
+
+  async function ensureNoOpenEditorsForRun(nodeIds: string[]): Promise<boolean> {
+    const blockingSessions = await openEditorSessionsForNodeIds(nodeIds)
+    if (!blockingSessions.length) {
+      return true
+    }
+    const blockingNodeIds = Array.from(new Set(blockingSessions.map((session) => session.node_id)))
+    const labels = blockingNodeIds.map((nodeId) => `\`${nodeTitle(nodeId)}\` (${nodeId})`).join(', ')
+    if (blockingSessions.length === 1 && blockingSessions[0].session_id && blockingSessions[0].url) {
+      const session = blockingSessions[0]
+      reportClientWarning(
+        `run-editor-open:${session.node_id}`,
+        'editor_already_open',
+        'Cannot start this orchestrated run while an editor is open for this notebook.',
+        {
+          nodeId: session.node_id,
+          details: { session_id: session.session_id, session_url: session.url, ready: session.ready },
+        },
+      )
+      return false
+    }
+    reportClientWarning(
+      `run-editor-open:${blockingNodeIds.join(',')}`,
+      'editor_open_in_run_queue',
+      `Cannot start this orchestrated run while editors are open for ${labels}. Close or kill those editors first.`,
+      { nodeId: blockingNodeIds.length === 1 ? blockingNodeIds[0] : null, details: { node_ids: blockingNodeIds } },
+    )
+    return false
+  }
+
+  function reportEditorBlockedByExecution(nodeId: string) {
+    const message = isNodeQueuedForExecution(nodeId)
+      ? 'Cannot open the editor while this notebook is queued or running in the orchestrated execution queue.'
+      : 'Cannot open the editor right now.'
+    reportClientWarning(`editor-blocked-by-run:${nodeId}`, 'editor_blocked_by_execution', message, { nodeId })
   }
 
   async function handleSetNodeOutputsStateForNodes(
@@ -1255,20 +1373,23 @@ function App() {
     operations: GraphPatchOperation[],
     options: { history?: GraphHistoryEntry | null; onSuccess?: () => void } = {},
   ): Promise<boolean> {
-    if (!liveSnapshot || !projectId) {
+    const currentSnapshot = (queryClient.getQueryData(['snapshot']) as ProjectSnapshot | undefined)
+      ?? (queryClient.getQueryData(['project-current']) as ProjectSnapshot | undefined)
+      ?? liveSnapshot
+    if (!currentSnapshot || !projectId) {
       return false
     }
-    const rollbackSnapshot = liveSnapshot
+    const rollbackSnapshot = currentSnapshot
     try {
       await Promise.all([
         queryClient.cancelQueries({ queryKey: ['snapshot'], exact: true }),
         queryClient.cancelQueries({ queryKey: ['project-current'], exact: true }),
       ])
-      const optimistic = applyOptimisticGraphOperations(liveSnapshot, operations as Array<Record<string, unknown>>)
+      const optimistic = applyOptimisticGraphOperations(currentSnapshot, operations as Array<Record<string, unknown>>)
       if (optimistic) {
         setOptimisticGraph(optimistic)
       }
-      const response = await patchGraph(liveSnapshot.graph.meta.graph_version, operations)
+      const response = await patchGraph(currentSnapshot.graph.meta.graph_version, operations)
       setSnapshotData(queryClient, rollbackSnapshot, (current) => mergeGraphIntoSnapshot(current, response))
       if (options.history) {
         setGraphHistoryPast((current) => [...current, options.history as GraphHistoryEntry])
@@ -1632,6 +1753,15 @@ function App() {
     if (!projectId) {
       return
     }
+    if (mode !== 'edit_run') {
+      const plannedNodeIds = mode === 'run_all'
+        ? plannedNotebookIdsForRunUpstream(nodeId)
+        : [nodeId]
+      const canStartRun = await ensureNoOpenEditorsForRun(plannedNodeIds)
+      if (!canStartRun) {
+        return
+      }
+    }
     try {
       const initialResponse = await runNode(nodeId, mode, mode === 'edit_run' ? null : 'use_stale')
       let response = initialResponse
@@ -1644,7 +1774,7 @@ function App() {
           kind: 'run-upstream',
           nodeId,
           mode,
-          message: 'Some inputs are stale or pending. Refresh upstream notebooks first, or run with stale data.',
+          message: 'Some input artifacts are stale or pending. Do you want to run upstream blocks to refresh them?',
         })
         return
       }
@@ -1700,6 +1830,13 @@ function App() {
     if (!projectId) {
       return
     }
+    const plannedNodeIds = action === 'run_upstream'
+      ? plannedNotebookIdsForRunUpstream(nodeId)
+      : [nodeId]
+    const canStartRun = await ensureNoOpenEditorsForRun(plannedNodeIds)
+    if (!canStartRun) {
+      return
+    }
     try {
       const response = await runNode(nodeId, mode, action)
       if (response.status === 'failed') {
@@ -1723,6 +1860,10 @@ function App() {
 
   async function confirmRunAll() {
     if (!projectId) {
+      return
+    }
+    const canStartRun = await ensureNoOpenEditorsForRun(plannedNotebookIdsForRunAll())
+    if (!canStartRun) {
       return
     }
     try {
@@ -1936,6 +2077,10 @@ function App() {
   }
 
   async function handleOpenEditor(nodeId: string) {
+    if (isNodeQueuedForExecution(nodeId)) {
+      reportEditorBlockedByExecution(nodeId)
+      return
+    }
     await handleRunNode(nodeId, 'edit_run')
   }
 
@@ -1971,7 +2116,8 @@ function App() {
     const nodeIdMap = new Map<string, string>()
     const nextNodeIds: string[] = []
     const offset = 40 * (pasteSequence + 1)
-    const operations: GraphPatchOperation[] = []
+    const nodeOperations: GraphPatchOperation[] = []
+    const edgeOperations: GraphPatchOperation[] = []
 
     for (const item of clipboardGraph.nodes) {
       const nextNodeId = uniqueCopiedNodeId(item.node.id, existingIds)
@@ -1986,9 +2132,9 @@ function App() {
       }
       const nextTitle = copiedTitle(item.node.title)
       if (item.node.kind === 'notebook') {
-        operations.push(notebookAddOperationForNode(item.node, nextLayout, item.sourceText, nextNodeId, nextTitle))
+        nodeOperations.push(notebookAddOperationForNode(item.node, nextLayout, item.sourceText, nextNodeId, nextTitle))
       } else {
-        operations.push(fileInputAddOperationForNode(item.node, nextLayout, nextNodeId, nextTitle))
+        nodeOperations.push(fileInputAddOperationForNode(item.node, nextLayout, nextNodeId, nextTitle))
       }
     }
 
@@ -1998,7 +2144,7 @@ function App() {
       if (!sourceNode || !targetNode) {
         continue
       }
-      operations.push({
+      edgeOperations.push({
         type: 'add_edge',
         source_node: sourceNode,
         source_port: edge.source_port,
@@ -2007,15 +2153,31 @@ function App() {
       })
     }
 
-    const redo = { operations }
-    const success = await mutateGraph(redo.operations, {
-      history: simpleHistoryEntryForPlan(liveSnapshot, redo),
-      onSuccess: () => {
-        applySelection(nextNodeIds, [], { openInspector: nextNodeIds.length === 1 })
-        setPasteSequence((current) => current + 1)
-      },
-    })
+    const redo = { operations: nodeOperations, followUpOperations: edgeOperations }
+    const history = simpleHistoryEntryForPlan(liveSnapshot, redo)
+    const commitPasteSuccess = () => {
+      applySelection(nextNodeIds, [], { openInspector: nextNodeIds.length === 1 })
+      setPasteSequence((current) => current + 1)
+      if (history) {
+        setGraphHistoryPast((current) => [...current, history])
+        setGraphHistoryFuture([])
+      }
+    }
+
+    const nodesAdded = await mutateGraph(nodeOperations)
+    if (!nodesAdded) {
+      return
+    }
+    const success = edgeOperations.length
+      ? await mutateGraph(edgeOperations, { onSuccess: commitPasteSuccess })
+      : (() => {
+          commitPasteSuccess()
+          return Promise.resolve(true)
+        })()
     if (!success) {
+      if (nextNodeIds.length) {
+        await mutateGraph(nextNodeIds.map((nextNodeId) => ({ type: 'delete_node', node_id: nextNodeId })))
+      }
       return
     }
   }
@@ -2156,12 +2318,13 @@ function App() {
                 <span>Search blocks</span>
                 <input value={paletteSearch} onChange={(event) => setPaletteSearch(event.target.value)} placeholder="Search blocks or templates" />
               </label>
-              <label className="toggle-row">
+              <label className="toggle-row toggle-switch-row">
                 <input
                   type="checkbox"
                   checked={showHiddenTemplates}
                   onChange={(event) => setShowHiddenTemplates(event.target.checked)}
                 />
+                <span className="toggle-switch" aria-hidden="true"><span /></span>
                 <span>Show hidden templates</span>
               </label>
               <BlockPalette
@@ -2522,11 +2685,14 @@ function App() {
 
       {confirmationState?.kind === 'run-upstream' ? (
         <ConfirmDialog
-          title="Refresh upstream notebooks?"
+          title="Refresh upstream blocks?"
           message={confirmationState.message}
-          confirmLabel="Refresh upstream"
-          alternateLabel="Use stale data"
+          confirmLabel="Yes"
+          confirmTone="success"
+          alternateLabel="Use stale inputs"
+          alternateTone="warning"
           cancelLabel="Cancel"
+          cancelTone="default"
           onClose={() => setConfirmationState(null)}
           onAlternate={() => {
             const pending = confirmationState

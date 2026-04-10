@@ -63,6 +63,7 @@ body {
   color: var(--ink);
   font-family: var(--sans);
   background: var(--bg);
+  overflow: hidden;
 }
 
 button,
@@ -105,6 +106,14 @@ button.danger {
   background: var(--bad);
 }
 
+button.success {
+  background: var(--good);
+}
+
+button.warning {
+  background: var(--warn);
+}
+
 button.play-action {
   width: 48px;
   height: 48px;
@@ -123,6 +132,28 @@ button.play-action:hover {
 :root[data-theme='dark'] button.play-action {
   background: linear-gradient(135deg, #5ec089, #2f855a);
   box-shadow: 0 12px 28px rgba(0, 0, 0, 0.28);
+}
+
+:root[data-theme='dark'] button.success {
+  background: var(--good);
+}
+
+:root[data-theme='dark'] button.warning {
+  background: var(--warn);
+}
+
+:root[data-theme='dark'] .toggle-switch {
+  background: rgba(152, 162, 163, 0.22);
+  border-color: rgba(230, 223, 211, 0.16);
+}
+
+:root[data-theme='dark'] .toggle-switch > span {
+  background: rgba(250, 246, 235, 0.96);
+}
+
+:root[data-theme='dark'] .toggle-switch-row input:checked + .toggle-switch {
+  background: rgba(92, 189, 180, 0.82);
+  border-color: rgba(92, 189, 180, 0.42);
 }
 
 button.small {
@@ -220,9 +251,48 @@ label span,
   color: var(--muted);
 }
 
-.toggle-row input {
-  width: auto;
-  margin: 0;
+.toggle-switch-row {
+  cursor: pointer;
+}
+
+.toggle-switch-row input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.toggle-switch {
+  width: 44px;
+  height: 26px;
+  border-radius: 999px;
+  background: rgba(152, 162, 163, 0.34);
+  border: 1px solid rgba(40, 58, 48, 0.12);
+  display: inline-flex;
+  align-items: center;
+  padding: 3px;
+  transition: background 140ms ease, border-color 140ms ease, box-shadow 140ms ease;
+}
+
+.toggle-switch > span {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: white;
+  box-shadow: 0 2px 8px rgba(31, 43, 36, 0.2);
+  transition: transform 140ms ease;
+}
+
+.toggle-switch-row input:checked + .toggle-switch {
+  background: rgba(15, 118, 110, 0.82);
+  border-color: rgba(15, 118, 110, 0.42);
+}
+
+.toggle-switch-row input:checked + .toggle-switch > span {
+  transform: translateX(18px);
+}
+
+.toggle-switch-row input:focus-visible + .toggle-switch {
+  box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.18);
 }
 
 .eyebrow {
@@ -235,8 +305,9 @@ label span,
 
 .app-shell {
   position: relative;
-  min-height: 100vh;
+  height: 100vh;
   padding: 18px;
+  overflow: hidden;
 }
 
 .canvas-underlay {
@@ -383,7 +454,7 @@ label span,
 
 .workspace-grid {
   display: block;
-  min-height: 100vh;
+  height: 100%;
 }
 
 .sidebar {
