@@ -307,6 +307,65 @@ def test_edit_session_proxy_accepts_upstream_session_cookie(monkeypatch, tmp_pat
     assert response.text == 'ok'
 
 
+def test_edit_session_proxy_forwards_public_http_origin_headers(monkeypatch, tmp_path: Path) -> None:
+    web_root = tmp_path / 'web'
+    web_root.mkdir()
+    captured_headers: dict[str, str] = {}
+
+    class FakeProcess:
+        def poll(self):
+            return None
+
+    session = SimpleNamespace(
+        host='127.0.0.1',
+        port=52012,
+        base_url='/api/v1/edit/sessions/demo',
+        process=FakeProcess(),
+    )
+    container = FakeContainer()
+    container.run_service.session_manager = SimpleNamespace(
+        get=lambda session_id: session if session_id == 'demo' else None
+    )
+
+    class FakeResponse:
+        def __init__(self):
+            self.content = b'ok'
+            self.status_code = 200
+            self.headers = {'content-type': 'text/plain'}
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def request(self, *args, **kwargs):
+            captured_headers.update(cast(dict[str, str], kwargs['headers']))
+            return FakeResponse()
+
+    monkeypatch.setattr(api_app_module.httpx, 'AsyncClient', FakeClient)
+    app, _ = _make_app(monkeypatch, web_root, container=container)
+
+    with TestClient(app) as client:
+        response = client.get(
+            '/api/v1/edit/sessions/demo/assets/useNonce.js',
+            headers={
+                'host': 'internal.controller',
+                'x-forwarded-host': 'public.example.com',
+                'x-forwarded-proto': 'https',
+            },
+        )
+
+    assert response.status_code == 200
+    assert captured_headers['host'] == 'public.example.com'
+    assert captured_headers['x-forwarded-host'] == 'public.example.com'
+    assert captured_headers['x-forwarded-proto'] == 'https'
+
+
 def test_create_app_serves_assets_and_api_under_base_path(monkeypatch, tmp_path: Path) -> None:
     web_root = tmp_path / 'web'
     assets_dir = web_root / 'assets'
@@ -417,6 +476,71 @@ def test_create_app_preserves_upstream_websocket_close_reason(monkeypatch, tmp_p
 
     assert excinfo.value.code == 1000
     assert excinfo.value.reason == 'MARIMO_NO_SESSION_ID'
+
+
+def test_create_app_forwards_public_websocket_origin_headers(monkeypatch, tmp_path: Path) -> None:
+    web_root = tmp_path / 'web'
+    web_root.mkdir()
+    captured_headers: list[tuple[str, str]] = []
+    listener = socket.socket()
+    listener.bind(('127.0.0.1', 0))
+    port = int(listener.getsockname()[1])
+    listener.close()
+
+    def echo(connection) -> None:
+        message = connection.recv()
+        connection.send(f'echo:{message}')
+
+    server = serve(echo, '127.0.0.1', port)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    time.sleep(0.1)
+
+    class FakeProcess:
+        def poll(self):
+            return None
+
+    session = SimpleNamespace(
+        host='127.0.0.1',
+        port=port,
+        base_url='/api/v1/edit/sessions/demo',
+        process=FakeProcess(),
+    )
+    container = FakeContainer()
+    container.run_service.session_manager = SimpleNamespace(
+        get=lambda session_id: session if session_id == 'demo' else None
+    )
+
+    original_ws_connect = api_app_module.ws_connect
+
+    def capturing_ws_connect(*args, **kwargs):
+        captured_headers.extend(cast(list[tuple[str, str]], kwargs['additional_headers']))
+        return original_ws_connect(*args, **kwargs)
+
+    monkeypatch.setattr(api_app_module, 'ws_connect', capturing_ws_connect)
+    app, _ = _make_app(monkeypatch, web_root, container=container)
+
+    try:
+        with (
+            TestClient(app) as client,
+            client.websocket_connect(
+                '/api/v1/edit/sessions/demo/ws',
+                headers={
+                    'host': 'internal.controller',
+                    'x-forwarded-host': 'public.example.com',
+                    'x-forwarded-proto': 'https',
+                },
+            ) as websocket,
+        ):
+            websocket.send_text('hello')
+            assert websocket.receive_text() == 'echo:hello'
+    finally:
+        server.shutdown()
+        thread.join(timeout=2)
+
+    forwarded = dict(captured_headers)
+    assert forwarded['x-forwarded-host'] == 'public.example.com'
+    assert forwarded['x-forwarded-proto'] == 'https'
 
 
 def test_cors_allowed_origins_include_valid_dev_frontend_only() -> None:

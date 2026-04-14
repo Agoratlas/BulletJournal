@@ -104,8 +104,16 @@ def test_app_dispatches_start_and_dev_commands(monkeypatch: pytest.MonkeyPatch) 
     dev_calls: list[tuple[str, bool, str]] = []
 
     monkeypatch.setattr(cli_app, 'require_project_root', lambda path: SimpleNamespace(root=path))
-    monkeypatch.setattr(cli_app, 'start_server', lambda path, open_browser=False, base_path='': start_calls.append((path, open_browser, base_path)))
-    monkeypatch.setattr(cli_app, 'dev_server', lambda path, open_browser=False, base_path='': dev_calls.append((path, open_browser, base_path)))
+    monkeypatch.setattr(
+        cli_app,
+        'start_server',
+        lambda path, open_browser=False, base_path='': start_calls.append((path, open_browser, base_path)),
+    )
+    monkeypatch.setattr(
+        cli_app,
+        'dev_server',
+        lambda path, open_browser=False, base_path='': dev_calls.append((path, open_browser, base_path)),
+    )
 
     monkeypatch.setattr(cli_app, 'build_parser', lambda: start_parser)
     cli_app.app()
@@ -124,14 +132,22 @@ def test_app_prints_json_for_health_commands(
     doctor_parser = DummyParser(argparse.Namespace(command='doctor', path='demo'))
     validate_parser = DummyParser(argparse.Namespace(command='validate-templates', path='templates'))
     rebuild_parser = DummyParser(argparse.Namespace(command='rebuild-state', path='demo'))
-    export_parser = DummyParser(argparse.Namespace(command='export', path='demo', archive='demo.zip', without_artifacts=True))
+    export_parser = DummyParser(
+        argparse.Namespace(command='export', path='demo', archive='demo.zip', without_artifacts=True)
+    )
     import_parser = DummyParser(argparse.Namespace(command='import', archive='demo.zip', path='demo'))
-    mark_env_parser = DummyParser(argparse.Namespace(command='mark-environment-changed', path='demo', reason='deps changed'))
+    mark_env_parser = DummyParser(
+        argparse.Namespace(command='mark-environment-changed', path='demo', reason='deps changed')
+    )
 
     monkeypatch.setattr(cli_app, 'doctor', lambda path: {'ok': True, 'path': path})
     monkeypatch.setattr(cli_app, 'validate_templates', lambda path: [{'path': path, 'issues': []}])
     monkeypatch.setattr(cli_app, 'rebuild_state', lambda path: {'project': path})
-    monkeypatch.setattr(cli_app, 'export_project', lambda path, archive, include_artifacts=True: {'archive': archive, 'include_artifacts': include_artifacts})
+    monkeypatch.setattr(
+        cli_app,
+        'export_project',
+        lambda path, archive, include_artifacts=True: {'archive': archive, 'include_artifacts': include_artifacts},
+    )
     monkeypatch.setattr(cli_app, 'import_project', lambda archive, path: {'archive': archive, 'path': path})
     monkeypatch.setattr(cli_app, 'mark_environment_changed', lambda path, reason: {'project': path, 'reason': reason})
 
@@ -180,7 +196,7 @@ def test_start_server_builds_app_and_opens_browser(monkeypatch: pytest.MonkeyPat
 
     timer_delays: list[float] = []
     opened_urls: list[str] = []
-    uvicorn_calls: list[tuple[object, str, int, bool]] = []
+    uvicorn_calls: list[tuple[object, str, int, bool, bool, str]] = []
     created: dict[str, object] = {}
 
     class FakeTimer:
@@ -204,7 +220,9 @@ def test_start_server_builds_app_and_opens_browser(monkeypatch: pytest.MonkeyPat
     monkeypatch.setattr(
         start_module.uvicorn,
         'run',
-        lambda app, host, port, reload: uvicorn_calls.append((app, host, port, reload)),
+        lambda app, host, port, reload, proxy_headers, forwarded_allow_ips: uvicorn_calls.append(
+            (app, host, port, reload, proxy_headers, forwarded_allow_ips)
+        ),
     )
 
     start_module.start_server(
@@ -219,17 +237,17 @@ def test_start_server_builds_app_and_opens_browser(monkeypatch: pytest.MonkeyPat
 
     assert created['project_path'] == Path('demo').resolve()
     assert created['server_config'] == ServerConfig(
-            host='0.0.0.0',
-            port=9000,
-            base_path='/p/demo',
-            open_browser=True,
-            reload=True,
-            dev_frontend_url='http://127.0.0.1:5173',
-            controller_token='secret-token',
-        )
+        host='0.0.0.0',
+        port=9000,
+        base_path='/p/demo',
+        open_browser=True,
+        reload=True,
+        dev_frontend_url='http://127.0.0.1:5173',
+        controller_token='secret-token',
+    )
     assert timer_delays == [1.0]
     assert opened_urls == ['http://0.0.0.0:9000/p/demo']
-    assert uvicorn_calls == [('fake-app', '0.0.0.0', 9000, True)]
+    assert uvicorn_calls == [('fake-app', '0.0.0.0', 9000, True, True, '127.0.0.1')]
 
 
 def test_dev_server_prefers_pnpm_and_terminates_running_vite(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -249,7 +267,9 @@ def test_dev_server_prefers_pnpm_and_terminates_running_vite(monkeypatch: pytest
     process = FakeProcess()
 
     monkeypatch.setattr(dev_module.shutil, 'which', lambda name: '/usr/bin/pnpm' if name == 'pnpm' else None)
-    monkeypatch.setattr(dev_module.subprocess, 'Popen', lambda command, cwd: popen_calls.append((command, cwd)) or process)
+    monkeypatch.setattr(
+        dev_module.subprocess, 'Popen', lambda command, cwd: popen_calls.append((command, cwd)) or process
+    )
     monkeypatch.setattr(
         dev_module,
         'start_server',
@@ -284,7 +304,9 @@ def test_dev_server_uses_corepack_when_pnpm_missing(monkeypatch: pytest.MonkeyPa
         return None
 
     monkeypatch.setattr(dev_module.shutil, 'which', fake_which)
-    monkeypatch.setattr(dev_module.subprocess, 'Popen', lambda command, cwd: popen_calls.append(command) or FakeProcess())
+    monkeypatch.setattr(
+        dev_module.subprocess, 'Popen', lambda command, cwd: popen_calls.append(command) or FakeProcess()
+    )
     monkeypatch.setattr(dev_module, 'start_server', lambda path, **kwargs: None)
 
     dev_module.dev_server('demo')
@@ -296,7 +318,11 @@ def test_dev_server_skips_vite_when_no_package_manager(monkeypatch: pytest.Monke
     start_calls: list[dict[str, object]] = []
 
     monkeypatch.setattr(dev_module.shutil, 'which', lambda name: None)
-    monkeypatch.setattr(dev_module.subprocess, 'Popen', lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError('unexpected Popen')))
+    monkeypatch.setattr(
+        dev_module.subprocess,
+        'Popen',
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError('unexpected Popen')),
+    )
     monkeypatch.setattr(dev_module, 'start_server', lambda path, **kwargs: start_calls.append({'path': path, **kwargs}))
 
     dev_module.dev_server('demo')
@@ -364,8 +390,19 @@ def test_mark_environment_changed_opens_project_and_updates_state(monkeypatch: p
 
 
 def test_export_and_import_commands_delegate_to_archive_helpers(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(export_project_module, 'export_project_archive', lambda path, archive_path, include_artifacts=True: {'archive': str(archive_path), 'include_artifacts': include_artifacts})
-    monkeypatch.setattr(import_project_module, 'import_project_archive', lambda archive_path, path: {'archive': str(archive_path), 'path': str(path)})
+    monkeypatch.setattr(
+        export_project_module,
+        'export_project_archive',
+        lambda path, archive_path, include_artifacts=True: {
+            'archive': str(archive_path),
+            'include_artifacts': include_artifacts,
+        },
+    )
+    monkeypatch.setattr(
+        import_project_module,
+        'import_project_archive',
+        lambda archive_path, path: {'archive': str(archive_path), 'path': str(path)},
+    )
 
     exported = export_project_module.export_project('demo', 'demo.zip', include_artifacts=False)
     imported = import_project_module.import_project('demo.zip', 'demo')

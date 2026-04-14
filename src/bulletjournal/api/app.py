@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Mapping
 from contextlib import asynccontextmanager
 from pathlib import Path
 from urllib.parse import urlencode, urlsplit
@@ -69,8 +70,14 @@ def create_app(*, project_path: Path | None = None, server_config: ServerConfig 
         project_id = request.app.state.container.project_service.require_project().metadata.project_id
         return sse_response(app.state.container, project_id, request, last_event_id=last_event_id)
 
-    @app.api_route(_route_path(base_path, '/api/v1/edit/sessions/{session_id}'), methods=['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'])
-    @app.api_route(_route_path(base_path, '/api/v1/edit/sessions/{session_id}/{path:path}'), methods=['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'])
+    @app.api_route(
+        _route_path(base_path, '/api/v1/edit/sessions/{session_id}'),
+        methods=['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+    )
+    @app.api_route(
+        _route_path(base_path, '/api/v1/edit/sessions/{session_id}/{path:path}'),
+        methods=['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+    )
     async def proxy_edit_session(session_id: str, request: Request, path: str = ''):
         session = _editor_session_or_response(app, session_id)
         if not isinstance(session, dict):
@@ -138,7 +145,7 @@ def create_app(*, project_path: Path | None = None, server_config: ServerConfig 
         if resolved_server_config.dev_frontend_url:
             suffix = path.lstrip('/')
             if suffix:
-                return RedirectResponse(f"{resolved_server_config.dev_frontend_url.rstrip('/')}/{suffix}")
+                return RedirectResponse(f'{resolved_server_config.dev_frontend_url.rstrip("/")}/{suffix}')
             return RedirectResponse(str(resolved_server_config.dev_frontend_url))
         candidate = web_root / path
         if path and candidate.exists() and candidate.is_file():
@@ -146,7 +153,7 @@ def create_app(*, project_path: Path | None = None, server_config: ServerConfig 
         index = web_root / 'index.html'
         if index.exists():
             html = index.read_text(encoding='utf-8')
-            snippet = f"<script>window.__BULLETJOURNAL_BASE_PATH__ = {base_path!r};</script>"
+            snippet = f'<script>window.__BULLETJOURNAL_BASE_PATH__ = {base_path!r};</script>'
             injected = html.replace('</head>', f'{snippet}</head>', 1) if '</head>' in html else f'{html}{snippet}'
             return HTMLResponse(injected)
         return JSONResponse(
@@ -174,9 +181,47 @@ def _route_path(base_path: str, suffix: str) -> str:
     return f'{base_path}{normalized_suffix}' if base_path else normalized_suffix
 
 
+def _resolve_public_origin(headers: Mapping[str, str], *, scheme: str) -> tuple[str | None, str, str | None]:
+    forwarded_host = _first_forwarded_value(headers.get('x-forwarded-host'))
+    host = _first_forwarded_value(headers.get('host'))
+    public_host, derived_port = _split_host_and_port(forwarded_host or host)
+    public_proto = _first_forwarded_value(headers.get('x-forwarded-proto')) or scheme
+    public_port = _first_forwarded_value(headers.get('x-forwarded-port')) or derived_port
+    return public_host, public_proto, public_port
+
+
+def _first_forwarded_value(value: str | None) -> str | None:
+    if value is None:
+        return None
+    for item in value.split(','):
+        stripped = item.strip()
+        if stripped:
+            return stripped
+    return None
+
+
+def _split_host_and_port(host: str | None) -> tuple[str | None, str | None]:
+    if not host:
+        return None, None
+    parsed = urlsplit(f'//{host}')
+    try:
+        port = parsed.port
+    except ValueError:
+        port = None
+    return parsed.hostname, str(port) if port is not None else None
+
+
 def _proxy_request_headers(request: Request) -> dict[str, str]:
     excluded = {'host', 'content-length'}
-    return {key: value for key, value in request.headers.items() if key.lower() not in excluded}
+    resolved = {key: value for key, value in request.headers.items() if key.lower() not in excluded}
+    public_host, public_proto, public_port = _resolve_public_origin(request.headers, scheme=request.url.scheme)
+    if public_host is not None:
+        resolved['host'] = public_host
+        resolved['x-forwarded-host'] = public_host
+    resolved['x-forwarded-proto'] = public_proto
+    if public_port is not None:
+        resolved['x-forwarded-port'] = public_port
+    return resolved
 
 
 def _proxy_response_headers(
@@ -233,7 +278,7 @@ def _rewrite_upstream_location(location: str, *, request: Request, session: dict
         f'ws://{session_host}:{session_port}{session_base_url}',
     ):
         if location.startswith(prefix):
-            return f'{public_session_base}{location[len(prefix):]}'
+            return f'{public_session_base}{location[len(prefix) :]}'
 
     if location == session_base_url or location.startswith(f'{session_base_url}/'):
         return f'{public_base}{location}'
@@ -242,8 +287,23 @@ def _rewrite_upstream_location(location: str, *, request: Request, session: dict
 
 
 def _proxy_websocket_headers(websocket: WebSocket) -> list[tuple[str, str]]:
-    excluded = {'host', 'connection', 'upgrade', 'sec-websocket-key', 'sec-websocket-version', 'sec-websocket-extensions', 'sec-websocket-protocol'}
-    return [(key, value) for key, value in websocket.headers.items() if key.lower() not in excluded]
+    excluded = {
+        'host',
+        'connection',
+        'upgrade',
+        'sec-websocket-key',
+        'sec-websocket-version',
+        'sec-websocket-extensions',
+        'sec-websocket-protocol',
+    }
+    resolved = [(key, value) for key, value in websocket.headers.items() if key.lower() not in excluded]
+    public_host, public_proto, public_port = _resolve_public_origin(websocket.headers, scheme=websocket.url.scheme)
+    if public_host is not None:
+        resolved.append(('x-forwarded-host', public_host))
+    resolved.append(('x-forwarded-proto', public_proto))
+    if public_port is not None:
+        resolved.append(('x-forwarded-port', public_port))
+    return resolved
 
 
 async def _bridge_websocket(websocket: WebSocket, upstream) -> None:

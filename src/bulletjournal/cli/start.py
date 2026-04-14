@@ -6,7 +6,13 @@ from pathlib import Path
 
 import uvicorn
 
-from bulletjournal.config import DEFAULT_HOST, DEFAULT_PORT, ServerConfig, controller_token_from_env, normalize_base_path
+from bulletjournal.config import (
+    DEFAULT_HOST,
+    DEFAULT_PORT,
+    ServerConfig,
+    controller_token_from_env,
+    normalize_base_path,
+)
 from bulletjournal.storage import require_project_root
 
 
@@ -38,4 +44,4 @@ def start_server(
     )
     if open_browser:
         threading.Timer(1.0, lambda: webbrowser.open(f'http://{host}:{port}{normalized_base_path or "/"}')).start()
-    uvicorn.run(app, host=host, port=port, reload=reload)
+    uvicorn.run(app, host=host, port=port, reload=reload, proxy_headers=True, forwarded_allow_ips='127.0.0.1')
