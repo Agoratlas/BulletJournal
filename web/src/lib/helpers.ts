@@ -24,6 +24,10 @@ export function hiddenInputs(node: NodeRecord): Port[] {
   return (node.interface?.inputs ?? []).filter((port) => hidden.has(port.name))
 }
 
+export function organizerPorts(node: NodeRecord): Array<{ key: string; name: string; data_type: string }> {
+  return node.ui?.organizer_ports ?? []
+}
+
 export function outputsForNode(node: NodeRecord): Port[] {
   return node.interface?.outputs ?? []
 }
@@ -82,9 +86,39 @@ export function artifactFor(snapshot: ProjectSnapshot, nodeId: string, artifactN
 }
 
 export function inputBindingSource(snapshot: ProjectSnapshot, nodeId: string, inputName: string) {
-  return snapshot.graph.edges.find(
+  const direct = snapshot.graph.edges.find(
     (edge) => edge.target_node === nodeId && edge.target_port === inputName,
   )
+  if (!direct) {
+    return null
+  }
+  return resolveOutputBinding(snapshot, direct.source_node, direct.source_port)
+}
+
+export function resolveOutputBinding(snapshot: ProjectSnapshot, nodeId: string, portName: string): { source_node: string; source_port: string } | null {
+  const nodeById = new Map(snapshot.graph.nodes.map((node) => [node.id, node]))
+  let currentNodeId = nodeId
+  let currentPortName = portName
+  const visited = new Set<string>()
+  while (true) {
+    const signature = `${currentNodeId}:${currentPortName}`
+    if (visited.has(signature)) {
+      return null
+    }
+    visited.add(signature)
+    const node = nodeById.get(currentNodeId)
+    if (!node || node.kind !== 'organizer') {
+      return { source_node: currentNodeId, source_port: currentPortName }
+    }
+    const upstream = snapshot.graph.edges.find(
+      (edge) => edge.target_node === currentNodeId && edge.target_port === currentPortName,
+    )
+    if (!upstream) {
+      return null
+    }
+    currentNodeId = upstream.source_node
+    currentPortName = upstream.source_port
+  }
 }
 
 export function inputState(snapshot: ProjectSnapshot, nodeId: string, port: Port): ArtifactState {
@@ -98,6 +132,12 @@ export function inputState(snapshot: ProjectSnapshot, nodeId: string, port: Port
 export function badgeForNode(snapshot: ProjectSnapshot, node: NodeRecord): { label: string; title: string; tone: 'input' | 'template' | 'template-modified' | 'custom' } {
   if (node.kind === 'file_input') {
     return { label: 'F', title: 'File input node', tone: 'input' }
+  }
+  if (node.kind === 'organizer') {
+    return { label: 'O', title: 'Organizer block', tone: 'custom' }
+  }
+  if (node.kind === 'area') {
+    return { label: 'A', title: 'Area block', tone: 'custom' }
   }
   if (node.ui?.origin === 'constant_value') {
     return { label: 'V', title: 'Constant value node', tone: 'input' }

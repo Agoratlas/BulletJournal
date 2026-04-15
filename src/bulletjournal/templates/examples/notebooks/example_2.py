@@ -11,11 +11,11 @@ with app.setup:
 
 @app.cell
 def _(mo):
-    mo.md('''
+    mo.md("""
     # Example 2
 
     Derive a categorical size label from petal length and append it to the iris dataset.
-    ''')
+    """)
     return
 
 

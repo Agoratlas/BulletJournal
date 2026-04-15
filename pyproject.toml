@@ -59,7 +59,8 @@ where = ["src"]
 bulletjournal = [
     "_web/**/*",
     "templates/builtin/**/*.py",
-    "templates/pipelines/**/*.json",
+    "templates/examples/**/*.py",
+    "templates/examples/**/*.json",
 ]
 
 [tool.pytest.ini_options]

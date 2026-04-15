@@ -31,7 +31,9 @@ class CheckpointService:
         return {'checkpoint_id': checkpoint_id, 'path': str(checkpoint_dir), 'graph_version': graph_version}
 
     def list_checkpoints(self) -> list[dict[str, object]]:
-        return [checkpoint.__dict__ for checkpoint in self.project_service.require_project().state_db.list_checkpoints()]
+        return [
+            checkpoint.__dict__ for checkpoint in self.project_service.require_project().state_db.list_checkpoints()
+        ]
 
     def restore_checkpoint(self, checkpoint_id: str) -> dict[str, object]:
         project = self.project_service.require_project()
@@ -73,11 +75,7 @@ class CheckpointService:
     def _mark_restored_notebooks_stale(self) -> None:
         from bulletjournal.services.graph_service import GraphService
 
-        notebook_ids = [
-            node.id
-            for node in self.project_service.graph().nodes
-            if node.kind == NodeKind.NOTEBOOK
-        ]
+        notebook_ids = [node.id for node in self.project_service.graph().nodes if node.kind == NodeKind.NOTEBOOK]
         if notebook_ids:
             GraphService(self.project_service).mark_nodes_and_downstream_stale(notebook_ids)
 
@@ -90,14 +88,14 @@ class CheckpointService:
                 allowed_artifacts[node.id] = {artifact_name}
                 project.state_db.ensure_artifact_head(node.id, artifact_name, ArtifactState.PENDING)
                 continue
+            if node.kind in {NodeKind.ORGANIZER, NodeKind.AREA}:
+                allowed_artifacts[node.id] = set()
+                continue
             interface = self.project_service.latest_interface(node.id)
             if interface is None:
                 allowed_artifacts[node.id] = set()
                 continue
-            names = {
-                str(port['name'])
-                for port in interface.get('outputs', []) + interface.get('assets', [])
-            }
+            names = {str(port['name']) for port in interface.get('outputs', []) + interface.get('assets', [])}
             allowed_artifacts[node.id] = names
             for artifact_name in names:
                 project.state_db.ensure_artifact_head(node.id, artifact_name, ArtifactState.PENDING)

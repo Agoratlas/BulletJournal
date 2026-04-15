@@ -37,6 +37,28 @@ class AddFileInputNodeOperation(StrictModel):
     ui: dict[str, Any] | None = None
 
 
+class AddOrganizerNodeOperation(StrictModel):
+    type: Literal['add_organizer_node']
+    node_id: str
+    title: str = 'Organizer'
+    x: int = 80
+    y: int = 80
+    w: int = 160
+    h: int = 120
+    ui: dict[str, Any] | None = None
+
+
+class AddAreaNodeOperation(StrictModel):
+    type: Literal['add_area_node']
+    node_id: str
+    title: str = 'Area'
+    x: int = 80
+    y: int = 80
+    w: int = 480
+    h: int = 280
+    ui: dict[str, Any] | None = None
+
+
 class AddPipelineTemplateOperation(StrictModel):
     type: Literal['add_pipeline_template']
     template_ref: str
@@ -79,6 +101,20 @@ class UpdateNodeHiddenInputsOperation(StrictModel):
     hidden_inputs: list[str]
 
 
+class UpdateOrganizerPortsOperation(StrictModel):
+    type: Literal['update_organizer_ports']
+    node_id: str
+    ports: list[dict[str, Any]]
+
+
+class UpdateAreaStyleOperation(StrictModel):
+    type: Literal['update_area_style']
+    node_id: str
+    title_position: str
+    color: str
+    filled: bool
+
+
 class DeleteNodeOperation(StrictModel):
     type: Literal['delete_node']
     node_id: str
@@ -93,12 +129,16 @@ class UpdateNodeFrozenOperation(StrictModel):
 GraphOperation = Annotated[
     AddNotebookNodeOperation
     | AddFileInputNodeOperation
+    | AddOrganizerNodeOperation
+    | AddAreaNodeOperation
     | AddPipelineTemplateOperation
     | AddEdgeOperation
     | RemoveEdgeOperation
     | UpdateNodeLayoutOperation
     | UpdateNodeTitleOperation
     | UpdateNodeHiddenInputsOperation
+    | UpdateOrganizerPortsOperation
+    | UpdateAreaStyleOperation
     | DeleteNodeOperation
     | UpdateNodeFrozenOperation,
     Field(discriminator='type'),

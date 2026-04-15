@@ -366,6 +366,59 @@ def test_edit_session_proxy_forwards_public_http_origin_headers(monkeypatch, tmp
     assert captured_headers['x-forwarded-proto'] == 'https'
 
 
+def test_edit_session_proxy_preserves_local_host_port(monkeypatch, tmp_path: Path) -> None:
+    web_root = tmp_path / 'web'
+    web_root.mkdir()
+    captured_headers: dict[str, str] = {}
+
+    class FakeProcess:
+        def poll(self):
+            return None
+
+    session = SimpleNamespace(
+        host='127.0.0.1',
+        port=52012,
+        base_url='/api/v1/edit/sessions/demo',
+        process=FakeProcess(),
+    )
+    container = FakeContainer()
+    container.run_service.session_manager = SimpleNamespace(
+        get=lambda session_id: session if session_id == 'demo' else None
+    )
+
+    class FakeResponse:
+        def __init__(self):
+            self.content = b'ok'
+            self.status_code = 200
+            self.headers = {'content-type': 'text/plain'}
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def request(self, *args, **kwargs):
+            captured_headers.update(cast(dict[str, str], kwargs['headers']))
+            return FakeResponse()
+
+    monkeypatch.setattr(api_app_module.httpx, 'AsyncClient', FakeClient)
+    app, _ = _make_app(monkeypatch, web_root, container=container)
+
+    with TestClient(app, base_url='http://127.0.0.1:8765') as client:
+        response = client.get('/api/v1/edit/sessions/demo/assets/useNonce.js')
+
+    assert response.status_code == 200
+    assert captured_headers['host'] == '127.0.0.1:8765'
+    assert captured_headers['x-forwarded-host'] == '127.0.0.1:8765'
+    assert captured_headers['x-forwarded-proto'] == 'http'
+    assert captured_headers['x-forwarded-port'] == '8765'
+
+
 def test_create_app_serves_assets_and_api_under_base_path(monkeypatch, tmp_path: Path) -> None:
     web_root = tmp_path / 'web'
     assets_dir = web_root / 'assets'

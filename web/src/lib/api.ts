@@ -65,7 +65,7 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
 
 function formatErrorDetail(detail: unknown): string {
   if (typeof detail === 'string') {
-    return detail
+    return formatRunQueueBlockedDetail(detail) ?? detail
   }
   if (Array.isArray(detail)) {
     return detail
@@ -88,6 +88,61 @@ function formatErrorDetail(detail: unknown): string {
     return JSON.stringify(detail)
   }
   return String(detail)
+}
+
+function formatRunQueueBlockedDetail(detail: string): string | null {
+  const prefix = 'Run queue is blocked by missing required inputs:'
+  if (!detail.startsWith(prefix)) {
+    return null
+  }
+  const payloadText = detail.slice(prefix.length).trim()
+  if (!payloadText) {
+    return 'Run queue is blocked by missing required inputs.'
+  }
+  try {
+    const payload = JSON.parse(payloadText) as { blocked_nodes?: unknown }
+    const blockedNodes = Array.isArray(payload.blocked_nodes) ? payload.blocked_nodes : []
+    if (!blockedNodes.length) {
+      return 'Run queue is blocked by missing required inputs.'
+    }
+    const lines = ['Run queue is blocked by missing required inputs:']
+    for (const blockedNode of blockedNodes) {
+      if (!blockedNode || typeof blockedNode !== 'object') {
+        continue
+      }
+      const record = blockedNode as { node_id?: unknown; blocked_inputs?: unknown }
+      const nodeId = typeof record.node_id === 'string' && record.node_id.trim() ? record.node_id : 'unknown node'
+      const blockedInputs = Array.isArray(record.blocked_inputs) ? record.blocked_inputs : []
+      if (!blockedInputs.length) {
+        lines.push(`- \`${nodeId}\` is blocked.`)
+        continue
+      }
+      const inputSummaries = blockedInputs
+        .map((blockedInput) => {
+          if (!blockedInput || typeof blockedInput !== 'object') {
+            return null
+          }
+          const inputRecord = blockedInput as { name?: unknown; source?: unknown; state?: unknown }
+          const name = typeof inputRecord.name === 'string' && inputRecord.name.trim() ? inputRecord.name : 'unknown input'
+          const source = typeof inputRecord.source === 'string' && inputRecord.source.trim()
+            ? ` from \`${inputRecord.source}\``
+            : ''
+          const state = typeof inputRecord.state === 'string' && inputRecord.state.trim()
+            ? inputRecord.state
+            : 'missing'
+          return `\`${name}\`${source} is ${state}`
+        })
+        .filter((summary): summary is string => summary !== null)
+      if (!inputSummaries.length) {
+        lines.push(`- \`${nodeId}\` is blocked.`)
+        continue
+      }
+      lines.push(`- \`${nodeId}\`: ${inputSummaries.join(', ')}`)
+    }
+    return lines.join('\n')
+  } catch {
+    return null
+  }
 }
 
 export async function currentProject(): Promise<ProjectSnapshot> {

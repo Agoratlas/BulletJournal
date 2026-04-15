@@ -12,11 +12,11 @@ with app.setup:
 
 @app.cell
 def _(mo):
-    mo.md('''
+    mo.md("""
     # Example 4
 
     Build a markdown summary and a matplotlib visualization from the enriched iris dataset and its derived metrics.
-    ''')
+    """)
     return
 
 
@@ -48,18 +48,11 @@ def _(pd):
 @app.cell
 def _(avg_petal_length, iris_with_size_category, row_count_ok, size_category_counts):
     species_counts = {
-        str(name): int(count)
-        for name, count in iris_with_size_category['species'].value_counts().sort_index().items()
+        str(name): int(count) for name, count in iris_with_size_category['species'].value_counts().sort_index().items()
     }
-    size_lines = '\n'.join(
-        f'- `{label}`: {int(size_category_counts.get(label, 0))}'
-        for label in ['S', 'M', 'L', 'XL']
-    )
-    species_lines = '\n'.join(
-        f'- `{species}`: {count}'
-        for species, count in species_counts.items()
-    )
-    dataset_summary_markdown = f'''# Iris Dataset Summary
+    size_lines = '\n'.join(f'- `{label}`: {int(size_category_counts.get(label, 0))}' for label in ['S', 'M', 'L', 'XL'])
+    species_lines = '\n'.join(f'- `{species}`: {count}' for species, count in species_counts.items())
+    dataset_summary_markdown = f"""# Iris Dataset Summary
 
 - Rows: {int(iris_with_size_category.shape[0])}
 - Columns: {', '.join(map(str, iris_with_size_category.columns))}
@@ -71,7 +64,7 @@ def _(avg_petal_length, iris_with_size_category, row_count_ok, size_category_cou
 
 ## Species Distribution
 {species_lines}
-'''
+"""
 
     artifacts.push(
         dataset_summary_markdown,
@@ -102,11 +95,17 @@ def _(avg_petal_length, iris_with_size_category, plt, size_category_counts):
             subset['petal_length'],
             s=42,
             alpha=0.8,
-            label=f"{label} ({int(size_category_counts.get(label, 0))})",
+            label=f'{label} ({int(size_category_counts.get(label, 0))})',
             color=palette[label],
         )
 
-    ax.axhline(avg_petal_length, color='#444444', linestyle='--', linewidth=1.2, label=f'avg petal length = {avg_petal_length:.2f}')
+    ax.axhline(
+        avg_petal_length,
+        color='#444444',
+        linestyle='--',
+        linewidth=1.2,
+        label=f'avg petal length = {avg_petal_length:.2f}',
+    )
     ax.set_title('Iris measurements grouped by derived size category')
     ax.set_xlabel('Sepal length')
     ax.set_ylabel('Petal length')

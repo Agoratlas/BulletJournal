@@ -4,6 +4,7 @@ import mimetypes
 from pathlib import Path
 from typing import Any
 
+from bulletjournal.domain.graph_bindings import resolve_input_binding
 from bulletjournal.domain.errors import InvalidRequestError, NotFoundError
 from bulletjournal.domain.enums import ArtifactRole, ArtifactState, LineageMode, NodeKind, StorageKind
 from bulletjournal.domain.models import file_input_artifact_name
@@ -178,15 +179,12 @@ class ArtifactService:
         graph = self.project_service.graph()
         state_db = self.project_service.require_project().state_db
         for port in interface.get('inputs', []):
-            binding = next(
-                (edge for edge in graph.edges if edge.target_node == node_id and edge.target_port == str(port['name'])),
-                None,
-            )
+            binding = resolve_input_binding(graph, node_id=node_id, input_name=str(port['name']))
             if binding is None:
                 if bool(port.get('has_default', False)):
                     continue
                 return False
-            head = state_db.get_artifact_head(binding.source_node, binding.source_port)
+            head = state_db.get_artifact_head(binding[0], binding[1])
             if head is None or head.get('current_version_id') is None:
                 return False
             if head.get('state') != ArtifactState.READY.value:

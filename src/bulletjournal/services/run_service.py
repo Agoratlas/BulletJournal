@@ -8,6 +8,7 @@ from pathlib import Path
 from threading import Event, Lock
 from typing import Any, cast
 
+from bulletjournal.domain.graph_bindings import resolve_input_binding
 from bulletjournal.domain.enums import ArtifactState, LineageMode, NodeKind, RunMode, RunStatus, ValidationSeverity
 from bulletjournal.domain.errors import InvalidRequestError, NotFoundError, RunConflictError
 from bulletjournal.domain.models import GraphData
@@ -70,6 +71,9 @@ class RunService:
     ) -> dict[str, Any]:
         project = self.project_service.require_project()
         run_mode = RunMode(mode)
+        node = self.project_service.get_node(node_id)
+        if node.kind in {NodeKind.FILE_INPUT, NodeKind.ORGANIZER, NodeKind.AREA}:
+            return {'status': 'noop', 'node_id': node_id}
         if run_mode == RunMode.EDIT_RUN:
             return self._start_edit_session(node_id)
         pending = self.preflight(node_id)
@@ -89,7 +93,11 @@ class RunService:
         plan = [node_id]
         if action == 'run_upstream':
             graph = self.project_service.graph()
-            plan = run_plan_for_node(graph, node_id, upstream_node_ids=upstream_closure(graph, node_id))
+            plan = [
+                candidate
+                for candidate in run_plan_for_node(graph, node_id, upstream_node_ids=upstream_closure(graph, node_id))
+                if self.project_service.get_node(candidate).kind == NodeKind.NOTEBOOK
+            ]
         return self._execute_managed_run(
             plan=plan,
             mode=run_mode,
@@ -124,7 +132,7 @@ class RunService:
 
     def preflight(self, node_id: str) -> dict[str, Any]:
         node = self.project_service.get_node(node_id)
-        if node.kind == NodeKind.FILE_INPUT:
+        if node.kind in {NodeKind.FILE_INPUT, NodeKind.ORGANIZER, NodeKind.AREA}:
             return {'blocked_inputs': [], 'upstream_nodes': [], 'total_nodes': 0}
         interface = self.project_service.latest_interface(node_id)
         blocked_inputs = []
@@ -220,7 +228,7 @@ class RunService:
     def _run_single_node(self, run_id: str, node_id: str, active_run: ActiveRun) -> dict[str, Any]:
         project = self.project_service.require_project()
         node = self.project_service.get_node(node_id)
-        if node.kind == NodeKind.FILE_INPUT:
+        if node.kind in {NodeKind.FILE_INPUT, NodeKind.ORGANIZER, NodeKind.AREA}:
             return {'status': 'ok', 'outputs': []}
         interface = self.project_service.latest_interface(node_id)
         if interface is None:
@@ -556,10 +564,10 @@ class RunService:
 
     def _binding_for_input(self, node_id: str, input_name: str) -> dict[str, str] | None:
         graph = self.project_service.graph()
-        for edge in graph.edges:
-            if edge.target_node == node_id and edge.target_port == input_name:
-                return {'source_node': edge.source_node, 'source_port': edge.source_port}
-        return None
+        binding = resolve_input_binding(graph, node_id=node_id, input_name=input_name)
+        if binding is None:
+            return None
+        return {'source_node': binding[0], 'source_port': binding[1]}
 
     def _node_has_nonready_outputs(self, node_id: str) -> bool:
         interface = self.project_service.latest_interface(node_id)

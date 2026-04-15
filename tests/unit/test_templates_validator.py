@@ -46,7 +46,9 @@ def test_validate_template_handles_python_templates_and_unknown_suffix(
         message='Broken template.',
     )
 
-    monkeypatch.setattr(validator, 'parse_notebook_interface', lambda path, node_id: _interface(node_id, issues=[issue]))
+    monkeypatch.setattr(
+        validator, 'parse_notebook_interface', lambda path, node_id: _interface(node_id, issues=[issue])
+    )
 
     assert validator.validate_template(notebook) == [issue.to_dict()]
 
@@ -185,7 +187,12 @@ def test_validate_pipeline_template_accepts_valid_file_input_pipeline(
                 {'id': 'consumer', 'title': 'Consumer', 'kind': 'notebook', 'template_ref': 'consumer.py'},
             ],
             'edges': [
-                {'source_node': 'upload', 'source_port': 'dataset', 'target_node': 'consumer', 'target_port': 'dataset'},
+                {
+                    'source_node': 'upload',
+                    'source_port': 'dataset',
+                    'target_node': 'consumer',
+                    'target_port': 'dataset',
+                },
             ],
             'layout': [
                 {'node_id': 'upload', 'x': 0, 'y': 0, 'w': 1, 'h': 1},
@@ -195,6 +202,56 @@ def test_validate_pipeline_template_accepts_valid_file_input_pipeline(
     )
 
     assert validator.validate_pipeline_template(template, notebook_paths_by_ref={'consumer.py': consumer_path}) == []
+
+
+def test_validate_pipeline_template_accepts_organizer_node(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    source_path = tmp_path / 'source.py'
+    consumer_path = tmp_path / 'consumer.py'
+    template = tmp_path / 'pipeline.json'
+    source_path.write_text('', encoding='utf-8')
+    consumer_path.write_text('', encoding='utf-8')
+
+    interfaces = {
+        'source.py': _interface('source', outputs=[Port(name='value', data_type='int')]),
+        'consumer.py': _interface('consumer', inputs=[Port(name='value', data_type='int', direction='input')]),
+    }
+    monkeypatch.setattr(validator, 'parse_notebook_interface', lambda path, node_id: interfaces[path.name])
+
+    _write_json(
+        template,
+        {
+            'nodes': [
+                {'id': 'source', 'title': 'Source', 'kind': 'notebook', 'template_ref': 'source.py'},
+                {
+                    'id': 'organizer',
+                    'title': 'Organizer',
+                    'kind': 'organizer',
+                    'ui': {'organizer_ports': [{'key': 'value', 'name': 'value', 'data_type': 'int'}]},
+                },
+                {'id': 'consumer', 'title': 'Consumer', 'kind': 'notebook', 'template_ref': 'consumer.py'},
+            ],
+            'edges': [
+                {'source_node': 'source', 'source_port': 'value', 'target_node': 'organizer', 'target_port': 'value'},
+                {'source_node': 'organizer', 'source_port': 'value', 'target_node': 'consumer', 'target_port': 'value'},
+            ],
+            'layout': [
+                {'node_id': 'source', 'x': 0, 'y': 0, 'w': 1, 'h': 1},
+                {'node_id': 'organizer', 'x': 1, 'y': 0, 'w': 1, 'h': 1},
+                {'node_id': 'consumer', 'x': 2, 'y': 0, 'w': 1, 'h': 1},
+            ],
+        },
+    )
+
+    assert (
+        validator.validate_pipeline_template(
+            template,
+            notebook_paths_by_ref={'source.py': source_path, 'consumer.py': consumer_path},
+        )
+        == []
+    )
 
 
 def test_validate_pipeline_template_reports_graph_validation_errors(

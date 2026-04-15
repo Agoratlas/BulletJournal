@@ -18,6 +18,7 @@ class TemplateAsset:
     title: str | None = None
     description: str | None = None
     source_loader: Callable[[], str] | None = None
+    aliases: tuple[str, ...] = ()
 
     def read_text(self) -> str:
         if self.path is not None:

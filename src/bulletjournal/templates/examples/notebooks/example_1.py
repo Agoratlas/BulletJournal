@@ -11,11 +11,11 @@ with app.setup:
 
 @app.cell
 def _(mo):
-    mo.md('''
+    mo.md("""
     # Example 1
 
     Load the iris dataset from a CSV file input block, standardize the column names, and publish the cleaned dataframe.
-    ''')
+    """)
     return
 
 

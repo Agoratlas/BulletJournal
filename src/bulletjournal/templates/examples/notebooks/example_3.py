@@ -11,11 +11,11 @@ with app.setup:
 
 @app.cell
 def _(mo):
-    mo.md('''
+    mo.md("""
     # Example 3
 
     Compute a few simple validation and descriptive statistics from the enriched iris dataset.
-    ''')
+    """)
     return
 
 

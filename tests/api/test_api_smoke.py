@@ -460,8 +460,184 @@ def test_snapshot_includes_pipeline_templates(tmp_path) -> None:
     assert opened.status_code == 200
     templates = opened.json()['templates']
     pipeline = next(item for item in templates if item['kind'] == 'pipeline')
-    assert pipeline['ref'] == 'builtin/example_iris_pipeline'
+    assert pipeline['ref'] == 'examples/example_iris_pipeline'
     assert pipeline['definition']['nodes']
+
+
+def test_graph_patch_can_add_and_update_organizer_node(tmp_path) -> None:
+    project_root = init_project_root(tmp_path / 'project').root
+    app = create_app(project_path=project_root)
+    client = TestClient(app)
+
+    opened = client.get('/api/v1/project/snapshot')
+    graph_version = opened.json()['graph']['meta']['graph_version']
+
+    created = client.patch(
+        '/api/v1/graph',
+        json={
+            'graph_version': graph_version,
+            'operations': [
+                {
+                    'type': 'add_organizer_node',
+                    'node_id': 'organizer',
+                    'title': 'Organizer',
+                    'x': 240,
+                    'y': 180,
+                }
+            ],
+        },
+    )
+
+    assert created.status_code == 200
+
+    updated = client.patch(
+        '/api/v1/graph',
+        json={
+            'graph_version': created.json()['meta']['graph_version'],
+            'operations': [
+                {
+                    'type': 'update_organizer_ports',
+                    'node_id': 'organizer',
+                    'ports': [
+                        {'key': 'dataset', 'name': 'dataset', 'data_type': 'file'},
+                        {'key': 'count', 'name': 'sample_count', 'data_type': 'int'},
+                    ],
+                }
+            ],
+        },
+    )
+
+    assert updated.status_code == 200
+    snapshot = client.get('/api/v1/project/snapshot').json()
+    organizer = next(node for node in snapshot['graph']['nodes'] if node['id'] == 'organizer')
+
+    assert organizer['kind'] == 'organizer'
+    assert organizer['ui']['organizer_ports'][1]['name'] == 'sample_count'
+    assert [port['name'] for port in organizer['interface']['inputs']] == ['dataset', 'count']
+    assert organizer['interface']['inputs'][1]['label'] == 'sample_count'
+
+
+def test_graph_patch_can_add_edge_to_new_organizer_port_in_same_request(tmp_path) -> None:
+    project_root = init_project_root(tmp_path / 'project').root
+    app = create_app(project_path=project_root)
+    client = TestClient(app)
+
+    opened = client.get('/api/v1/project/snapshot')
+    graph_version = opened.json()['graph']['meta']['graph_version']
+
+    created = client.patch(
+        '/api/v1/graph',
+        json={
+            'graph_version': graph_version,
+            'operations': [
+                {
+                    'type': 'add_notebook_node',
+                    'node_id': 'source',
+                    'title': 'Source',
+                    'template_ref': 'builtin/value_input',
+                },
+                {
+                    'type': 'add_organizer_node',
+                    'node_id': 'organizer',
+                    'title': 'Organizer',
+                    'x': 240,
+                    'y': 180,
+                },
+            ],
+        },
+    )
+    assert created.status_code == 200
+
+    updated = client.patch(
+        '/api/v1/graph',
+        json={
+            'graph_version': created.json()['meta']['graph_version'],
+            'operations': [
+                {
+                    'type': 'update_organizer_ports',
+                    'node_id': 'organizer',
+                    'ports': [
+                        {'key': 'value', 'name': 'iris_dataframe', 'data_type': 'int'},
+                    ],
+                },
+                {
+                    'type': 'add_edge',
+                    'source_node': 'source',
+                    'source_port': 'value',
+                    'target_node': 'organizer',
+                    'target_port': 'value',
+                },
+            ],
+        },
+    )
+
+    assert updated.status_code == 200
+    snapshot = client.get('/api/v1/project/snapshot').json()
+    assert any(
+        edge['source_node'] == 'source'
+        and edge['source_port'] == 'value'
+        and edge['target_node'] == 'organizer'
+        and edge['target_port'] == 'value'
+        for edge in snapshot['graph']['edges']
+    )
+
+
+def test_graph_patch_can_add_and_style_area_node(tmp_path) -> None:
+    project_root = init_project_root(tmp_path / 'project').root
+    app = create_app(project_path=project_root)
+    client = TestClient(app)
+
+    opened = client.get('/api/v1/project/snapshot')
+    graph_version = opened.json()['graph']['meta']['graph_version']
+
+    created = client.patch(
+        '/api/v1/graph',
+        json={
+            'graph_version': graph_version,
+            'operations': [
+                {
+                    'type': 'add_area_node',
+                    'node_id': 'area',
+                    'title': 'Ingestion',
+                    'x': 120,
+                    'y': 160,
+                    'w': 480,
+                    'h': 280,
+                }
+            ],
+        },
+    )
+
+    assert created.status_code == 200
+
+    updated = client.patch(
+        '/api/v1/graph',
+        json={
+            'graph_version': created.json()['meta']['graph_version'],
+            'operations': [
+                {
+                    'type': 'update_area_style',
+                    'node_id': 'area',
+                    'title_position': 'bottom-center',
+                    'color': 'purple',
+                    'filled': False,
+                }
+            ],
+        },
+    )
+
+    assert updated.status_code == 200
+    snapshot = client.get('/api/v1/project/snapshot').json()
+    area = next(node for node in snapshot['graph']['nodes'] if node['id'] == 'area')
+    layout = next(entry for entry in snapshot['graph']['layout'] if entry['node_id'] == 'area')
+
+    assert area['kind'] == 'area'
+    assert area['title'] == 'Ingestion'
+    assert area['ui']['title_position'] == 'bottom-center'
+    assert area['ui']['area_color'] == 'purple'
+    assert area['ui']['area_filled'] is False
+    assert layout['w'] == 480
+    assert layout['h'] == 280
 
 
 def test_graph_patch_can_add_pipeline_template(tmp_path) -> None:

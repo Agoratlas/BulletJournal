@@ -8,6 +8,12 @@ from typing import Any, Callable, cast
 from bulletjournal.domain.models import TemplateRef
 from bulletjournal.parser.interface_parser import parse_notebook_interface
 from bulletjournal.parser.source_hash import normalized_source_hash_text
+from bulletjournal.templates.builtin_provider import (
+    BUILTIN_PROVIDER,
+    EXAMPLES_PROVIDER,
+    builtin_notebook_assets,
+    builtin_pipeline_assets,
+)
 from bulletjournal.templates.provider import TemplateAsset
 from bulletjournal.templates.registry import discover_template_providers
 from bulletjournal.templates.validator import _pipeline_node_interface, load_pipeline_template_definition_text
@@ -38,6 +44,11 @@ class PipelineTemplateSource:
 
 class TemplateService:
     def __init__(self) -> None:
+        self._providers = discover_template_providers()
+        self._external_provider_active = any(
+            str(getattr(provider, 'provider_name', '') or '').strip() not in {'', EXAMPLES_PROVIDER}
+            for provider in self._providers
+        )
         self._assets_by_ref = self._discover_assets()
         self._asset_aliases = self._discover_aliases(self._assets_by_ref)
 
@@ -48,8 +59,8 @@ class TemplateService:
         ]
         return sorted(templates, key=lambda item: (str(item['provider']), str(item['kind']), str(item['name'])))
 
-    def resolve_template_source(self, ref: str) -> TemplateSource:
-        asset = self._require_asset(ref, kind='notebook')
+    def resolve_template_source(self, ref: str, *, allow_inactive: bool = True) -> TemplateSource:
+        asset = self._require_asset(ref, kind='notebook', allow_inactive=allow_inactive)
         source_text = asset.read_text()
         return TemplateSource(
             ref=asset.ref,
@@ -60,8 +71,8 @@ class TemplateService:
             origin_revision=asset.origin_revision,
         )
 
-    def resolve_pipeline_template(self, ref: str) -> PipelineTemplateSource:
-        asset = self._require_asset(ref, kind='pipeline')
+    def resolve_pipeline_template(self, ref: str, *, allow_inactive: bool = True) -> PipelineTemplateSource:
+        asset = self._require_asset(ref, kind='pipeline', allow_inactive=allow_inactive)
         source_text = asset.read_text()
         try:
             definition = load_pipeline_template_definition_text(source_text)
@@ -105,7 +116,7 @@ class TemplateService:
         return template.source_text.replace('{{TITLE}}', title).replace('{{NODE_ID}}', node_id)
 
     def template_ref(self, ref: str) -> TemplateRef:
-        asset = self._require_asset(ref, kind='notebook')
+        asset = self._require_asset(ref, kind='notebook', allow_inactive=False)
         return TemplateRef(
             kind='notebook',
             provider=asset.provider,
@@ -118,6 +129,10 @@ class TemplateService:
         templates = []
         for asset in sorted(self._assets_by_ref.values(), key=lambda item: item.ref):
             if asset.kind != 'notebook':
+                continue
+            if asset.provider == BUILTIN_PROVIDER:
+                continue
+            if self._external_provider_active and asset.provider == EXAMPLES_PROVIDER:
                 continue
             if asset.ref == 'builtin/empty_notebook':
                 continue
@@ -144,6 +159,10 @@ class TemplateService:
         for asset in sorted(self._assets_by_ref.values(), key=lambda item: item.ref):
             if asset.kind != 'pipeline':
                 continue
+            if asset.provider == BUILTIN_PROVIDER:
+                continue
+            if self._external_provider_active and asset.provider == EXAMPLES_PROVIDER:
+                continue
             resolved = self.resolve_pipeline_template(asset.ref)
             templates.append(
                 {
@@ -164,8 +183,10 @@ class TemplateService:
         return templates
 
     def _discover_assets(self) -> dict[str, TemplateAsset]:
-        assets: dict[str, TemplateAsset] = {}
-        for provider in discover_template_providers():
+        assets: dict[str, TemplateAsset] = {
+            asset.ref: asset for asset in [*builtin_notebook_assets(), *builtin_pipeline_assets()]
+        }
+        for provider in self._providers:
             notebook_entries = getattr(provider, 'list_notebook_templates', lambda: [])()
             pipeline_entries = _provider_pipeline_entries(provider)
             for raw_asset in notebook_entries:
@@ -176,12 +197,17 @@ class TemplateService:
                 assets[asset.ref] = asset
         return assets
 
-    def _require_asset(self, ref: str, *, kind: str) -> TemplateAsset:
+    def _require_asset(self, ref: str, *, kind: str, allow_inactive: bool = True) -> TemplateAsset:
         canonical_ref = self._asset_aliases.get(ref, ref)
         asset = self._assets_by_ref.get(canonical_ref)
         if asset is None or asset.kind != kind:
             raise FileNotFoundError(f'Unknown template `{ref}`.')
+        if not allow_inactive and self._is_asset_inactive(asset):
+            raise FileNotFoundError(f'Unknown template `{ref}`.')
         return asset
+
+    def _is_asset_inactive(self, asset: TemplateAsset) -> bool:
+        return self._external_provider_active and asset.provider == EXAMPLES_PROVIDER
 
     @staticmethod
     def _discover_aliases(assets_by_ref: dict[str, TemplateAsset]) -> dict[str, str]:
@@ -191,6 +217,8 @@ class TemplateService:
             aliases[f'{asset.provider}/{asset.file_name}'] = ref
             aliases[asset.file_name] = ref
             aliases[asset.name] = ref
+            for alias in asset.aliases:
+                aliases[alias] = ref
         return aliases
 
     @staticmethod
@@ -221,6 +249,7 @@ class TemplateService:
         title = raw_asset.get('title')
         description = raw_asset.get('description')
         hidden = bool(raw_asset.get('hidden', False))
+        aliases = raw_asset.get('aliases')
         notebook_loader = cast(Callable[[str], str] | None, getattr(provider, 'load_notebook_template', None))
         pipeline_loader = cast(Callable[[str], str] | None, getattr(provider, 'load_pipeline_template', None))
 
@@ -245,6 +274,7 @@ class TemplateService:
             title=str(title) if isinstance(title, str) and title.strip() else None,
             description=str(description) if isinstance(description, str) else None,
             source_loader=source_loader,
+            aliases=tuple(str(alias).strip() for alias in aliases) if isinstance(aliases, (list, tuple)) else (),
         )
 
 

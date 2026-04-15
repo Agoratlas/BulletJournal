@@ -84,6 +84,7 @@ class LayoutEntry:
 class Port:
     name: str
     data_type: str
+    label: str | None = None
     role: ArtifactRole | None = None
     description: str | None = None
     default: Any = None
@@ -95,6 +96,7 @@ class Port:
     def to_dict(self) -> dict[str, Any]:
         return {
             'name': self.name,
+            'label': self.label,
             'data_type': self.data_type,
             'role': None if self.role is None else self.role.value,
             'description': self.description,

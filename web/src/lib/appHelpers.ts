@@ -21,6 +21,9 @@ export function blockCreateMode(entry: PaletteEntry): 'notebook' | 'constant_val
   if (entry.kind === 'file_input') {
     return 'file'
   }
+  if (entry.kind === 'organizer' || entry.kind === 'area') {
+    return null
+  }
   return 'notebook'
 }
 
@@ -229,7 +232,7 @@ export function cloneSnapshot(snapshot: ProjectSnapshot): ProjectSnapshot {
       nodes: snapshot.graph.nodes.map((node) => ({
         ...node,
         template: node.template ? { ...node.template } : node.template,
-        ui: node.ui ? { ...node.ui } : node.ui,
+        ui: cloneUiState(node.ui),
         interface: node.interface
           ? {
               ...node.interface,
@@ -259,7 +262,7 @@ export function mergeGraphIntoSnapshot(snapshot: SnapshotLike, graph: { meta: Pr
     nodes: graph.nodes.map((node) => ({
       ...node,
       template: node.template ? { ...node.template } : node.template,
-      ui: node.ui ? { ...node.ui } : node.ui,
+      ui: cloneUiState(node.ui),
       interface: node.interface
         ? {
             ...node.interface,
@@ -343,6 +346,40 @@ export function fileInputAddOperationForNode(node: NodeRecord, layout: LayoutRec
   }
 }
 
+export function organizerAddOperationForNode(node: NodeRecord, layout: LayoutRecord, nodeId: string, title = node.title): GraphPatchOperation {
+  return {
+    type: 'add_organizer_node',
+    node_id: nodeId,
+    title,
+    ui: {
+      frozen: Boolean(node.ui?.frozen),
+      organizer_ports: (node.ui?.organizer_ports ?? []).map((port) => ({ ...port })),
+    },
+    x: layout.x,
+    y: layout.y,
+    w: layout.w,
+    h: layout.h,
+  }
+}
+
+export function areaAddOperationForNode(node: NodeRecord, layout: LayoutRecord, nodeId: string, title = node.title): GraphPatchOperation {
+  return {
+    type: 'add_area_node',
+    node_id: nodeId,
+    title,
+    ui: {
+      frozen: Boolean(node.ui?.frozen),
+      title_position: node.ui?.title_position ?? 'top-left',
+      area_color: node.ui?.area_color ?? 'blue',
+      area_filled: node.ui?.area_filled ?? true,
+    },
+    x: layout.x,
+    y: layout.y,
+    w: layout.w,
+    h: layout.h,
+  }
+}
+
 export function applyOptimisticGraphOperations(snapshot: ProjectSnapshot, operations: Array<Record<string, unknown>>): OptimisticGraphState | null {
   const next = cloneSnapshot(snapshot)
   let changed = false
@@ -354,12 +391,77 @@ export function applyOptimisticGraphOperations(snapshot: ProjectSnapshot, operat
     if (type === 'add_pipeline_template') {
       continue
     }
+    if (type === 'add_notebook_node' || type === 'add_file_input_node' || type === 'add_organizer_node' || type === 'add_area_node') {
+      const nodeId = String(operation.node_id)
+      if (!next.graph.nodes.some((node) => node.id === nodeId)) {
+        const kind = type === 'add_file_input_node'
+          ? 'file_input'
+          : type === 'add_organizer_node'
+            ? 'organizer'
+            : type === 'add_area_node'
+              ? 'area'
+            : 'notebook'
+        next.graph.nodes.push({
+          id: nodeId,
+          kind,
+          title: String(operation.title ?? (kind === 'organizer' ? 'Organizer' : kind === 'area' ? 'Area' : nodeId)),
+          path: kind === 'notebook' ? `${nodeId}.py` : null,
+          template: null,
+          template_status: null,
+          ui: type === 'add_file_input_node'
+            ? { artifact_name: String(operation.artifact_name ?? 'file'), frozen: false }
+            : type === 'add_organizer_node'
+              ? {
+                frozen: Boolean((operation.ui as { frozen?: unknown } | undefined)?.frozen),
+                organizer_ports: Array.isArray((operation.ui as { organizer_ports?: unknown } | undefined)?.organizer_ports)
+                  ? ((operation.ui as { organizer_ports: Array<{ key?: unknown; name?: unknown; data_type?: unknown }> }).organizer_ports).map((port) => ({
+                    key: String(port.key ?? ''),
+                    name: String(port.name ?? ''),
+                    data_type: String(port.data_type ?? ''),
+                  }))
+                  : [],
+              }
+              : type === 'add_area_node'
+                ? {
+                  hidden_inputs: [],
+                  frozen: Boolean((operation.ui as { frozen?: unknown } | undefined)?.frozen),
+                  title_position: String((operation.ui as { title_position?: unknown } | undefined)?.title_position ?? 'top-left'),
+                  area_color: String((operation.ui as { area_color?: unknown } | undefined)?.area_color ?? 'blue'),
+                  area_filled: Boolean((operation.ui as { area_filled?: unknown } | undefined)?.area_filled ?? true),
+                }
+              : {
+                hidden_inputs: [],
+                frozen: Boolean((operation.ui as { frozen?: unknown } | undefined)?.frozen),
+                origin: (operation.ui as { origin?: 'constant_value' | null } | undefined)?.origin ?? null,
+              },
+          interface: null,
+          execution_meta: null,
+          orchestrator_state: null,
+          state: 'pending',
+        })
+        next.graph.layout.push({
+          node_id: nodeId,
+          x: Number(operation.x ?? 80),
+          y: Number(operation.y ?? 80),
+          w: Number(operation.w ?? (type === 'add_organizer_node' ? 160 : type === 'add_area_node' ? 480 : 360)),
+          h: Number(operation.h ?? (type === 'add_organizer_node' ? 140 : type === 'add_area_node' ? 280 : 220)),
+        })
+        changed = true
+      }
+      continue
+    }
     if (type === 'update_node_layout') {
       const nodeId = String(operation.node_id)
       const layout = next.graph.layout.find((entry) => entry.node_id === nodeId)
       if (layout) {
         layout.x = Number(operation.x)
         layout.y = Number(operation.y)
+        if (operation.w !== undefined) {
+          layout.w = Number(operation.w)
+        }
+        if (operation.h !== undefined) {
+          layout.h = Number(operation.h)
+        }
         changed = true
       }
       continue
@@ -409,6 +511,55 @@ export function applyOptimisticGraphOperations(snapshot: ProjectSnapshot, operat
         node.ui = { ...(node.ui ?? {}), frozen: Boolean(operation.frozen) }
         changed = true
       }
+      continue
+    }
+    if (type === 'update_organizer_ports') {
+      const node = next.graph.nodes.find((entry) => entry.id === String(operation.node_id))
+      if (node) {
+        const previousPorts = node.ui?.organizer_ports ?? []
+        const nextPorts = Array.isArray(operation.ports)
+          ? operation.ports.map((port) => ({
+            key: String((port as { key?: unknown }).key ?? ''),
+            name: String((port as { name?: unknown }).name ?? ''),
+            data_type: String((port as { data_type?: unknown }).data_type ?? ''),
+          }))
+          : []
+        const nextPortByKey = new Map(nextPorts.map((port) => [port.key, port]))
+        const removedKeys = previousPorts
+          .filter((port) => {
+            const nextPort = nextPortByKey.get(port.key)
+            return !nextPort || nextPort.data_type !== port.data_type
+          })
+          .map((port) => port.key)
+        node.ui = {
+          ...(node.ui ?? {}),
+          organizer_ports: nextPorts,
+        }
+        if (removedKeys.length) {
+          next.graph.edges = next.graph.edges.filter((edge) => {
+            if (edge.source_node === node.id && removedKeys.includes(edge.source_port)) {
+              return false
+            }
+            if (edge.target_node === node.id && removedKeys.includes(edge.target_port)) {
+              return false
+            }
+            return true
+          })
+        }
+        changed = true
+      }
+    }
+    if (type === 'update_area_style') {
+      const node = next.graph.nodes.find((entry) => entry.id === String(operation.node_id))
+      if (node) {
+        node.ui = {
+          ...(node.ui ?? {}),
+          title_position: String(operation.title_position ?? 'top-left'),
+          area_color: String(operation.color ?? 'blue'),
+          area_filled: Boolean(operation.filled),
+        }
+        changed = true
+      }
     }
   }
 
@@ -426,6 +577,20 @@ export function applyOptimisticGraphOperations(snapshot: ProjectSnapshot, operat
     snapshot: next,
     clearSelection,
     clearArtifacts,
+  }
+}
+
+function cloneUiState(ui: NodeRecord['ui'] | undefined): NodeRecord['ui'] | undefined {
+  if (!ui) {
+    return ui
+  }
+  return {
+    ...ui,
+    hidden_inputs: ui.hidden_inputs ? [...ui.hidden_inputs] : ui.hidden_inputs,
+    organizer_ports: ui.organizer_ports ? ui.organizer_ports.map((port) => ({ ...port })) : ui.organizer_ports,
+    title_position: ui.title_position,
+    area_color: ui.area_color,
+    area_filled: ui.area_filled,
   }
 }
 

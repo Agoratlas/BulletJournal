@@ -1,6 +1,7 @@
 import type { AppNotice } from '../appTypes'
 import { formatTimestamp } from '../lib/helpers'
 import { editorSessionDetails } from '../lib/appHelpers'
+import { SimpleMarkdown } from './SimpleMarkdown'
 
 export function NoticeOverlay({
   notices,
@@ -22,7 +23,7 @@ export function NoticeOverlay({
   return (
     <div className="notice-overlay" aria-live="polite" aria-label="Errors and warnings">
       {notices.map((notice) => {
-        const dismissible = notice.severity === 'warning' || notice.origin === 'client'
+        const dismissible = notice.severity === 'warning' || notice.origin === 'client' || notice.code === 'run_failed'
         const editorDetails = notice.code === 'editor_already_open' ? editorSessionDetails(notice.details) : null
         return (
           <article key={notice.issue_id} className={`notice-card ${notice.severity}`}>
@@ -33,7 +34,7 @@ export function NoticeOverlay({
               </div>
               {dismissible ? <button className="secondary small" onClick={() => onDismiss(notice)}>Dismiss</button> : null}
             </div>
-            <p className="notice-message">{notice.message}</p>
+            <SimpleMarkdown className="notice-message" text={notice.message} />
             <div className="notice-card-foot">
               <span>{formatTimestamp(notice.created_at)}</span>
               <div className="notice-card-actions">

@@ -10,6 +10,14 @@ def stale_input_warning(logical_artifact_id: str, age_text: str | None = None) -
     return {'code': 'stale_input', 'message': message, 'artifact': logical_artifact_id}
 
 
+def outdated_input_warning(logical_artifact_id: str) -> dict[str, Any]:
+    return {
+        'code': 'outdated_input',
+        'message': f'Loaded artifact `{logical_artifact_id}` is no longer the current head.',
+        'artifact': logical_artifact_id,
+    }
+
+
 def interactive_lineage_warning() -> dict[str, Any]:
     return {
         'code': 'interactive_heuristic_lineage',

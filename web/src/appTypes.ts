@@ -1,11 +1,26 @@
 import type { EdgeRecord, GraphPatchOperation, LayoutRecord, NodeRecord, NoticeRecord, ProjectSnapshot } from './lib/types'
 
+export type PalettePreviewBlock = {
+  key: string
+  title: string
+  kind: 'notebook' | 'file_input' | 'organizer' | 'area'
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
 export type PaletteEntry = {
   key: string
   title: string
   description: string
-  kind: 'empty' | 'value_input' | 'file_input' | 'template' | 'pipeline'
+  kind: 'empty' | 'value_input' | 'file_input' | 'organizer' | 'area' | 'template' | 'pipeline'
   templateRef?: string
+  previewSize?: {
+    width: number
+    height: number
+  }
+  previewBlocks?: PalettePreviewBlock[]
 }
 
 export type PortActionMenuState = {

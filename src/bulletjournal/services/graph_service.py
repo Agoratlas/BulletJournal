@@ -3,6 +3,11 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from bulletjournal.domain.graph_bindings import (
+    organizer_interface_for_node,
+    organizer_ports_from_ui,
+    resolve_input_binding,
+)
 from bulletjournal.domain.hashing import combine_hashes, hash_json
 from bulletjournal.domain.errors import NotFoundError
 from bulletjournal.domain.enums import ArtifactState, NodeKind
@@ -57,6 +62,10 @@ class GraphService:
                 node_id = self._add_file_input_node(graph, operation)
                 pending_file_input_heads.append(node_id)
                 interruption_roots.add(node_id)
+            elif op_type == 'add_organizer_node':
+                self._add_organizer_node(graph, operation)
+            elif op_type == 'add_area_node':
+                self._add_area_node(graph, operation)
             elif op_type == 'add_pipeline_template':
                 created = self._add_pipeline_template(graph, operation)
                 pending_notebook_creates.extend(created['notebook_creates'])
@@ -79,6 +88,12 @@ class GraphService:
                 self._update_title(graph, operation)
             elif op_type == 'update_node_hidden_inputs':
                 self._update_hidden_inputs(graph, operation)
+            elif op_type == 'update_organizer_ports':
+                removed_targets = self._update_organizer_ports(graph, operation)
+                stale_roots.update(removed_targets)
+                interruption_roots.update(removed_targets)
+            elif op_type == 'update_area_style':
+                self._update_area_style(graph, operation)
             elif op_type == 'update_node_frozen':
                 pending_editor_stops.extend(self._update_frozen(graph, operation))
             elif op_type == 'delete_node':
@@ -278,10 +293,7 @@ class GraphService:
         port: dict[str, Any],
         graph: GraphData,
     ) -> dict[str, str] | None:
-        binding = next(
-            (edge for edge in graph.edges if edge.target_node == node_id and edge.target_port == str(port['name'])),
-            None,
-        )
+        binding = resolve_input_binding(graph, node_id=node_id, input_name=str(port['name']))
         if binding is None:
             if bool(port.get('has_default', False)):
                 return {
@@ -290,8 +302,8 @@ class GraphService:
                 }
             return None
         head = self.project_service.require_project().state_db.get_artifact_head(
-            binding.source_node,
-            binding.source_port,
+            binding[0],
+            binding[1],
         )
         if head is None or head.get('current_version_id') is None:
             return None
@@ -317,7 +329,9 @@ class GraphService:
         source_text = operation.get('source_text')
         ui = operation.get('ui')
         template = (
-            self.project_service.template_service.resolve_template_source(str(template_ref)) if template_ref else None
+            self.project_service.template_service.resolve_template_source(str(template_ref), allow_inactive=False)
+            if template_ref
+            else None
         )
         node = Node(
             id=node_id,
@@ -360,9 +374,53 @@ class GraphService:
         graph.layout.append(self._layout_entry(node_id, operation))
         return node_id
 
+    def _add_organizer_node(self, graph: GraphData, operation: dict[str, Any]) -> str:
+        node_id = str(operation['node_id'])
+        title = str(operation.get('title') or 'Organizer')
+        if any(node.id == node_id for node in graph.nodes):
+            raise GraphValidationError(f'Node `{node_id}` already exists.')
+        ui = operation.get('ui')
+        resolved_ui = (
+            {**({'hidden_inputs': [], 'organizer_ports': []}), **ui}
+            if isinstance(ui, dict)
+            else {
+                'hidden_inputs': [],
+                'organizer_ports': [],
+            }
+        )
+        resolved_ui['organizer_ports'] = _coerce_organizer_ports(resolved_ui.get('organizer_ports', []))
+        graph.nodes.append(
+            Node(
+                id=node_id,
+                kind=NodeKind.ORGANIZER,
+                title=title,
+                ui=resolved_ui,
+            )
+        )
+        graph.layout.append(self._layout_entry(node_id, operation))
+        return node_id
+
+    def _add_area_node(self, graph: GraphData, operation: dict[str, Any]) -> str:
+        node_id = str(operation['node_id'])
+        title = 'Area' if operation.get('title') is None else str(operation.get('title'))
+        if any(node.id == node_id for node in graph.nodes):
+            raise GraphValidationError(f'Node `{node_id}` already exists.')
+        ui = operation.get('ui')
+        resolved_ui = _coerce_area_ui(ui)
+        graph.nodes.append(
+            Node(
+                id=node_id,
+                kind=NodeKind.AREA,
+                title=title,
+                ui=resolved_ui,
+            )
+        )
+        graph.layout.append(self._layout_entry(node_id, operation))
+        return node_id
+
     def _add_pipeline_template(self, graph: GraphData, operation: dict[str, Any]) -> dict[str, list[Any]]:
         template_ref = str(operation['template_ref'])
-        pipeline = self.project_service.template_service.resolve_pipeline_template(template_ref)
+        pipeline = self.project_service.template_service.resolve_pipeline_template(template_ref, allow_inactive=False)
         definition = pipeline.definition
         nodes = definition.get('nodes')
         edges = definition.get('edges')
@@ -435,6 +493,28 @@ class GraphService:
                 }
                 node_id = self._add_file_input_node(graph, add_operation)
                 file_input_heads.append(node_id)
+            elif kind == NodeKind.ORGANIZER.value:
+                add_operation = {
+                    'node_id': resolved_node_id,
+                    'title': resolved_title,
+                    'ui': raw_node.get('ui') if isinstance(raw_node.get('ui'), dict) else None,
+                    'x': int(layout.get('x', 80)) + offset_x,
+                    'y': int(layout.get('y', 80)) + offset_y,
+                    'w': int(layout.get('w', 160)),
+                    'h': int(layout.get('h', 120)),
+                }
+                self._add_organizer_node(graph, add_operation)
+            elif kind == NodeKind.AREA.value:
+                add_operation = {
+                    'node_id': resolved_node_id,
+                    'title': resolved_title,
+                    'ui': raw_node.get('ui') if isinstance(raw_node.get('ui'), dict) else None,
+                    'x': int(layout.get('x', 80)) + offset_x,
+                    'y': int(layout.get('y', 80)) + offset_y,
+                    'w': int(layout.get('w', 480)),
+                    'h': int(layout.get('h', 280)),
+                }
+                self._add_area_node(graph, add_operation)
             else:
                 raise GraphValidationError(
                     f'Pipeline template `{template_ref}` contains unsupported node kind `{kind}`.'
@@ -474,8 +554,8 @@ class GraphService:
         node_ids = {node.id for node in graph.nodes}
         assert_node_exists(node_ids, source_node)
         assert_node_exists(node_ids, target_node)
-        source_interface = self.project_service.latest_interface(source_node)
-        target_interface = self.project_service.latest_interface(target_node)
+        source_interface = self._interface_for_graph_node(graph, source_node)
+        target_interface = self._interface_for_graph_node(graph, target_node)
         if source_interface is None or target_interface is None:
             raise GraphValidationError('Cannot connect nodes without parsed interfaces.')
         self._add_edge_from_interfaces(
@@ -484,6 +564,18 @@ class GraphService:
             source_interface=source_interface,
             target_interface=target_interface,
         )
+
+    def _interface_for_graph_node(self, graph: GraphData, node_id: str) -> dict[str, Any] | None:
+        node = next((item for item in graph.nodes if item.id == node_id), None)
+        if node is None:
+            return None
+        if node.kind == NodeKind.FILE_INPUT:
+            return self.project_service.synthetic_file_input_interface(node).to_dict()
+        if node.kind == NodeKind.ORGANIZER:
+            return organizer_interface_for_node(node).to_dict()
+        if node.kind == NodeKind.AREA:
+            return {'inputs': [], 'outputs': [], 'assets': []}
+        return self.project_service.latest_interface(node_id)
 
     def _add_edge_from_interfaces(
         self,
@@ -581,6 +673,54 @@ class GraphService:
                 return
         raise GraphValidationError(f'Unknown node `{node_id}`.')
 
+    def _update_organizer_ports(self, graph: GraphData, operation: dict[str, Any]) -> list[str]:
+        node_id = str(operation['node_id'])
+        ports = _coerce_organizer_ports(operation.get('ports', []))
+        node = next((item for item in graph.nodes if item.id == node_id), None)
+        if node is None or node.kind != NodeKind.ORGANIZER:
+            raise GraphValidationError(f'Unknown organizer node `{node_id}`.')
+        previous_ports = organizer_ports_from_ui(node.ui)
+        next_by_key = {port['key']: port for port in ports}
+        removed_keys = [
+            previous['key']
+            for previous in previous_ports
+            if previous['key'] not in next_by_key or next_by_key[previous['key']]['data_type'] != previous['data_type']
+        ]
+        stale_roots = sorted(
+            {
+                edge.target_node
+                for edge in graph.edges
+                if edge.source_node == node_id and edge.source_port in removed_keys
+            }
+        )
+        if removed_keys:
+            graph.edges = [
+                edge
+                for edge in graph.edges
+                if not (
+                    (edge.source_node == node_id and edge.source_port in removed_keys)
+                    or (edge.target_node == node_id and edge.target_port in removed_keys)
+                )
+            ]
+        node.ui = {**node.ui, 'organizer_ports': ports}
+        return stale_roots
+
+    def _update_area_style(self, graph: GraphData, operation: dict[str, Any]) -> None:
+        node_id = str(operation['node_id'])
+        node = next((item for item in graph.nodes if item.id == node_id), None)
+        if node is None or node.kind != NodeKind.AREA:
+            raise GraphValidationError(f'Unknown area node `{node_id}`.')
+        node.ui = {
+            **node.ui,
+            **_coerce_area_ui(
+                {
+                    'title_position': operation.get('title_position'),
+                    'area_color': operation.get('color'),
+                    'area_filled': operation.get('filled'),
+                }
+            ),
+        }
+
     def _update_frozen(self, graph: GraphData, operation: dict[str, Any]) -> list[str]:
         node_id = str(operation['node_id'])
         frozen = bool(operation.get('frozen', False))
@@ -632,12 +772,21 @@ class GraphService:
             if edge is None:
                 return []
             return self.project_service.frozen_block_blockers_for_stale_roots([edge.target_node], graph=graph)
+        if op_type == 'update_organizer_ports':
+            node_id = str(operation['node_id'])
+            return self.project_service.frozen_block_blockers_for_node_edit(node_id, graph=graph)
+        if op_type == 'update_area_style':
+            node_id = str(operation['node_id'])
+            node = next((item for item in graph.nodes if item.id == node_id), None)
+            if node is not None and node.kind == NodeKind.AREA:
+                return []
+            return self.project_service.frozen_block_blockers_for_node_edit(node_id, graph=graph)
         if op_type != 'delete_node':
             return []
         node_id = str(operation['node_id'])
         node = next((item for item in graph.nodes if item.id == node_id), None)
         blockers = []
-        if node is not None and self.project_service.block_is_frozen(node):
+        if node is not None and node.kind != NodeKind.AREA and self.project_service.block_is_frozen(node):
             blockers.append(node)
         stale_roots = sorted({edge.target_node for edge in graph.edges if edge.source_node == node_id})
         downstream_blockers = self.project_service.frozen_block_blockers_for_stale_roots(
@@ -706,3 +855,63 @@ def _normalize_title_prefix(value: Any) -> str:
 
 def _apply_title_prefix(title: str, prefix: str) -> str:
     return f'{prefix}{title}' if prefix else title
+
+
+def _coerce_organizer_ports(raw_ports: Any) -> list[dict[str, str]]:
+    if not isinstance(raw_ports, list):
+        raise GraphValidationError('Organizer ports must be a list.')
+    ports: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for raw_port in raw_ports:
+        if not isinstance(raw_port, dict):
+            raise GraphValidationError('Organizer ports must be objects.')
+        key = str(raw_port.get('key') or '').strip()
+        name = str(raw_port.get('name') or '').strip()
+        data_type = str(raw_port.get('data_type') or '').strip()
+        if not key or not name or not data_type:
+            raise GraphValidationError('Organizer ports must define `key`, `name`, and `data_type`.')
+        if key in seen:
+            raise GraphValidationError(f'Organizer port key `{key}` is duplicated.')
+        seen.add(key)
+        ports.append({'key': key, 'name': name, 'data_type': data_type})
+    return ports
+
+
+AREA_TITLE_POSITIONS = {
+    'top-left',
+    'top-center',
+    'top-right',
+    'right-center',
+    'bottom-right',
+    'bottom-center',
+    'bottom-left',
+    'left-center',
+}
+
+AREA_COLOR_KEYS = {
+    'red',
+    'orange',
+    'yellow',
+    'green',
+    'blue',
+    'purple',
+    'white',
+    'black',
+}
+
+
+def _coerce_area_ui(raw: Any) -> dict[str, Any]:
+    ui = raw if isinstance(raw, dict) else {}
+    title_position = str(ui.get('title_position') or 'top-left').strip()
+    if title_position not in AREA_TITLE_POSITIONS:
+        title_position = 'top-left'
+    area_color = str(ui.get('area_color') or 'blue').strip()
+    if area_color not in AREA_COLOR_KEYS:
+        area_color = 'blue'
+    return {
+        'hidden_inputs': [],
+        'frozen': bool(ui.get('frozen', False)),
+        'title_position': title_position,
+        'area_color': area_color,
+        'area_filled': bool(ui.get('area_filled', True)),
+    }

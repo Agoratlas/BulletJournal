@@ -94,38 +94,47 @@ def test_runtime_helpers_return_active_context_ids(tmp_path: Path) -> None:
         assert runtime_package.get_project_id() == 'project'
 
 
-def test_template_registry_discovers_builtin_and_pipeline_files(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+def test_template_registry_discovers_builtin_and_example_files(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     package_dir = tmp_path / 'templates'
     builtin_dir = package_dir / 'builtin'
-    pipeline_dir = package_dir / 'pipelines'
+    example_notebook_dir = package_dir / 'examples' / 'notebooks'
+    example_pipeline_dir = package_dir / 'examples' / 'pipelines'
     pycache_dir = builtin_dir / '__pycache__'
     builtin_dir.mkdir(parents=True)
-    pipeline_dir.mkdir(parents=True)
+    example_notebook_dir.mkdir(parents=True)
+    example_pipeline_dir.mkdir(parents=True)
     pycache_dir.mkdir(parents=True)
 
     builtin_file = builtin_dir / 'example.py'
     skipped_file = pycache_dir / 'skip.py'
-    pipeline_file = pipeline_dir / 'flow.json'
-    for path in (builtin_file, skipped_file, pipeline_file):
+    example_file = example_notebook_dir / 'sample.py'
+    pipeline_file = example_pipeline_dir / 'flow.json'
+    for path in (builtin_file, skipped_file, example_file, pipeline_file):
         path.write_text('', encoding='utf-8')
 
-    fake_registry = package_dir / 'registry.py'
-    fake_registry.write_text('', encoding='utf-8')
+    builtin_provider = FilesystemTemplateProvider(
+        provider_name='builtin',
+        notebook_root=builtin_dir,
+        pipeline_root=package_dir / '_builtin_pipelines',
+        origin_revision='builtin@0.1.0',
+    )
+    monkeypatch.setattr(template_registry, 'builtin_notebook_assets', builtin_provider.list_notebook_templates)
+    monkeypatch.setattr(template_registry, 'builtin_pipeline_assets', lambda: [])
     monkeypatch.setattr(
         template_registry,
-        'builtin_provider',
+        'example_provider',
         lambda: FilesystemTemplateProvider(
-            provider_name='builtin',
-            notebook_root=builtin_dir,
-            pipeline_root=pipeline_dir,
-            origin_revision='builtin@0.1.0',
+            provider_name='examples',
+            notebook_root=example_notebook_dir,
+            pipeline_root=example_pipeline_dir,
+            origin_revision='examples@0.1.0',
         ),
     )
 
     assert template_registry.builtin_templates() == [builtin_file]
-    assert template_registry.builtin_pipeline_templates() == [pipeline_file]
+    assert template_registry.builtin_pipeline_templates() == []
+    assert template_registry.example_templates() == [example_file]
+    assert template_registry.example_pipeline_templates() == [pipeline_file]
 
 
 def test_filesystem_template_provider_supports_loader_api(tmp_path: Path) -> None:

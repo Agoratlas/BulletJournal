@@ -1,6 +1,8 @@
-import type { ChangeEvent, FormEvent, ReactNode } from 'react'
+import type { ChangeEvent, DragEvent, FormEvent, ReactNode } from 'react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 
+import { AREA_COLOR_KEYS, AREA_TITLE_POSITIONS, type AreaColorKey, type AreaTitlePosition } from '../lib/area'
+import { formatType } from '../lib/helpers'
 import { Info, Plus, X } from './Icons'
 
 type ModalProps = {
@@ -291,6 +293,357 @@ export function CreatePipelineDialog({
         <div className="dialog-actions">
           <button type="button" className="secondary" onClick={onClose}>Cancel</button>
           <button type="submit" disabled={busy || invalid}>{busy ? 'Creating...' : 'Create pipeline'}</button>
+        </div>
+      </form>
+    </Modal>
+  )
+}
+
+type CreateOrganizerPortDialogProps = {
+  suggestedName: string
+  onClose: () => void
+  onCreate: (payload: { name: string }) => Promise<void>
+}
+
+export function CreateOrganizerPortDialog({ suggestedName, onClose, onCreate }: CreateOrganizerPortDialogProps) {
+  const [name, setName] = useState(suggestedName)
+  const [busy, setBusy] = useState(false)
+
+  useEffect(() => {
+    setName(suggestedName)
+    setBusy(false)
+  }, [suggestedName])
+
+  const resolvedName = normalizeFreeformSnakeCase(name)
+  const invalidName = !resolvedName
+
+  async function submit() {
+    if (invalidName) {
+      return
+    }
+    setBusy(true)
+    try {
+      await onCreate({ name: resolvedName })
+      onClose()
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    void submit()
+  }
+
+  return (
+    <Modal title="Create Organizer Lane" onClose={onClose} contentClassName="organizer-lane-dialog-card">
+      <form className="form-grid" onSubmit={handleSubmit}>
+        <label>
+          <span>Port name</span>
+          <input
+            className={invalidName ? 'invalid' : ''}
+            value={name}
+            onChange={(event) => setName(event.target.value)}
+            placeholder="value"
+            spellCheck={false}
+          />
+          {invalidName
+            ? <span className="field-note error">Port name is required.</span>
+            : <span className="field-note">Shown on both sides of the organizer.</span>}
+        </label>
+        <div className="dialog-actions">
+          <button type="button" className="secondary" onClick={onClose}>Cancel</button>
+          <button type="submit" disabled={busy || invalidName}>{busy ? 'Creating...' : 'Create lane'}</button>
+        </div>
+      </form>
+    </Modal>
+  )
+}
+
+type EditOrganizerDialogProps = {
+  title: string
+  initialPorts: Array<{ key: string; name: string; data_type: string }>
+  saveDisabledMessage?: string | null
+  onClose: () => void
+  onSave: (ports: Array<{ key: string; name: string; data_type: string }>) => Promise<void>
+}
+
+export function EditOrganizerDialog({
+  title,
+  initialPorts,
+  saveDisabledMessage = null,
+  onClose,
+  onSave,
+}: EditOrganizerDialogProps) {
+  const [ports, setPorts] = useState(initialPorts.map((port) => ({ ...port })))
+  const [busy, setBusy] = useState(false)
+  const [draggedKey, setDraggedKey] = useState<string | null>(null)
+
+  useEffect(() => {
+    setPorts(initialPorts.map((port) => ({ ...port })))
+    setBusy(false)
+    setDraggedKey(null)
+  }, [initialPorts])
+
+  const normalizedPorts = useMemo(
+    () => ports.map((port) => ({ ...port, name: normalizeFreeformSnakeCase(port.name) })),
+    [ports],
+  )
+  const duplicatePortNames = duplicateNames(normalizedPorts.map((port) => port.name))
+  const hasInvalidPort = normalizedPorts.some((port) => !port.name)
+  const changed = JSON.stringify(normalizedPorts) !== JSON.stringify(initialPorts)
+
+  function movePort(dragKey: string, targetKey: string) {
+    if (dragKey === targetKey) {
+      return
+    }
+    setPorts((current) => {
+      const next = current.map((port) => ({ ...port }))
+      const fromIndex = next.findIndex((port) => port.key === dragKey)
+      const toIndex = next.findIndex((port) => port.key === targetKey)
+      if (fromIndex === -1 || toIndex === -1) {
+        return current
+      }
+      const [moved] = next.splice(fromIndex, 1)
+      next.splice(toIndex, 0, moved)
+      return next
+    })
+  }
+
+  async function submit() {
+    if (busy || hasInvalidPort || duplicatePortNames.size > 0 || saveDisabledMessage) {
+      return
+    }
+    setBusy(true)
+    try {
+      await onSave(normalizedPorts)
+      onClose()
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    void submit()
+  }
+
+  function handleRowDragOver(event: DragEvent<HTMLDivElement>, targetKey: string) {
+    event.preventDefault()
+    if (!draggedKey || draggedKey === targetKey) {
+      return
+    }
+    movePort(draggedKey, targetKey)
+  }
+
+  return (
+    <Modal title={title} onClose={onClose} contentClassName="organizer-editor-dialog-card">
+      <form className="form-grid organizer-editor-form" onSubmit={handleSubmit}>
+        <div className="organizer-editor-list">
+          {ports.map((port) => {
+            const normalizedName = normalizeFreeformSnakeCase(port.name)
+            const duplicatePort = normalizedName && duplicatePortNames.has(normalizedName)
+            return (
+              <div
+                key={port.key}
+                className={`organizer-editor-row ${draggedKey === port.key ? 'dragging' : ''}`}
+                onDragOver={(event) => handleRowDragOver(event, port.key)}
+                onDrop={(event) => {
+                  event.preventDefault()
+                  setDraggedKey(null)
+                }}
+              >
+                <button
+                  type="button"
+                  className="organizer-editor-grip"
+                  draggable={!saveDisabledMessage}
+                  disabled={Boolean(saveDisabledMessage)}
+                  onDragStart={(event) => {
+                    setDraggedKey(port.key)
+                    event.dataTransfer.effectAllowed = 'move'
+                    event.dataTransfer.setData('text/plain', port.key)
+                  }}
+                  onDragEnd={() => setDraggedKey(null)}
+                  aria-label={`Reorder lane ${port.name || port.key}`}
+                >
+                  <span />
+                  <span />
+                  <span />
+                  <span />
+                  <span />
+                  <span />
+                </button>
+                <input
+                  className={duplicatePort || !normalizedName ? 'invalid' : ''}
+                  value={port.name}
+                  disabled={Boolean(saveDisabledMessage)}
+                  onChange={(event) => setPorts((current) => current.map((item) => (
+                    item.key === port.key ? { ...item, name: event.target.value } : item
+                  )))}
+                  placeholder="lane_name"
+                  spellCheck={false}
+                />
+                <div className="organizer-editor-type">{formatType(port.data_type)}</div>
+                <button
+                  type="button"
+                  className="danger icon-pill small-icon-pill"
+                  disabled={Boolean(saveDisabledMessage)}
+                  onClick={() => setPorts((current) => current.filter((item) => item.key !== port.key))}
+                  aria-label={`Delete lane ${port.name || port.key}`}
+                >
+                  <X width={16} height={16} />
+                </button>
+              </div>
+            )
+          })}
+          {!ports.length ? <p className="muted-copy">Connect a port to the organizer to create the first lane.</p> : null}
+        </div>
+        {saveDisabledMessage ? <p className="field-note">{saveDisabledMessage}</p> : null}
+        {!saveDisabledMessage && duplicatePortNames.size > 0 ? <p className="field-note error">Lane names must be unique.</p> : null}
+        <div className="dialog-actions">
+          <button type="button" className="secondary" onClick={onClose}>Cancel</button>
+          <button type="submit" disabled={busy || !changed || hasInvalidPort || duplicatePortNames.size > 0 || Boolean(saveDisabledMessage)}>
+            {busy ? 'Saving...' : 'Save changes'}
+          </button>
+        </div>
+      </form>
+    </Modal>
+  )
+}
+
+type EditAreaDialogProps = {
+  title: string
+  initialTitle: string
+  initialTitlePosition: AreaTitlePosition
+  initialColor: AreaColorKey
+  initialFilled: boolean
+  submitLabel?: string
+  allowUnchangedSubmit?: boolean
+  saveDisabledMessage?: string | null
+  onClose: () => void
+  onSave: (payload: { title: string; titlePosition: AreaTitlePosition; color: AreaColorKey; filled: boolean }) => Promise<void>
+}
+
+const AREA_TITLE_POSITION_LABELS: Record<AreaTitlePosition, string> = {
+  'top-left': 'Top left',
+  'top-center': 'Top center',
+  'top-right': 'Top right',
+  'right-center': 'Center right',
+  'bottom-right': 'Bottom right',
+  'bottom-center': 'Bottom center',
+  'bottom-left': 'Bottom left',
+  'left-center': 'Center left',
+}
+
+export function EditAreaDialog({
+  title,
+  initialTitle,
+  initialTitlePosition,
+  initialColor,
+  initialFilled,
+  submitLabel = 'Save changes',
+  allowUnchangedSubmit = false,
+  saveDisabledMessage = null,
+  onClose,
+  onSave,
+}: EditAreaDialogProps) {
+  const [draftTitle, setDraftTitle] = useState(initialTitle)
+  const [titlePosition, setTitlePosition] = useState<AreaTitlePosition>(initialTitlePosition)
+  const [color, setColor] = useState<AreaColorKey>(initialColor)
+  const [filled, setFilled] = useState(initialFilled)
+  const [busy, setBusy] = useState(false)
+
+  useEffect(() => {
+    setDraftTitle(initialTitle)
+    setTitlePosition(initialTitlePosition)
+    setColor(initialColor)
+    setFilled(initialFilled)
+    setBusy(false)
+  }, [initialColor, initialFilled, initialTitle, initialTitlePosition])
+
+  const changed = draftTitle !== initialTitle
+    || titlePosition !== initialTitlePosition
+    || color !== initialColor
+    || filled !== initialFilled
+  const swatchRows = useMemo(
+    () => [
+      { filled: true, label: 'Filled' },
+      { filled: false, label: 'Transparent' },
+    ] as const,
+    [],
+  )
+
+  async function submit() {
+    if (busy || saveDisabledMessage) {
+      return
+    }
+    setBusy(true)
+    try {
+      await onSave({ title: draftTitle.trim(), titlePosition, color, filled })
+      onClose()
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    void submit()
+  }
+
+  return (
+    <Modal title={title} onClose={onClose} contentClassName="area-editor-dialog-card">
+      <form className="form-grid area-editor-form" onSubmit={handleSubmit}>
+        <label>
+          <span>Title</span>
+          <input
+            value={draftTitle}
+            onChange={(event) => setDraftTitle(event.target.value)}
+            placeholder="Optional"
+            disabled={Boolean(saveDisabledMessage)}
+          />
+        </label>
+        <label>
+          <span>Title position</span>
+          <select value={titlePosition} onChange={(event) => setTitlePosition(event.target.value as AreaTitlePosition)} disabled={Boolean(saveDisabledMessage)}>
+            {AREA_TITLE_POSITIONS.map((position) => (
+              <option key={position} value={position}>{AREA_TITLE_POSITION_LABELS[position]}</option>
+            ))}
+          </select>
+        </label>
+        <div className="area-color-section">
+          <span>Color</span>
+          <div className="area-color-grid">
+            {swatchRows.flatMap((row) => AREA_COLOR_KEYS.map((colorKey) => {
+              const selected = color === colorKey && filled === row.filled
+              return (
+                <button
+                  key={`${row.label}-${colorKey}`}
+                  type="button"
+                  className={`area-color-swatch area-color-${colorKey} ${row.filled ? 'filled' : 'transparent'} ${selected ? 'selected' : ''}`}
+                  data-area-color={colorKey}
+                  data-area-filled={row.filled ? 'true' : 'false'}
+                  disabled={Boolean(saveDisabledMessage)}
+                  onClick={() => {
+                    setColor(colorKey)
+                    setFilled(row.filled)
+                  }}
+                  aria-label={`Use ${row.filled ? 'filled' : 'transparent'} ${colorKey} area color`}
+                >
+                  {selected ? (
+                    <svg className="area-color-check" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                      <path d="M3 8.5L6.5 12L13 4.5" />
+                    </svg>
+                  ) : null}
+                </button>
+              )
+            }))}
+          </div>
+        </div>
+        {saveDisabledMessage ? <p className="field-note">{saveDisabledMessage}</p> : null}
+        <div className="dialog-actions">
+          <button type="button" className="secondary" onClick={onClose}>Cancel</button>
+          <button type="submit" disabled={busy || (!changed && !allowUnchangedSubmit) || Boolean(saveDisabledMessage)}>{busy ? 'Saving...' : submitLabel}</button>
         </div>
       </form>
     </Modal>

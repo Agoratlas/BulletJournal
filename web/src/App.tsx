@@ -3,15 +3,16 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import type { Connection, EdgeChange, Node } from 'reactflow'
 
 import { appUrl, cancelRun, createCheckpoint, currentProject, dismissNotice, downloadNotebookSource, getSnapshot, listSessions, notebookDownloadUrl, patchGraph, restoreCheckpoint, runAll, runNode, setArtifactState, setNodeOutputsState, stopSession, uploadFile } from './lib/api'
-import { activeRunNodeId, artifactFor, artifactsForDisplay, currentRun, formatTimestamp, globalArtifactCounts, hiddenInputNames, inputState, queuedRunNodeIds, templateByRef } from './lib/helpers'
+import { activeRunNodeId, artifactFor, artifactsForDisplay, currentRun, formatTimestamp, globalArtifactCounts, hiddenInputNames, hiddenInputs, inputState, outputsForNode, queuedRunNodeIds, templateByRef, visibleInputs } from './lib/helpers'
+import { areaSettings, type AreaColorKey, type AreaTitlePosition } from './lib/area'
 import type { ArtifactRecord, GraphPatchOperation, LayoutRecord, NodeRecord, ProjectSnapshot, SessionRecord, TemplateRecord } from './lib/types'
-import type { AppNotice, ClipboardGraph, ClipboardNodeRecord, ConstantValueType, GraphHistoryEntry, GraphMutationPlan, NodeActionItem, OptimisticGraphState, PaletteEntry, PortActionMenuState } from './appTypes'
-import { applyOptimisticGraphOperations, artifactTargetForPort, blockCreateMode, buildConstantValueNotebookSource, clampContextMenuPosition, cloneSnapshot, copiedTitle, createClientNotice, edgeIdForPorts, edgeIdsForPort, editorSessionDetails, expandMutationPlan, fileInputAddOperationForNode, freezeBlockMessage, frozenBlockBlockersForDelete, frozenBlockBlockersForRemovedEdges, frozenBlockBlockersForStaleRoots, isEditableTarget, isEditorOpenConflict, isFreezeConflict, isManagedRunFailure, mergeGraphIntoSnapshot, normalizeNodeId, notebookAddOperationForNode, pipelineDefinitionNodeIds, pipelineTemplateNodeRecords, pipelineTopLeftForCenter, runFailureMessage, SNAPSHOT_REFRESH_EVENTS, SNAPSHOT_REFRESH_THROTTLE_MS, snapToGrid, uniqueCopiedNodeId } from './lib/appHelpers'
+import type { AppNotice, ClipboardGraph, ClipboardNodeRecord, ConstantValueType, GraphHistoryEntry, GraphMutationPlan, NodeActionItem, OptimisticGraphState, PaletteEntry, PalettePreviewBlock, PortActionMenuState } from './appTypes'
+import { applyOptimisticGraphOperations, areaAddOperationForNode, artifactTargetForPort, blockCreateMode, buildConstantValueNotebookSource, clampContextMenuPosition, cloneSnapshot, copiedTitle, createClientNotice, edgeIdForPorts, edgeIdsForPort, editorSessionDetails, expandMutationPlan, fileInputAddOperationForNode, freezeBlockMessage, frozenBlockBlockersForDelete, frozenBlockBlockersForRemovedEdges, frozenBlockBlockersForStaleRoots, isEditableTarget, isEditorOpenConflict, isFreezeConflict, isManagedRunFailure, mergeGraphIntoSnapshot, normalizeNodeId, notebookAddOperationForNode, organizerAddOperationForNode, pipelineDefinitionNodeIds, pipelineTemplateNodeRecords, pipelineTopLeftForCenter, runFailureMessage, SNAPSHOT_REFRESH_EVENTS, SNAPSHOT_REFRESH_THROTTLE_MS, snapToGrid, uniqueCopiedNodeId } from './lib/appHelpers'
 import { ArtifactCard } from './components/ArtifactCard'
 import { ArtifactCounts } from './components/ArtifactCounts'
 import { BlockPalette } from './components/BlockPalette'
 import { ActionButtons } from './components/ActionButtons'
-import { ConfirmDialog, CreateConstantValueDialog, CreateFileDialog, CreateNotebookDialog, CreatePipelineDialog, Modal } from './components/Dialogs'
+import { ConfirmDialog, CreateConstantValueDialog, CreateFileDialog, CreateNotebookDialog, CreateOrganizerPortDialog, CreatePipelineDialog, EditAreaDialog, EditOrganizerDialog, Modal } from './components/Dialogs'
 import { GraphCanvas } from './components/GraphCanvas'
 import { Info, Palette, Play, Plus } from './components/Icons'
 import { NodeInspector } from './components/NodeInspector'
@@ -48,6 +49,38 @@ type PendingPipelineCreation = {
   template: TemplateRecord
   suggestedPrefix: string
   requirePrefix: boolean
+}
+
+type PendingOrganizerConnection = {
+  organizerNodeId: string
+  insertIndex: number
+  dataType: string
+  portKey: string
+  suggestedName: string
+  sourceNode: string
+  sourcePort: string
+  targetNode: string
+  targetPort: string
+}
+
+type PendingAreaCreation = {
+  x: number
+  y: number
+}
+
+type OrganizerNodeEditState = {
+  nodeId: string
+  title: string
+  ports: Array<{ key: string; name: string; data_type: string }>
+  frozen: boolean
+}
+
+type AreaNodeEditState = {
+  nodeId: string
+  title: string
+  titlePosition: AreaTitlePosition
+  color: AreaColorKey
+  filled: boolean
 }
 
 const NEW_NODE_WIDTH = 360
@@ -114,9 +147,14 @@ function App() {
   const [showHiddenTemplates, setShowHiddenTemplates] = useState(false)
   const [paletteSearch, setPaletteSearch] = useState('')
   const [draggedPaletteEntry, setDraggedPaletteEntry] = useState<PaletteEntry | null>(null)
+  const [paletteViewport, setPaletteViewport] = useState<{ center: { x: number; y: number }; zoom: number } | null>(null)
   const [pendingBlockCreation, setPendingBlockCreation] = useState<PendingBlockCreation | null>(null)
   const [pendingPipelineCreation, setPendingPipelineCreation] = useState<PendingPipelineCreation | null>(null)
+  const [pendingOrganizerConnection, setPendingOrganizerConnection] = useState<PendingOrganizerConnection | null>(null)
+  const [pendingAreaCreation, setPendingAreaCreation] = useState<PendingAreaCreation | null>(null)
   const [fileNodeEdit, setFileNodeEdit] = useState<FileNodeEditState | null>(null)
+  const [organizerNodeEdit, setOrganizerNodeEdit] = useState<OrganizerNodeEditState | null>(null)
+  const [areaNodeEdit, setAreaNodeEdit] = useState<AreaNodeEditState | null>(null)
   const [nodeActionMenu, setNodeActionMenu] = useState<NodeActionMenuState | null>(null)
   const [portActionMenu, setPortActionMenu] = useState<PortActionMenuState | null>(null)
   const [optimisticGraph, setOptimisticGraph] = useState<OptimisticGraphState | null>(null)
@@ -177,16 +215,25 @@ function App() {
   const serverSnapshot = snapshotQuery.data ?? snapshot
   const liveSnapshot = optimisticGraph?.snapshot ?? serverSnapshot
 
+  function canOpenInspectorForNode(nodeId: string | null): boolean {
+    if (!nodeId || !liveSnapshot) {
+      return false
+    }
+    const node = liveSnapshot.graph.nodes.find((entry) => entry.id === nodeId)
+    return Boolean(node && node.kind !== 'area')
+  }
+
   function applySelection(nodeIds: string[], edgeIds: string[], options: { openInspector?: boolean } = {}) {
     setSelectedNodeIds(nodeIds)
     setSelectedEdgeIds(edgeIds)
     const singleNodeId = nodeIds.length === 1 && edgeIds.length === 0 ? nodeIds[0] : null
+    const canOpenInspector = canOpenInspectorForNode(singleNodeId)
     setSelectedNodeId(singleNodeId)
     if (options.openInspector !== undefined) {
-      setInspectorOpen(options.openInspector && Boolean(singleNodeId))
+      setInspectorOpen(options.openInspector && canOpenInspector)
       return
     }
-    setInspectorOpen(Boolean(singleNodeId))
+    setInspectorOpen(canOpenInspector)
   }
 
   function selectSingleNode(nodeId: string | null, options: { openInspector?: boolean } = {}) {
@@ -538,6 +585,39 @@ function App() {
     return liveSnapshot?.graph.nodes.find((node) => node.id === nodeId)?.title ?? nodeId
   }
 
+  function isOrganizerGhostHandle(handleId: string | null | undefined): boolean {
+    return Boolean(handleId && (handleId.startsWith('ghost-in:') || handleId.startsWith('ghost-out:')))
+  }
+
+  function organizerInsertIndexFromHandle(handleId: string): number {
+    const index = Number(handleId.split(':')[1] ?? 0)
+    return Number.isFinite(index) && index >= 0 ? index : 0
+  }
+
+  function nextAvailableNodeId(base: string): string {
+    const normalizedBase = normalizeNodeId(base) || 'node'
+    if (!existingNodeIdSet.has(normalizedBase)) {
+      return normalizedBase
+    }
+    let index = 2
+    while (existingNodeIdSet.has(`${normalizedBase}_${index}`)) {
+      index += 1
+    }
+    return `${normalizedBase}_${index}`
+  }
+
+  function nextOrganizerPortKey(existingKeys: Set<string>, suggestedName: string): string {
+    const normalizedBase = normalizeNodeId(suggestedName) || 'port'
+    if (!existingKeys.has(normalizedBase)) {
+      return normalizedBase
+    }
+    let index = 2
+    while (existingKeys.has(`${normalizedBase}_${index}`)) {
+      index += 1
+    }
+    return `${normalizedBase}_${index}`
+  }
+
   function isNodeQueuedForExecution(nodeId: string): boolean {
     if (!liveSnapshot) {
       return false
@@ -752,6 +832,28 @@ function App() {
       })
     }
 
+    if (node.kind === 'organizer') {
+      actions.push({
+        key: 'edit-organizer',
+        label: 'Edit block',
+        onClick: () => {
+          dismissMenu()
+          openOrganizerNodeEdit(node.id)
+        },
+      })
+    }
+
+    if (node.kind === 'area') {
+      actions.push({
+        key: 'edit-area',
+        label: 'Edit block',
+        onClick: () => {
+          dismissMenu()
+          openAreaNodeEdit(node.id)
+        },
+      })
+    }
+
     if (node.kind === 'notebook') {
       actions.push({
         key: 'download-notebook',
@@ -761,44 +863,48 @@ function App() {
       })
     }
 
-    actions.push(
-      {
-        key: 'mark-outputs-stale',
-        label: 'Mark all outputs stale',
-        disabled: !canMarkOutputsStale || Boolean(outputMutationBlockedReason),
-        title: outputMutationBlockedReason,
-        onClick: () => {
-          dismissMenu()
-          void handleSetNodeOutputsStateAction(node.id, 'stale')
+    if (node.kind !== 'organizer' && node.kind !== 'area') {
+      actions.push(
+        {
+          key: 'mark-outputs-stale',
+          label: 'Mark all outputs stale',
+          disabled: !canMarkOutputsStale || Boolean(outputMutationBlockedReason),
+          title: outputMutationBlockedReason,
+          onClick: () => {
+            dismissMenu()
+            void handleSetNodeOutputsStateAction(node.id, 'stale')
+          },
         },
-      },
-      {
-        key: 'mark-stale-outputs-ready',
-        label: 'Mark stale outputs ready',
-        disabled: !canMarkOutputsReady || Boolean(outputMutationBlockedReason),
-        title: outputMutationBlockedReason,
-        onClick: () => {
-          dismissMenu()
-          setConfirmationState({
-            kind: 'node-outputs-state',
-            nodeIds: [node.id],
-            state: 'ready',
-            onlyCurrentState: 'stale',
-            title: 'Mark stale outputs ready?',
-            message: 'This bypasses consistency checks and marks every stale output on this block as ready.',
-          })
+        {
+          key: 'mark-stale-outputs-ready',
+          label: 'Mark stale outputs ready',
+          disabled: !canMarkOutputsReady || Boolean(outputMutationBlockedReason),
+          title: outputMutationBlockedReason,
+          onClick: () => {
+            dismissMenu()
+            setConfirmationState({
+              kind: 'node-outputs-state',
+              nodeIds: [node.id],
+              state: 'ready',
+              onlyCurrentState: 'stale',
+              title: 'Mark stale outputs ready?',
+              message: 'This bypasses consistency checks and marks every stale output on this block as ready.',
+            })
+          },
         },
-      },
-    )
+      )
+    }
 
-    actions.push({
-      key: 'toggle-frozen',
-      label: node.ui?.frozen ? 'Unfreeze block' : 'Freeze block',
-      onClick: () => {
-        dismissMenu()
-        requestSetNodesFrozen([node.id], !node.ui?.frozen)
-      },
-    })
+    if (node.kind !== 'area') {
+      actions.push({
+        key: 'toggle-frozen',
+        label: node.ui?.frozen ? 'Unfreeze block' : 'Freeze block',
+        onClick: () => {
+          dismissMenu()
+          requestSetNodesFrozen([node.id], !node.ui?.frozen)
+        },
+      })
+    }
 
     actions.push({
       key: 'delete-node',
@@ -827,7 +933,7 @@ function App() {
       return []
     }
 
-    const freezableNodes = menuNodes
+    const freezableNodes = menuNodes.filter((node) => node.kind !== 'area')
     const affectedOutputNodeIds = menuNodes.filter((node) => {
       if (!liveSnapshot) {
         return false
@@ -990,10 +1096,19 @@ function App() {
       }
     }
     void loadSessions()
+    const interval = window.setInterval(() => {
+      void loadSessions()
+    }, 2000)
+    function handleWindowFocus() {
+      void loadSessions()
+    }
+    window.addEventListener('focus', handleWindowFocus)
     return () => {
       cancelled = true
+      window.clearInterval(interval)
+      window.removeEventListener('focus', handleWindowFocus)
     }
-  }, [projectId, liveSnapshot?.graph.meta.graph_version])
+  }, [projectId])
 
   useEffect(() => {
     if (!liveSnapshot) {
@@ -1062,51 +1177,181 @@ function App() {
     [existingNodeIds],
   )
 
+  function palettePreviewBlocks(
+    title: string,
+    kind: 'empty' | 'value_input' | 'file_input' | 'organizer' | 'area' | 'template' | 'pipeline',
+    template: TemplateRecord | null = null,
+  ): PalettePreviewBlock[] {
+    if (kind === 'organizer') {
+      return [{
+        key: `${kind}:${title}`,
+        title,
+        kind: 'organizer',
+        x: 0,
+        y: 0,
+        width: 160,
+        height: 140,
+      }]
+    }
+    if (kind === 'area') {
+      return [{
+        key: `${kind}:${title}`,
+        title,
+        kind: 'area',
+        x: 0,
+        y: 0,
+        width: 320,
+        height: 220,
+      }]
+    }
+    if (!template || template.kind !== 'pipeline') {
+      return [{
+        key: `${kind}:${title}`,
+        title,
+        kind: kind === 'file_input' ? 'file_input' : 'notebook',
+        x: 0,
+        y: 0,
+        width: NEW_NODE_WIDTH,
+        height: NEW_NODE_HEIGHT,
+      }]
+    }
+    const definitionNodes = template.definition?.nodes ?? []
+    const layout = template.definition?.layout ?? []
+    if (!definitionNodes.length || !layout.length) {
+      return [{
+        key: `${template.ref}:preview`,
+        title,
+        kind: 'notebook',
+        x: 0,
+        y: 0,
+        width: NEW_NODE_WIDTH,
+        height: NEW_NODE_HEIGHT,
+      }]
+    }
+    const layoutByNodeId = Object.fromEntries(layout.map((entry) => [entry.node_id, entry]))
+    const placedNodes = definitionNodes
+      .map((node) => {
+        const nodeLayout = layoutByNodeId[node.id]
+        if (!nodeLayout) {
+          return null
+        }
+        return {
+          key: `${template.ref}:${node.id}`,
+          title: node.title,
+          kind: node.kind,
+          x: nodeLayout.x,
+          y: nodeLayout.y,
+          width: nodeLayout.w,
+          height: nodeLayout.h,
+        } satisfies PalettePreviewBlock
+      })
+      .filter((node): node is PalettePreviewBlock => node !== null)
+    if (!placedNodes.length) {
+      return [{
+        key: `${template.ref}:preview`,
+        title,
+        kind: 'notebook',
+        x: 0,
+        y: 0,
+        width: NEW_NODE_WIDTH,
+        height: NEW_NODE_HEIGHT,
+      }]
+    }
+    const minX = Math.min(...placedNodes.map((node) => node.x))
+    const minY = Math.min(...placedNodes.map((node) => node.y))
+    return placedNodes.map((node) => ({
+      ...node,
+      x: node.x - minX,
+      y: node.y - minY,
+    }))
+  }
+
+  function palettePreviewSize(blocks: PalettePreviewBlock[]): { width: number; height: number } {
+    if (!blocks.length) {
+      return { width: NEW_NODE_WIDTH, height: NEW_NODE_HEIGHT }
+    }
+    return {
+      width: Math.max(...blocks.map((block) => block.x + block.width)),
+      height: Math.max(...blocks.map((block) => block.y + block.height)),
+    }
+  }
+
   const paletteEntries = useMemo<PaletteEntry[]>(() => {
-    const builtins: PaletteEntry[] = [
+    const builtins = [
       {
         key: 'empty',
         title: 'New notebook',
         description: 'Generic notebook scaffold with one sample input and output.',
         kind: 'empty',
+        previewBlocks: palettePreviewBlocks('New notebook', 'empty'),
       },
       {
         key: 'value_input',
         title: 'Constant value',
         description: 'Create one or more ready-to-use constant outputs.',
         kind: 'value_input',
+        previewBlocks: palettePreviewBlocks('Constant value', 'value_input'),
       },
       {
         key: 'file_input',
         title: 'File',
         description: 'Upload a file and expose it as a file artifact.',
         kind: 'file_input',
+        previewBlocks: palettePreviewBlocks('File', 'file_input'),
       },
-    ]
+      {
+        key: 'organizer',
+        title: 'Organizer',
+        description: 'Add a slim passthrough patch panel for grouping and routing connections.',
+        kind: 'organizer',
+        previewBlocks: palettePreviewBlocks('Organizer', 'organizer'),
+      },
+      {
+        key: 'area',
+        title: 'Area',
+        description: 'Add a visual grouping rectangle behind functional blocks.',
+        kind: 'area',
+        previewBlocks: palettePreviewBlocks('Area', 'area'),
+      },
+    ] satisfies PaletteEntry[]
+    const builtinsWithPreview = builtins.map<PaletteEntry>((entry) => ({
+      ...entry,
+      previewSize: palettePreviewSize(entry.previewBlocks ?? []),
+    }))
     const templateEntries = (liveSnapshot?.templates ?? [])
       .filter(
         (template) => template.kind === 'notebook'
           && template.ref !== 'builtin/value_input'
           && (showHiddenTemplates || !template.hidden),
       )
-      .map<PaletteEntry>((template) => ({
-        key: `template:${template.ref}`,
-        title: template.title,
-        description: template.description ?? template.ref,
-        kind: 'template',
-        templateRef: template.ref,
-      }))
+      .map<PaletteEntry>((template) => {
+        const previewBlocks = palettePreviewBlocks(template.title, 'template')
+        return {
+          key: `template:${template.ref}`,
+          title: template.title,
+          description: template.description ?? template.ref,
+          kind: 'template',
+          templateRef: template.ref,
+          previewBlocks,
+          previewSize: palettePreviewSize(previewBlocks),
+        }
+      })
     const pipelineEntries = (liveSnapshot?.templates ?? [])
       .filter((template) => template.kind === 'pipeline')
-      .map<PaletteEntry>((template) => ({
-        key: `pipeline:${template.ref}`,
-        title: template.title,
-        description: template.description ?? template.ref,
-        kind: 'pipeline',
-        templateRef: template.ref,
-      }))
+      .map<PaletteEntry>((template) => {
+        const previewBlocks = palettePreviewBlocks(template.title, 'pipeline', template)
+        return {
+          key: `pipeline:${template.ref}`,
+          title: template.title,
+          description: template.description ?? template.ref,
+          kind: 'pipeline',
+          templateRef: template.ref,
+          previewBlocks,
+          previewSize: palettePreviewSize(previewBlocks),
+        }
+      })
     const needle = paletteSearch.trim().toLowerCase()
-    const allEntries = [...builtins, ...templateEntries, ...pipelineEntries]
+    const allEntries = [...builtinsWithPreview, ...templateEntries, ...pipelineEntries]
     if (!needle) {
       return allEntries
     }
@@ -1137,6 +1382,8 @@ function App() {
       switch (operation.type) {
         case 'add_notebook_node':
         case 'add_file_input_node':
+        case 'add_organizer_node':
+        case 'add_area_node':
           undoOperations.push({ type: 'delete_node', node_id: operation.node_id })
           break
         case 'add_edge':
@@ -1199,6 +1446,60 @@ function App() {
           })
           break
         }
+        case 'update_organizer_ports': {
+          const node = snapshotData.graph.nodes.find((entry) => entry.id === operation.node_id)
+          if (!node) {
+            return null
+          }
+          const previousPorts = node.ui?.organizer_ports ?? []
+          const nextPorts = operation.ports
+          const nextPortByKey = new Map(nextPorts.map((port) => [port.key, port]))
+          const removedKeys = previousPorts
+            .filter((port) => {
+              const nextPort = nextPortByKey.get(port.key)
+              return !nextPort || nextPort.data_type !== port.data_type
+            })
+            .map((port) => port.key)
+          undoOperations.push({
+            type: 'update_organizer_ports',
+            node_id: operation.node_id,
+            ports: previousPorts.map((port) => ({ ...port })),
+          })
+          undoOperations.push(
+            ...snapshotData.graph.edges
+              .filter((edge) => {
+                if (edge.source_node === operation.node_id) {
+                  return removedKeys.includes(edge.source_port)
+                }
+                if (edge.target_node === operation.node_id) {
+                  return removedKeys.includes(edge.target_port)
+                }
+                return false
+              })
+              .map((edge) => ({
+                type: 'add_edge',
+                source_node: edge.source_node,
+                source_port: edge.source_port,
+                target_node: edge.target_node,
+                target_port: edge.target_port,
+              } satisfies GraphPatchOperation)),
+          )
+          break
+        }
+        case 'update_area_style': {
+          const node = snapshotData.graph.nodes.find((entry) => entry.id === operation.node_id)
+          if (!node) {
+            return null
+          }
+          undoOperations.push({
+            type: 'update_area_style',
+            node_id: operation.node_id,
+            title_position: String(node.ui?.title_position ?? 'top-left'),
+            color: String(node.ui?.area_color ?? 'blue'),
+            filled: Boolean(node.ui?.area_filled ?? true),
+          })
+          break
+        }
         case 'update_node_frozen': {
           const node = snapshotData.graph.nodes.find((entry) => entry.id === operation.node_id)
           if (!node) {
@@ -1240,13 +1541,19 @@ function App() {
     }
     const sourceByNodeId = await notebookSourceByNodeIds(nodeIds)
     const layoutByNodeId = new Map(layouts.map((entry) => [entry.node_id, entry]))
-    const undoNodeOperations: GraphPatchOperation[] = nodes.map((node) => {
-      const layout = layoutByNodeId.get(node.id) as LayoutRecord
-      if (node.kind === 'notebook') {
-        return notebookAddOperationForNode(node, layout, sourceByNodeId.get(node.id) ?? null, node.id, node.title)
+      const undoNodeOperations: GraphPatchOperation[] = nodes.map((node) => {
+        const layout = layoutByNodeId.get(node.id) as LayoutRecord
+        if (node.kind === 'notebook') {
+          return notebookAddOperationForNode(node, layout, sourceByNodeId.get(node.id) ?? null, node.id, node.title)
+        }
+      if (node.kind === 'organizer') {
+        return organizerAddOperationForNode(node, layout, node.id, node.title)
       }
-      return fileInputAddOperationForNode(node, layout, node.id, node.title)
-    })
+      if (node.kind === 'area') {
+        return areaAddOperationForNode(node, layout, node.id, node.title)
+      }
+        return fileInputAddOperationForNode(node, layout, node.id, node.title)
+      })
     const restoredEdges = liveSnapshot.graph.edges.filter(
       (edge) => deletedNodeIdSet.has(edge.source_node) || deletedNodeIdSet.has(edge.target_node),
     )
@@ -1260,6 +1567,50 @@ function App() {
     return {
       undo: { operations: [...undoNodeOperations, ...undoEdgeOperations] },
       redo: { operations: nodeIds.map((nodeId) => ({ type: 'delete_node', node_id: nodeId })) },
+    }
+  }
+
+  async function deleteSelectionHistoryEntry(nodeIds: string[], edgeIds: string[]): Promise<GraphHistoryEntry | null> {
+    if (!liveSnapshot || (!nodeIds.length && !edgeIds.length)) {
+      return null
+    }
+    const deletedNodeIdSet = new Set(nodeIds)
+    const detachedEdgeIds = edgeIds.filter((edgeId) => {
+      const edge = liveSnapshot.graph.edges.find((entry) => entry.id === edgeId)
+      if (!edge) {
+        return false
+      }
+      return !deletedNodeIdSet.has(edge.source_node) && !deletedNodeIdSet.has(edge.target_node)
+    })
+    const nodeHistory = nodeIds.length ? await deleteHistoryEntry(nodeIds) : null
+    const edgeHistory = detachedEdgeIds.length
+      ? simpleHistoryEntryForPlan(
+          liveSnapshot,
+          {
+            operations: detachedEdgeIds.map((edgeId) => ({ type: 'remove_edge', edge_id: edgeId } satisfies GraphPatchOperation)),
+          },
+        )
+      : null
+    if (nodeIds.length && !nodeHistory) {
+      return null
+    }
+    if (detachedEdgeIds.length && !edgeHistory) {
+      return null
+    }
+    const undoOperations = [
+      ...(nodeHistory?.undo.operations ?? []),
+      ...(edgeHistory?.undo.operations ?? []),
+    ]
+    const redoOperations = [
+      ...(edgeHistory?.redo.operations ?? []),
+      ...(nodeHistory?.redo.operations ?? []),
+    ]
+    if (!undoOperations.length || !redoOperations.length) {
+      return null
+    }
+    return {
+      undo: { operations: undoOperations },
+      redo: { operations: redoOperations },
     }
   }
 
@@ -1369,6 +1720,19 @@ function App() {
     await refreshSnapshotNow()
   }
 
+  async function refreshActiveEditorNodeIds() {
+    if (!projectId) {
+      setActiveEditorNodeIds([])
+      return
+    }
+    try {
+      const sessions = await listSessions()
+      setActiveEditorNodeIds(Array.from(new Set(sessions.map((session) => session.node_id))))
+    } catch {
+      setActiveEditorNodeIds([])
+    }
+  }
+
   async function mutateGraph(
     operations: GraphPatchOperation[],
     options: { history?: GraphHistoryEntry | null; onSuccess?: () => void } = {},
@@ -1428,6 +1792,39 @@ function App() {
     }
   }
 
+  async function handleDeleteSelection(nodeIds: string[], edgeIds: string[]) {
+    if (!projectId || !liveSnapshot || (!nodeIds.length && !edgeIds.length)) {
+      return
+    }
+    const history = await deleteSelectionHistoryEntry(nodeIds, edgeIds)
+    const deletedNodeIdSet = new Set(nodeIds)
+    const detachedEdgeIds = edgeIds.filter((edgeId) => {
+      const edge = liveSnapshot.graph.edges.find((entry) => entry.id === edgeId)
+      if (!edge) {
+        return false
+      }
+      return !deletedNodeIdSet.has(edge.source_node) && !deletedNodeIdSet.has(edge.target_node)
+    })
+    if (!nodeIds.length && !detachedEdgeIds.length) {
+      return
+    }
+    if (nodeIds.length) {
+      await stopEditorsForNodes(nodeIds)
+    }
+    const operations: GraphPatchOperation[] = [
+      ...detachedEdgeIds.map((edgeId) => ({ type: 'remove_edge', edge_id: edgeId } satisfies GraphPatchOperation)),
+      ...nodeIds.map((nodeId) => ({ type: 'delete_node', node_id: nodeId } satisfies GraphPatchOperation)),
+    ]
+    const success = await mutateGraph(operations, { history })
+    if (!success) {
+      return
+    }
+    applySelection([], [], { openInspector: false })
+    setArtifactNodeId((current) => (current && deletedNodeIdSet.has(current) ? null : current))
+    setNodeActionMenu(null)
+    setPortActionMenu(null)
+  }
+
   async function handleSetArtifactStateAction(nodeId: string, artifactName: string, state: ArtifactMutationState) {
     if (!projectId) {
       return
@@ -1482,17 +1879,50 @@ function App() {
   }
 
   async function handleCreateNode(
-    payload: { type: 'empty' | 'template' | 'file_input'; nodeId: string; title: string; templateRef?: string; sourceText?: string; origin?: 'constant_value' | null },
+    payload: { type: 'empty' | 'template' | 'file_input' | 'organizer' | 'area'; nodeId: string; title: string; templateRef?: string; sourceText?: string; origin?: 'constant_value' | null; area?: { titlePosition: AreaTitlePosition; color: AreaColorKey; filled: boolean } },
     placement?: { x: number; y: number },
   ) {
     const baseX = 120 + ((liveSnapshot?.graph.nodes.length ?? 0) % 4) * 420
     const baseY = 120 + Math.floor((liveSnapshot?.graph.nodes.length ?? 0) / 4) * 280
-    const x = snapToGrid((placement?.x ?? baseX) - NEW_NODE_WIDTH / 2)
-    const y = snapToGrid((placement?.y ?? baseY) - NEW_NODE_HEIGHT / 2)
+    const width = payload.type === 'organizer' ? 160 : payload.type === 'area' ? 480 : NEW_NODE_WIDTH
+    const height = payload.type === 'organizer' ? 140 : payload.type === 'area' ? 280 : NEW_NODE_HEIGHT
+    const x = snapToGrid((placement?.x ?? baseX) - width / 2)
+    const y = snapToGrid((placement?.y ?? baseY) - height / 2)
     if (payload.type === 'file_input') {
       const redo = {
         operations: [
           { type: 'add_file_input_node', node_id: payload.nodeId, title: payload.title, x, y, w: NEW_NODE_WIDTH, h: NEW_NODE_HEIGHT } satisfies GraphPatchOperation,
+        ],
+      }
+      await mutateGraph(redo.operations, { history: liveSnapshot ? simpleHistoryEntryForPlan(liveSnapshot, redo) : null })
+      return
+    }
+    if (payload.type === 'organizer') {
+      const redo = {
+        operations: [
+          { type: 'add_organizer_node', node_id: payload.nodeId, title: payload.title, x, y, w: width, h: height } satisfies GraphPatchOperation,
+        ],
+      }
+      await mutateGraph(redo.operations, { history: liveSnapshot ? simpleHistoryEntryForPlan(liveSnapshot, redo) : null })
+      return
+    }
+    if (payload.type === 'area') {
+      const redo = {
+        operations: [
+          {
+            type: 'add_area_node',
+            node_id: payload.nodeId,
+            title: payload.title,
+            ui: payload.area ? {
+              title_position: payload.area.titlePosition,
+              area_color: payload.area.color,
+              area_filled: payload.area.filled,
+            } : undefined,
+            x,
+            y,
+            w: width,
+            h: height,
+          } satisfies GraphPatchOperation,
         ],
       }
       await mutateGraph(redo.operations, { history: liveSnapshot ? simpleHistoryEntryForPlan(liveSnapshot, redo) : null })
@@ -1583,23 +2013,30 @@ function App() {
     }
   }
 
+  function defaultPalettePlacement(): { x: number; y: number } {
+    if (paletteViewport) {
+      return paletteViewport.center
+    }
+    return {
+      x: 120 + ((liveSnapshot?.graph.nodes.length ?? 0) % 4) * 420,
+      y: 120 + Math.floor((liveSnapshot?.graph.nodes.length ?? 0) / 4) * 280,
+    }
+  }
+
   async function openCreateBlockDialog(entry: PaletteEntry, placement?: { x: number; y: number }) {
     if (!liveSnapshot) {
       return
     }
-    const baseX = 120 + (liveSnapshot.graph.nodes.length % 4) * 420
-    const baseY = 120 + Math.floor(liveSnapshot.graph.nodes.length / 4) * 280
-    const x = placement?.x ?? baseX
-    const y = placement?.y ?? baseY
+    const defaultPlacement = defaultPalettePlacement()
+    const x = placement?.x ?? defaultPlacement.x
+    const y = placement?.y ?? defaultPlacement.y
     if (entry.kind === 'pipeline') {
       const template = pipelineTemplateByEntry(entry)
       if (!template || !entry.templateRef) {
         return
       }
       setPendingBlockCreation(null)
-      const pipelinePlacement = placement
-        ? pipelineTopLeftForCenter(template, { x, y })
-        : { x, y }
+      const pipelinePlacement = pipelineTopLeftForCenter(template, { x, y })
       const { templateNodeIds, requirePrefix, suggestedPrefix } = pipelinePrefixRequirements(template)
       if (!requirePrefix) {
         await handleCreatePipelineTemplate(entry.templateRef, pipelinePlacement, null)
@@ -1609,6 +2046,21 @@ function App() {
         return
       }
       setPendingPipelineCreation({ entry, x: pipelinePlacement.x, y: pipelinePlacement.y, template, suggestedPrefix, requirePrefix })
+      return
+    }
+    if (entry.kind === 'organizer') {
+      await handleCreateNode(
+        {
+          type: 'organizer',
+          nodeId: nextAvailableNodeId('organizer'),
+          title: 'Organizer',
+        },
+        { x, y },
+      )
+      return
+    }
+    if (entry.kind === 'area') {
+      setPendingAreaCreation({ x, y })
       return
     }
     if (entry.kind === 'template') {
@@ -1677,6 +2129,26 @@ function App() {
         { x, y },
       )
     }
+  }
+
+  async function handleConfirmCreateArea(payload: { title: string; titlePosition: AreaTitlePosition; color: AreaColorKey; filled: boolean }) {
+    if (!pendingAreaCreation) {
+      return
+    }
+    const { x, y } = pendingAreaCreation
+    await handleCreateNode(
+      {
+        type: 'area',
+        nodeId: nextAvailableNodeId('area'),
+        title: payload.title,
+        area: {
+          titlePosition: payload.titlePosition,
+          color: payload.color,
+          filled: payload.filled,
+        },
+      },
+      { x, y },
+    )
   }
 
   async function handleCreateConstantValueBlock(payload: {
@@ -1749,6 +2221,20 @@ function App() {
     setDraggedPaletteEntry(null)
   }
 
+  function handlePaletteViewportChange(nextViewport: { center: { x: number; y: number }; zoom: number }) {
+    setPaletteViewport((current) => {
+      if (
+        current
+        && Math.abs(current.center.x - nextViewport.center.x) < 0.5
+        && Math.abs(current.center.y - nextViewport.center.y) < 0.5
+        && Math.abs(current.zoom - nextViewport.zoom) < 0.001
+      ) {
+        return current
+      }
+      return nextViewport
+    })
+  }
+
   async function handleRunNode(nodeId: string, mode: 'run_stale' | 'run_all' | 'edit_run') {
     if (!projectId) {
       return
@@ -1779,6 +2265,8 @@ function App() {
         return
       }
       if (typeof response.session_id === 'string') {
+        setActiveEditorNodeIds((current) => (current.includes(nodeId) ? current : [...current, nodeId]))
+        void refreshActiveEditorNodeIds()
         launchEditorTab(response.session_id, nodeId)
       } else if (response.status === 'failed') {
         if (!isManagedRunFailure(response)) {
@@ -1903,8 +2391,108 @@ function App() {
     await mutateGraph(redo.operations, { history: liveSnapshot ? simpleHistoryEntryForPlan(liveSnapshot, redo) : null })
   }
 
+  async function handleUpdateOrganizerPorts(
+    node: NodeRecord,
+    ports: Array<{ key: string; name: string; data_type: string }>,
+  ) {
+    const redo = {
+      operations: [
+        {
+          type: 'update_organizer_ports',
+          node_id: node.id,
+          ports,
+        } satisfies GraphPatchOperation,
+      ],
+    }
+    await mutateGraph(redo.operations, { history: liveSnapshot ? simpleHistoryEntryForPlan(liveSnapshot, redo) : null })
+  }
+
+  async function handleSaveOrganizerEdit(ports: Array<{ key: string; name: string; data_type: string }>) {
+    if (!organizerNodeEdit || !liveSnapshot) {
+      return
+    }
+    const node = liveSnapshot.graph.nodes.find((entry) => entry.id === organizerNodeEdit.nodeId)
+    if (!node || node.kind !== 'organizer') {
+      return
+    }
+    await handleUpdateOrganizerPorts(node, ports)
+    setOrganizerNodeEdit(null)
+  }
+
+  async function handleUpdateAreaStyle(
+    node: NodeRecord,
+    payload: { title: string; titlePosition: string; color: string; filled: boolean },
+  ) {
+    const redo = {
+      operations: [
+        { type: 'update_node_title', node_id: node.id, title: payload.title } satisfies GraphPatchOperation,
+        {
+          type: 'update_area_style',
+          node_id: node.id,
+          title_position: payload.titlePosition,
+          color: payload.color,
+          filled: payload.filled,
+        } satisfies GraphPatchOperation,
+      ],
+    }
+    await mutateGraph(redo.operations, { history: liveSnapshot ? simpleHistoryEntryForPlan(liveSnapshot, redo) : null })
+  }
+
+  async function handleSaveAreaEdit(payload: { title: string; titlePosition: string; color: string; filled: boolean }) {
+    if (!areaNodeEdit || !liveSnapshot) {
+      return
+    }
+    const node = liveSnapshot.graph.nodes.find((entry) => entry.id === areaNodeEdit.nodeId)
+    if (!node || node.kind !== 'area') {
+      return
+    }
+    await handleUpdateAreaStyle(node, payload)
+    setAreaNodeEdit(null)
+  }
+
   async function handleConnect(connection: Connection) {
     if (!connection.source || !connection.target || !connection.sourceHandle || !connection.targetHandle) {
+      return
+    }
+    const sourceGhost = isOrganizerGhostHandle(connection.sourceHandle)
+    const targetGhost = isOrganizerGhostHandle(connection.targetHandle)
+    if (sourceGhost || targetGhost) {
+      if (!liveSnapshot || sourceGhost === targetGhost) {
+        return
+      }
+      const organizerNodeId = sourceGhost ? connection.source : connection.target
+      const organizerNode = liveSnapshot.graph.nodes.find((node) => node.id === organizerNodeId)
+      if (!organizerNode || organizerNode.kind !== 'organizer') {
+        return
+      }
+      const oppositeNodeId = sourceGhost ? connection.target : connection.source
+      const oppositeHandleId = sourceGhost ? connection.targetHandle : connection.sourceHandle
+      const oppositeNode = liveSnapshot.graph.nodes.find((node) => node.id === oppositeNodeId)
+      if (!oppositeNode) {
+        return
+      }
+      const oppositePortName = oppositeHandleId.replace(/^out:|^in:/, '')
+      const oppositePort = sourceGhost
+        ? [...visibleInputs(oppositeNode), ...hiddenInputs(oppositeNode)].find((port) => port.name === oppositePortName)
+        : [...outputsForNode(oppositeNode), ...(oppositeNode.interface?.assets ?? [])].find((port) => port.name === oppositePortName)
+      if (!oppositePort) {
+        return
+      }
+      const organizerPortKey = nextOrganizerPortKey(
+        new Set((organizerNode.ui?.organizer_ports ?? []).map((port) => port.key)),
+        oppositePort.name,
+      )
+      setPendingOrganizerConnection({
+        organizerNodeId,
+        insertIndex: organizerInsertIndexFromHandle(sourceGhost ? connection.sourceHandle : connection.targetHandle),
+        dataType: oppositePort.data_type,
+        portKey: organizerPortKey,
+        suggestedName: oppositePort.label?.trim() || oppositePort.name,
+        sourceNode: sourceGhost ? organizerNodeId : connection.source,
+        sourcePort: sourceGhost ? '' : oppositePortName,
+        targetNode: targetGhost ? organizerNodeId : connection.target,
+        targetPort: targetGhost ? '' : oppositePortName,
+      })
       return
     }
     const sourcePort = connection.sourceHandle.replace('out:', '')
@@ -1917,6 +2505,43 @@ function App() {
           source_port: sourcePort,
           target_node: connection.target,
           target_port: targetPort,
+        } satisfies GraphPatchOperation,
+      ],
+    }
+    await mutateGraph(redo.operations, { history: liveSnapshot ? simpleHistoryEntryForPlan(liveSnapshot, redo) : null })
+  }
+
+  async function handleConfirmCreateOrganizerLane(payload: { name: string }) {
+    if (!pendingOrganizerConnection || !liveSnapshot) {
+      return
+    }
+    const pending = pendingOrganizerConnection
+    setPendingOrganizerConnection(null)
+    const organizerNode = liveSnapshot.graph.nodes.find((node) => node.id === pending.organizerNodeId)
+    if (!organizerNode) {
+      return
+    }
+    const currentPorts = (organizerNode.ui?.organizer_ports ?? []).map((port) => ({ ...port }))
+    const nextPort = {
+      key: pending.portKey,
+      name: payload.name,
+      data_type: pending.dataType,
+    }
+    const nextPorts = currentPorts.map((port) => ({ ...port }))
+    nextPorts.splice(pending.insertIndex, 0, nextPort)
+    const redo = {
+      operations: [
+        {
+          type: 'update_organizer_ports',
+          node_id: pending.organizerNodeId,
+          ports: nextPorts,
+        } satisfies GraphPatchOperation,
+        {
+          type: 'add_edge',
+          source_node: pending.sourceNode,
+          source_port: pending.sourcePort || nextPort.key,
+          target_node: pending.targetNode,
+          target_port: pending.targetPort || nextPort.key,
         } satisfies GraphPatchOperation,
       ],
     }
@@ -1997,6 +2622,22 @@ function App() {
     await mutateGraph(redo.operations, { history: liveSnapshot ? simpleHistoryEntryForPlan(liveSnapshot, redo) : null })
   }
 
+  async function handleNodeResize(nodeId: string, x: number, y: number, w: number, h: number) {
+    const redo = {
+      operations: [
+        {
+          type: 'update_node_layout',
+          node_id: nodeId,
+          x: Math.round(x / 20) * 20,
+          y: Math.round(y / 20) * 20,
+          w: Math.max(80, Math.round(w / 20) * 20),
+          h: Math.max(80, Math.round(h / 20) * 20),
+        } satisfies GraphPatchOperation,
+      ],
+    }
+    await mutateGraph(redo.operations, { history: liveSnapshot ? simpleHistoryEntryForPlan(liveSnapshot, redo) : null })
+  }
+
   async function handleNodesDelete(nodes: Node[]) {
     if (!nodes.length) {
       return
@@ -2026,6 +2667,36 @@ function App() {
       title: node.title,
       artifactName: node.ui?.artifact_name ?? 'file',
       frozen: Boolean(node.ui?.frozen),
+    })
+  }
+
+  function openOrganizerNodeEdit(nodeId: string) {
+    const node = liveSnapshot?.graph.nodes.find((entry) => entry.id === nodeId)
+    if (!node || node.kind !== 'organizer') {
+      return
+    }
+    selectSingleNode(nodeId)
+    setOrganizerNodeEdit({
+      nodeId,
+      title: node.title,
+      ports: (node.ui?.organizer_ports ?? []).map((port) => ({ ...port })),
+      frozen: Boolean(node.ui?.frozen),
+    })
+  }
+
+  function openAreaNodeEdit(nodeId: string) {
+    const node = liveSnapshot?.graph.nodes.find((entry) => entry.id === nodeId)
+    if (!node || node.kind !== 'area') {
+      return
+    }
+    const settings = areaSettings(node)
+    selectSingleNode(nodeId)
+    setAreaNodeEdit({
+      nodeId,
+      title: node.title,
+      titlePosition: settings.titlePosition,
+      color: settings.color,
+      filled: settings.filled,
     })
   }
 
@@ -2073,6 +2744,7 @@ function App() {
     }
     await stopSession(details.session_id)
     dismissClientNotice(notice.issue_id)
+    await refreshActiveEditorNodeIds()
     await refreshSnapshot()
   }
 
@@ -2091,11 +2763,11 @@ function App() {
     const sessions = await listSessions()
     const session = sessions.find((item) => item.node_id === nodeId)
     if (!session) {
-      setActiveEditorNodeIds((current) => current.filter((id) => id !== nodeId))
+      await refreshActiveEditorNodeIds()
       return
     }
     await stopSession(session.session_id)
-    setActiveEditorNodeIds((current) => current.filter((id) => id !== nodeId))
+    await refreshActiveEditorNodeIds()
     await refreshSnapshot()
   }
 
@@ -2133,6 +2805,10 @@ function App() {
       const nextTitle = copiedTitle(item.node.title)
       if (item.node.kind === 'notebook') {
         nodeOperations.push(notebookAddOperationForNode(item.node, nextLayout, item.sourceText, nextNodeId, nextTitle))
+      } else if (item.node.kind === 'organizer') {
+        nodeOperations.push(organizerAddOperationForNode(item.node, nextLayout, nextNodeId, nextTitle))
+      } else if (item.node.kind === 'area') {
+        nodeOperations.push(areaAddOperationForNode(item.node, nextLayout, nextNodeId, nextTitle))
       } else {
         nodeOperations.push(fileInputAddOperationForNode(item.node, nextLayout, nextNodeId, nextTitle))
       }
@@ -2215,11 +2891,16 @@ function App() {
       if (isEditableTarget(event.target)) {
         return
       }
+      const key = event.key.toLowerCase()
+      if ((key === 'backspace' || key === 'delete') && (selectedNodeIds.length > 0 || selectedEdgeIds.length > 0)) {
+        event.preventDefault()
+        void handleDeleteSelection(selectedNodeIds, selectedEdgeIds)
+        return
+      }
       const primaryModifier = event.metaKey || event.ctrlKey
       if (!primaryModifier) {
         return
       }
-      const key = event.key.toLowerCase()
       if (key === 'c' && selectedNodeIds.length > 0) {
         event.preventDefault()
         void handleCopySelection()
@@ -2242,7 +2923,7 @@ function App() {
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [clipboardGraph, graphHistoryFuture, graphHistoryPast, selectedNodeIds])
+  }, [clipboardGraph, graphHistoryFuture, graphHistoryPast, liveSnapshot, projectId, selectedEdgeIds, selectedNodeIds])
 
   const counts = liveSnapshot ? globalArtifactCounts(liveSnapshot) : { ready: 0, stale: 0, pending: 0 }
   const activeRun = liveSnapshot ? currentRun(liveSnapshot) : null
@@ -2333,6 +3014,7 @@ function App() {
                 onInspectTemplate={setTemplateRefView}
                 onDragStart={handlePaletteDragStart}
                 onDragEnd={handlePaletteDragEnd}
+                previewScale={paletteViewport?.zoom ?? 1}
               />
             </div>
           </div>
@@ -2374,12 +3056,14 @@ function App() {
                 onSelectionContextMenu={(position) => {
                   openSelectedNodeActionMenu(position)
                 }}
-                onPortContextMenu={(nodeId, portName, side, position) => {
+              onPortContextMenu={(nodeId, portName, side, position) => {
                   const clamped = clampContextMenuPosition(position)
                   setNodeActionMenu(null)
                   setPortActionMenu({ nodeId, portName, side, x: clamped.x, y: clamped.y })
                 }}
               onEditFileNode={openFileNodeEdit}
+              onEditOrganizerNode={openOrganizerNodeEdit}
+              onEditAreaNode={openAreaNodeEdit}
               activeEditorNodeIds={activeEditorNodeIds}
               onOpenEditor={(nodeId) => void handleOpenEditor(nodeId)}
               onKillEditor={(nodeId) => void handleKillEditor(nodeId)}
@@ -2395,9 +3079,11 @@ function App() {
                   setPortActionMenu(null)
                 }}
                 onNodeMove={handleNodeMove}
+                onNodeResize={handleNodeResize}
                 onNodesDelete={handleNodesDelete}
                 draggedBlock={draggedPaletteEntry ? { title: draggedPaletteEntry.title, kind: draggedPaletteEntry.kind } : null}
                 onBlockDrop={handleBlockDrop}
+                onViewportChange={handlePaletteViewportChange}
               />
           ) : (
             <div className="empty-state">
@@ -2570,6 +3256,28 @@ function App() {
         />
       ) : null}
 
+      {pendingOrganizerConnection ? (
+        <CreateOrganizerPortDialog
+          suggestedName={pendingOrganizerConnection.suggestedName}
+          onClose={() => setPendingOrganizerConnection(null)}
+          onCreate={handleConfirmCreateOrganizerLane}
+        />
+      ) : null}
+
+      {pendingAreaCreation ? (
+        <EditAreaDialog
+          title="Create Area"
+          initialTitle=""
+          initialTitlePosition="top-left"
+          initialColor="blue"
+          initialFilled={true}
+          submitLabel="Create area"
+          allowUnchangedSubmit
+          onClose={() => setPendingAreaCreation(null)}
+          onSave={handleConfirmCreateArea}
+        />
+      ) : null}
+
       {pendingBlockCreation && liveSnapshot && blockCreateMode(pendingBlockCreation.entry) === 'constant_value' ? (
         <CreateConstantValueDialog
           suggestedTitle={pendingBlockCreation.entry.title}
@@ -2612,6 +3320,28 @@ function App() {
               await handleUploadFile(fileNodeEdit.nodeId, payload.file)
             }
           }}
+        />
+      ) : null}
+
+      {organizerNodeEdit ? (
+        <EditOrganizerDialog
+          title={`Edit ${organizerNodeEdit.title}`}
+          initialPorts={organizerNodeEdit.ports}
+          saveDisabledMessage={organizerNodeEdit.frozen ? 'This block is frozen. Unfreeze it before editing lanes.' : null}
+          onClose={() => setOrganizerNodeEdit(null)}
+          onSave={handleSaveOrganizerEdit}
+        />
+      ) : null}
+
+      {areaNodeEdit ? (
+        <EditAreaDialog
+          title={`Edit ${areaNodeEdit.title || 'Area'}`}
+          initialTitle={areaNodeEdit.title}
+          initialTitlePosition={areaNodeEdit.titlePosition}
+          initialColor={areaNodeEdit.color}
+          initialFilled={areaNodeEdit.filled}
+          onClose={() => setAreaNodeEdit(null)}
+          onSave={handleSaveAreaEdit}
         />
       ) : null}
 

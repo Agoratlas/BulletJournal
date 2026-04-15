@@ -12,25 +12,25 @@
       "id": "example_1",
       "kind": "notebook",
       "title": "Example 1",
-      "template_ref": "builtin/example_1"
+      "template_ref": "examples/example_1"
     },
     {
       "id": "example_2",
       "kind": "notebook",
       "title": "Example 2",
-      "template_ref": "builtin/example_2"
+      "template_ref": "examples/example_2"
     },
     {
       "id": "example_3",
       "kind": "notebook",
       "title": "Example 3",
-      "template_ref": "builtin/example_3"
+      "template_ref": "examples/example_3"
     },
     {
       "id": "example_4",
       "kind": "notebook",
       "title": "Example 4",
-      "template_ref": "builtin/example_4"
+      "template_ref": "examples/example_4"
     }
   ],
   "edges": [

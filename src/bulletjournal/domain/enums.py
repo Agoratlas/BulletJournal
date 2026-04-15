@@ -6,6 +6,8 @@ from enum import Enum
 class NodeKind(str, Enum):
     NOTEBOOK = 'notebook'
     FILE_INPUT = 'file_input'
+    ORGANIZER = 'organizer'
+    AREA = 'area'
 
 
 class ArtifactRole(str, Enum):

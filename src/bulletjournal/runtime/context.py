@@ -10,12 +10,17 @@ from pathlib import Path
 from typing import Any
 
 from bulletjournal.config import EDIT_STABILIZATION_SECONDS
+from bulletjournal.domain.graph_bindings import resolve_input_binding
 from bulletjournal.domain.enums import ArtifactRole, ArtifactState, LineageMode, ValidationSeverity
 from bulletjournal.domain.hashing import combine_hashes, hash_json
-from bulletjournal.domain.models import Edge, Port
+from bulletjournal.domain.models import GraphData, Port
 from bulletjournal.parser.interface_parser import parse_notebook_interface
 from bulletjournal.parser.source_hash import compute_source_hash
-from bulletjournal.runtime.warnings import interactive_lineage_warning, stale_input_warning
+from bulletjournal.runtime.warnings import (
+    interactive_lineage_warning,
+    outdated_input_warning,
+    stale_input_warning,
+)
 from bulletjournal.storage.graph_store import GraphStore
 from bulletjournal.storage.object_store import ObjectStore
 from bulletjournal.storage.project_fs import ProjectPaths, load_project_json
@@ -68,6 +73,9 @@ class RuntimeContext:
                     'upstream_code_hash': 'default',
                     'state': ArtifactState.READY.value,
                     'warnings': [],
+                    'source_node': '',
+                    'source_artifact': '',
+                    'loaded_version_id': None,
                 }
             raise FileNotFoundError(f'Artifact binding for `{name}` is missing.')
         head = self.db.get_artifact_head(binding.source_node, binding.source_artifact)
@@ -88,6 +96,9 @@ class RuntimeContext:
             'upstream_code_hash': head['upstream_code_hash'],
             'state': head['state'],
             'warnings': warnings,
+            'source_node': binding.source_node,
+            'source_artifact': binding.source_artifact,
+            'loaded_version_id': head['current_version_id'],
         }
 
     def validate_pull_contract(self, *, name: str, data_type: str) -> None:
@@ -113,6 +124,9 @@ class RuntimeContext:
                     'upstream_code_hash': 'default',
                     'state': ArtifactState.READY.value,
                     'warnings': [],
+                    'source_node': '',
+                    'source_artifact': '',
+                    'loaded_version_id': None,
                 }
             raise FileNotFoundError(f'Artifact binding for `{name}` is missing.')
         head = self.db.get_artifact_head(binding.source_node, binding.source_artifact)
@@ -128,6 +142,9 @@ class RuntimeContext:
             'upstream_code_hash': head['upstream_code_hash'],
             'state': head['state'],
             'warnings': warnings,
+            'source_node': binding.source_node,
+            'source_artifact': binding.source_artifact,
+            'loaded_version_id': head['current_version_id'],
         }
 
     def record_pull(self, name: str, metadata: dict[str, Any]) -> None:
@@ -168,13 +185,46 @@ class RuntimeContext:
         input_hashes = [self.source_hash, f'{self.node_id}/{name}']
         input_code_hashes = [self.source_hash, f'{self.node_id}/{name}']
         warnings = []
+        warning_keys: set[str] = set()
         output_state = ArtifactState.READY
         for metadata in self.loaded_inputs.values():
             input_hashes.append(metadata['artifact_hash'])
             input_code_hashes.append(metadata['upstream_code_hash'])
-            warnings.extend(metadata['warnings'])
+            for warning in metadata['warnings']:
+                warning_key = json.dumps(warning, sort_keys=True)
+                if warning_key in warning_keys:
+                    continue
+                warning_keys.add(warning_key)
+                warnings.append(warning)
             if metadata['state'] == ArtifactState.STALE.value:
                 output_state = ArtifactState.STALE
+            source_node = metadata.get('source_node')
+            source_artifact = metadata.get('source_artifact')
+            loaded_version_id = metadata.get('loaded_version_id')
+            if not isinstance(source_node, str) or not isinstance(source_artifact, str) or not source_node:
+                continue
+            logical_artifact_id = f'{source_node}/{source_artifact}'
+            head = self.db.get_artifact_head(source_node, source_artifact)
+            if head is None or head.get('current_version_id') is None:
+                output_state = ArtifactState.STALE
+                continue
+            if head.get('current_version_id') != loaded_version_id:
+                output_state = ArtifactState.STALE
+                warning = outdated_input_warning(logical_artifact_id)
+                warning_key = json.dumps(warning, sort_keys=True)
+                if warning_key in warning_keys:
+                    continue
+                warning_keys.add(warning_key)
+                warnings.append(warning)
+                continue
+            if head['state'] == ArtifactState.STALE.value:
+                output_state = ArtifactState.STALE
+                warning = stale_input_warning(logical_artifact_id)
+                warning_key = json.dumps(warning, sort_keys=True)
+                if warning_key in warning_keys:
+                    continue
+                warning_keys.add(warning_key)
+                warnings.append(warning)
         if self.lineage_mode == LineageMode.INTERACTIVE_HEURISTIC:
             warnings.append(interactive_lineage_warning())
         upstream_data_hash = combine_hashes(input_hashes)
@@ -252,7 +302,7 @@ class RuntimeContext:
         if any(issue.severity == ValidationSeverity.ERROR for issue in interface.issues):
             return
         self.source_hash = interface.source_hash
-        self.bindings = _live_bindings_for_node(graph.edges, interface.inputs, node_id=self.node_id)
+        self.bindings = _live_bindings_for_node(graph, interface.inputs, node_id=self.node_id)
         self.outputs = {port.name: port for port in [*interface.outputs, *interface.assets]}
         self.interactive_contract_key = current_key
 
@@ -268,16 +318,15 @@ def _interactive_contract_key(notebook_path: Path, graph_meta: dict[str, Any]) -
 
 
 def _live_bindings_for_node(
-    edges: list[Edge],
+    graph: GraphData,
     inputs: list[Port],
     *,
     node_id: str,
 ) -> dict[str, Binding]:
     bindings: dict[str, Binding] = {}
-    input_edges = {edge.target_port: edge for edge in edges if edge.target_node == node_id}
     for port in inputs:
-        edge = input_edges.get(port.name)
-        if edge is None:
+        binding = resolve_input_binding(graph, node_id=node_id, input_name=port.name)
+        if binding is None:
             bindings[port.name] = Binding(
                 source_node='',
                 source_artifact='',
@@ -287,8 +336,8 @@ def _live_bindings_for_node(
             )
             continue
         bindings[port.name] = Binding(
-            source_node=edge.source_node,
-            source_artifact=edge.source_port,
+            source_node=binding[0],
+            source_artifact=binding[1],
             data_type=port.data_type,
             default=port.default,
             has_default=port.has_default,

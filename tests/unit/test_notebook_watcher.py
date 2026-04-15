@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -22,3 +23,22 @@ def test_notebook_watcher_uses_bound_project_and_reparses_changed_files(tmp_path
     watcher._scan()
 
     assert reparsed == [notebook_path]
+
+
+def test_notebook_watcher_ignores_mtime_only_changes(tmp_path: Path) -> None:
+    notebook_path = tmp_path / 'notebooks' / 'demo.py'
+    notebook_path.parent.mkdir(parents=True)
+    notebook_path.write_text('print(1)\n', encoding='utf-8')
+    reparsed: list[Path] = []
+    service = SimpleNamespace(
+        project=SimpleNamespace(paths=SimpleNamespace(notebooks_dir=notebook_path.parent)),
+        reparse_notebook_by_path=lambda path: reparsed.append(path),
+    )
+    watcher = NotebookWatcher(service)
+
+    watcher._scan()
+    original_mtime = notebook_path.stat().st_mtime
+    os.utime(notebook_path, (original_mtime + 1, original_mtime + 1))
+    watcher._scan()
+
+    assert reparsed == []

@@ -5,16 +5,22 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
+from bulletjournal.domain.graph_bindings import organizer_interface_for_ports, organizer_ports_from_ui
 from bulletjournal.domain.enums import ArtifactRole, NodeKind, ValidationSeverity
 from bulletjournal.domain.errors import GraphValidationError
-from bulletjournal.domain.graph_rules import validate_acyclic, validate_unique_edge_ids, validate_unique_node_ids, validate_unique_target_ports
+from bulletjournal.domain.graph_rules import (
+    validate_acyclic,
+    validate_unique_edge_ids,
+    validate_unique_node_ids,
+    validate_unique_target_ports,
+)
 from bulletjournal.domain.models import Edge, Node, Port
 from bulletjournal.domain.type_system import types_compatible
 from bulletjournal.parser.interface_parser import parse_notebook_interface
 from bulletjournal.parser.validation import build_issue
-from bulletjournal.templates.builtin_provider import BUILTIN_PROVIDER
+from bulletjournal.templates.builtin_provider import BUILTIN_PROVIDER, EXAMPLES_PROVIDER
 from bulletjournal.templates.provider import TemplateAsset
-from bulletjournal.templates.registry import builtin_templates
+from bulletjournal.templates.registry import default_notebook_assets
 
 
 BUILTIN_NOTEBOOK_TEMPLATE_ROOT = Path(__file__).resolve().parent / 'builtin'
@@ -36,7 +42,9 @@ def validate_template(path: Path, *, notebook_paths_by_ref: dict[str, Path] | No
     ]
 
 
-def validate_pipeline_template(path: Path, *, notebook_paths_by_ref: dict[str, Path] | None = None) -> list[dict[str, object]]:
+def validate_pipeline_template(
+    path: Path, *, notebook_paths_by_ref: dict[str, Path] | None = None
+) -> list[dict[str, object]]:
     issues: list[dict[str, object]] = []
     try:
         definition = json.loads(path.read_text(encoding='utf-8'))
@@ -74,17 +82,7 @@ def validate_pipeline_template(path: Path, *, notebook_paths_by_ref: dict[str, P
             ).to_dict()
         ]
 
-    resolved_notebooks = notebook_paths_by_ref or {
-        f'{BUILTIN_PROVIDER}/{template_path.relative_to(BUILTIN_NOTEBOOK_TEMPLATE_ROOT).with_suffix("" ).as_posix()}': template_path
-        for template_path in builtin_templates()
-    }
-    if notebook_paths_by_ref is None:
-        for template_path in builtin_templates():
-            canonical_ref = template_path.relative_to(BUILTIN_NOTEBOOK_TEMPLATE_ROOT).with_suffix('').as_posix()
-            legacy_ref = template_path.relative_to(BUILTIN_NOTEBOOK_TEMPLATE_ROOT).as_posix()
-            resolved_notebooks[f'{BUILTIN_PROVIDER}/{canonical_ref}'] = template_path
-            resolved_notebooks[legacy_ref] = template_path
-            resolved_notebooks[canonical_ref] = template_path
+    resolved_notebooks = notebook_paths_by_ref or _default_notebook_paths_by_ref()
 
     graph_nodes: list[Node] = []
     graph_edges: list[Edge] = []
@@ -106,7 +104,17 @@ def validate_pipeline_template(path: Path, *, notebook_paths_by_ref: dict[str, P
         node_id = str(raw_node.get('id') or '').strip()
         title = str(raw_node.get('title') or '').strip()
         kind_value = str(raw_node.get('kind') or '').strip()
-        if not node_id or not title or kind_value not in {NodeKind.NOTEBOOK.value, NodeKind.FILE_INPUT.value}:
+        if (
+            not node_id
+            or not title
+            or kind_value
+            not in {
+                NodeKind.NOTEBOOK.value,
+                NodeKind.FILE_INPUT.value,
+                NodeKind.ORGANIZER.value,
+                NodeKind.AREA.value,
+            }
+        ):
             issues.append(
                 build_issue(
                     node_id=path.stem,
@@ -213,7 +221,9 @@ def validate_pipeline_template(path: Path, *, notebook_paths_by_ref: dict[str, P
         target_interface = interfaces_by_node.get(target_node)
         if source_interface is None or target_interface is None:
             continue
-        source_type = _port_data_type(source_interface.get('outputs', []) + source_interface.get('assets', []), source_port)
+        source_type = _port_data_type(
+            source_interface.get('outputs', []) + source_interface.get('assets', []), source_port
+        )
         target_type = _port_data_type(target_interface.get('inputs', []), target_port)
         if source_type is None:
             issues.append(
@@ -246,7 +256,9 @@ def validate_pipeline_template(path: Path, *, notebook_paths_by_ref: dict[str, P
             )
 
     if issues:
-        return sorted(issues, key=lambda item: (str(item.get('severity')), str(item.get('code')), str(item.get('message'))))
+        return sorted(
+            issues, key=lambda item: (str(item.get('severity')), str(item.get('code')), str(item.get('message')))
+        )
 
     try:
         validate_unique_node_ids(graph_nodes)
@@ -276,7 +288,9 @@ def load_pipeline_template_definition_text(source_text: str) -> dict[str, Any]:
     return definition
 
 
-def _pipeline_node_interface(raw_node: dict[str, Any], *, notebook_paths_by_ref: Mapping[str, Path | TemplateAsset]) -> dict[str, Any]:
+def _pipeline_node_interface(
+    raw_node: dict[str, Any], *, notebook_paths_by_ref: Mapping[str, Path | TemplateAsset]
+) -> dict[str, Any]:
     kind_value = str(raw_node.get('kind'))
     if kind_value == NodeKind.FILE_INPUT.value:
         artifact_name = _pipeline_file_input_name(raw_node)
@@ -289,6 +303,14 @@ def _pipeline_node_interface(raw_node: dict[str, Any], *, notebook_paths_by_ref:
             direction='output',
         )
         return {'inputs': [], 'outputs': [output.to_dict()], 'assets': []}
+    if kind_value == NodeKind.ORGANIZER.value:
+        interface = organizer_interface_for_ports(
+            node_id=str(raw_node.get('id') or 'organizer'),
+            ports=organizer_ports_from_ui(raw_node.get('ui') if isinstance(raw_node.get('ui'), dict) else None),
+        )
+        return interface.to_dict()
+    if kind_value == NodeKind.AREA.value:
+        return {'inputs': [], 'outputs': [], 'assets': []}
     template_ref = str(raw_node.get('template_ref') or '')
     template_path = notebook_paths_by_ref.get(template_ref)
     if template_path is None:
@@ -315,3 +337,22 @@ def _port_data_type(ports: list[dict[str, Any]], name: str) -> str | None:
         if port.get('name') == name:
             return str(port.get('data_type'))
     return None
+
+
+def _default_notebook_paths_by_ref() -> dict[str, Path]:
+    resolved: dict[str, Path] = {}
+    for asset in default_notebook_assets():
+        if asset.path is None:
+            continue
+        resolved[asset.ref] = asset.path
+        resolved[asset.file_name] = asset.path
+        resolved[asset.name] = asset.path
+        for alias in asset.aliases:
+            resolved[alias] = asset.path
+        if asset.provider == BUILTIN_PROVIDER and asset.path.is_relative_to(BUILTIN_NOTEBOOK_TEMPLATE_ROOT):
+            canonical_ref = asset.path.relative_to(BUILTIN_NOTEBOOK_TEMPLATE_ROOT).with_suffix('').as_posix()
+            resolved[canonical_ref] = asset.path
+            resolved[asset.path.relative_to(BUILTIN_NOTEBOOK_TEMPLATE_ROOT).as_posix()] = asset.path
+        if asset.provider == EXAMPLES_PROVIDER:
+            resolved[asset.path.name] = asset.path
+    return resolved

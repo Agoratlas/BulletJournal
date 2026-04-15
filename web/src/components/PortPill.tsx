@@ -25,21 +25,23 @@ const STATE_COLORS: Record<ArtifactState | 'mixed', string> = {
 
 type PortPillProps = {
   name: string
+  label?: string | null
   dataType: string
   state: ArtifactState | 'mixed'
   side: 'input' | 'output'
   compact?: boolean
 }
 
-export function PortPill({ name, dataType, state, side, compact = false }: PortPillProps) {
+export function PortPill({ name, label, dataType, state, side, compact = false }: PortPillProps) {
   const typeColor = TYPE_COLORS[dataType] ?? TYPE_COLORS.object
   const stateColor = STATE_COLORS[state]
+  const displayName = label?.trim() || name
 
   return (
-    <div className={`port-pill port-pill-${side} ${compact ? 'compact' : ''}`} title={`${name} (${dataType})`}>
+    <div className={`port-pill port-pill-${side} ${compact ? 'compact' : ''}`} title={`${displayName} (${dataType})`}>
       {side === 'output' ? null : <span className="port-circle" style={{ borderColor: typeColor, backgroundColor: stateColor }} />}
       <div className="port-copy">
-        <strong>{name}</strong>
+        <strong>{displayName}</strong>
         <span>{formatType(dataType)}</span>
       </div>
       {side === 'output' ? <span className="port-circle" style={{ borderColor: typeColor, backgroundColor: stateColor }} /> : null}

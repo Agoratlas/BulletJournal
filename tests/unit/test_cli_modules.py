@@ -446,10 +446,24 @@ def test_validate_templates_uses_builtin_roots(monkeypatch: pytest.MonkeyPatch, 
         path.write_text('', encoding='utf-8')
 
     calls: list[tuple[Path, dict[str, Path]]] = []
+    notebook_assets = [
+        SimpleNamespace(provider='builtin', ref='builtin/a', file_name='a.py', name='a', path=notebook_a, aliases=()),
+        SimpleNamespace(
+            provider='builtin',
+            ref='builtin/nested/b',
+            file_name='nested/b.py',
+            name='nested/b',
+            path=notebook_b,
+            aliases=(),
+        ),
+    ]
 
     monkeypatch.setattr(validate_templates_module, 'BUILTIN_NOTEBOOK_TEMPLATE_ROOT', builtin_root)
     monkeypatch.setattr(validate_templates_module, 'builtin_templates', lambda: [notebook_a, notebook_b])
+    monkeypatch.setattr(validate_templates_module, 'example_templates', lambda: [])
     monkeypatch.setattr(validate_templates_module, 'builtin_pipeline_templates', lambda: [pipeline])
+    monkeypatch.setattr(validate_templates_module, 'example_pipeline_templates', lambda: [])
+    monkeypatch.setattr(validate_templates_module, 'default_notebook_assets', lambda: notebook_assets)
     monkeypatch.setattr(
         validate_templates_module,
         'validate_template',

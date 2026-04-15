@@ -4,6 +4,7 @@ export type NoticeSeverity = 'error' | 'warning'
 
 export type Port = {
   name: string
+  label?: string | null
   data_type: string
   role: 'output' | 'asset' | null
   description: string | null
@@ -36,7 +37,7 @@ export type TemplateRef = {
 
 export type NodeRecord = {
   id: string
-  kind: 'notebook' | 'file_input'
+  kind: 'notebook' | 'file_input' | 'organizer' | 'area'
   title: string
   path?: string | null
   template?: TemplateRef | null
@@ -46,6 +47,14 @@ export type NodeRecord = {
     artifact_name?: string
     origin?: 'constant_value' | null
     frozen?: boolean
+    organizer_ports?: Array<{
+      key: string
+      name: string
+      data_type: string
+    }>
+    title_position?: string
+    area_color?: string
+    area_filled?: boolean
   }
   interface?: {
     node_id: string
@@ -170,18 +179,23 @@ export type TemplateRecord = {
   source_text?: string
   source_hash?: string
   definition?: {
-    title?: string
-    description?: string
-    nodes?: Array<{
-      id: string
-      kind: 'notebook' | 'file_input'
-      title: string
-      template_ref?: string
-      artifact_name?: string
-      ui?: {
+      title?: string
+      description?: string
+      nodes?: Array<{
+        id: string
+        kind: 'notebook' | 'file_input' | 'organizer' | 'area'
+        title: string
+        template_ref?: string
         artifact_name?: string
-      }
-    }>
+        ui?: {
+          artifact_name?: string
+          organizer_ports?: Array<{
+            key: string
+            name: string
+            data_type: string
+          }>
+        }
+      }>
     edges?: Array<{
       source_node: string
       source_port: string
@@ -248,12 +262,16 @@ export type ProjectOpenResponse = ProjectSnapshot
 export type GraphPatchOperation =
   | { type: 'add_notebook_node'; node_id: string; title: string; x?: number; y?: number; w?: number; h?: number; template_ref?: string; source_text?: string; ui?: { origin?: 'constant_value' | null; hidden_inputs?: string[]; frozen?: boolean } }
   | { type: 'add_file_input_node'; node_id: string; title: string; artifact_name?: string; ui?: { frozen?: boolean }; x?: number; y?: number; w?: number; h?: number }
+  | { type: 'add_organizer_node'; node_id: string; title?: string; ui?: { frozen?: boolean; organizer_ports?: Array<{ key: string; name: string; data_type: string }> }; x?: number; y?: number; w?: number; h?: number }
+  | { type: 'add_area_node'; node_id: string; title?: string; ui?: { frozen?: boolean; title_position?: string; area_color?: string; area_filled?: boolean }; x?: number; y?: number; w?: number; h?: number }
   | { type: 'add_pipeline_template'; template_ref: string; x?: number; y?: number; node_id_prefix?: string | null }
   | { type: 'add_edge'; source_node: string; source_port: string; target_node: string; target_port: string }
   | { type: 'remove_edge'; edge_id: string }
   | { type: 'update_node_layout'; node_id: string; x: number; y: number; w?: number; h?: number }
   | { type: 'update_node_title'; node_id: string; title: string }
   | { type: 'update_node_hidden_inputs'; node_id: string; hidden_inputs: string[] }
+  | { type: 'update_organizer_ports'; node_id: string; ports: Array<{ key: string; name: string; data_type: string }> }
+  | { type: 'update_area_style'; node_id: string; title_position: string; color: string; filled: boolean }
   | { type: 'update_node_frozen'; node_id: string; frozen: boolean }
   | { type: 'delete_node'; node_id: string }
 

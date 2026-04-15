@@ -4,6 +4,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
+from bulletjournal.domain.graph_bindings import organizer_interface_for_node
 from bulletjournal.domain.errors import InvalidRequestError, NotFoundError
 from bulletjournal.domain.enums import ArtifactRole, ArtifactState, NodeKind, ValidationSeverity
 from bulletjournal.domain.models import (
@@ -116,6 +117,10 @@ class ProjectService:
         node = self.get_node(node_id)
         if node.kind == NodeKind.FILE_INPUT:
             return self.synthetic_file_input_interface(node).to_dict()
+        if node.kind == NodeKind.ORGANIZER:
+            return organizer_interface_for_node(node).to_dict()
+        if node.kind == NodeKind.AREA:
+            return None
         interface = self.require_project().state_db.latest_interface_json(node_id)
         if interface is None:
             return None
@@ -333,8 +338,14 @@ class ProjectService:
         for node in graph.nodes:
             interface = interfaces.get(node.id)
             template_status = None
-            if node.template and interface is not None:
-                template_source = self.template_service.resolve_template_source(node.template.ref)
+            resolved_template = node.template
+            if node.template is not None:
+                try:
+                    resolved_template = self.template_service.template_ref(node.template.ref)
+                except FileNotFoundError:
+                    resolved_template = node.template
+            if resolved_template and interface is not None and node.kind == NodeKind.NOTEBOOK:
+                template_source = self.template_service.resolve_template_source(resolved_template.ref)
                 template_status = (
                     'template' if interface.get('source_hash') == template_source.source_hash else 'modified'
                 )
@@ -342,6 +353,7 @@ class ProjectService:
             node_payload.append(
                 {
                     **node.to_dict(),
+                    'template': resolved_template.to_dict() if resolved_template else None,
                     'interface': interface,
                     'template_status': template_status,
                     'execution_meta': execution_meta_by_node.get(node.id),
@@ -465,6 +477,8 @@ class ProjectService:
         for node in graph.nodes:
             if node.kind == NodeKind.FILE_INPUT:
                 project.state_db.ensure_artifact_head(node.id, file_input_artifact_name(node), ArtifactState.PENDING)
+                continue
+            if node.kind in {NodeKind.ORGANIZER, NodeKind.AREA}:
                 continue
             notebook_service.reparse_notebook(node.id)
 

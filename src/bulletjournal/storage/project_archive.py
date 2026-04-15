@@ -44,7 +44,12 @@ def export_project_archive(
     with zipfile.ZipFile(archive, 'w', compression=zipfile.ZIP_DEFLATED) as zf:
         zf.writestr('export_manifest.json', json_dumps(manifest, pretty=True) + '\n')
         for relpath in _iter_project_files(paths, include_artifacts=include_artifacts):
-            zf.write(paths.root / relpath, arcname=f'project/{relpath.as_posix()}')
+            try:
+                zf.write(paths.root / relpath, arcname=f'project/{relpath.as_posix()}')
+            except FileNotFoundError:
+                if _is_transient_sqlite_sidecar(relpath):
+                    continue
+                raise
     return {'archive_path': str(archive), 'project_id': manifest['project_id'], 'includes_artifacts': include_artifacts}
 
 
@@ -117,6 +122,10 @@ def _iter_project_files(paths: ProjectPaths, *, include_artifacts: bool) -> list
                 continue
             members.append(child.relative_to(paths.root))
     return members
+
+
+def _is_transient_sqlite_sidecar(relpath: Path) -> bool:
+    return relpath.name.endswith('.db-shm') or relpath.name.endswith('.db-wal')
 
 
 def _restore_required_directories(root: Path) -> None:

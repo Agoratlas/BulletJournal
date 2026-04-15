@@ -183,6 +183,136 @@ def test_runtime_context_rejects_type_mismatch_for_bound_input(tmp_path) -> None
         raise AssertionError('Expected type mismatch to raise TypeError')
 
 
+def test_runtime_context_marks_output_stale_when_bound_input_becomes_stale_after_pull(tmp_path) -> None:
+    project_root = init_project_root(tmp_path / 'project').root
+    context = RuntimeContext(
+        project_root=project_root,
+        node_id='consumer',
+        run_id='run-interactive-stale',
+        source_hash='consumer-source',
+        lineage_mode=LineageMode.INTERACTIVE_HEURISTIC,
+        bindings={
+            'count': Binding(
+                source_node='producer',
+                source_artifact='value',
+                data_type='int',
+            )
+        },
+        outputs={'result': Port(name='result', data_type='int', role=ArtifactRole.OUTPUT)},
+    )
+
+    persisted = context.object_store.persist_value(42, 'int')
+    context.db.upsert_artifact_object(
+        persisted['artifact_hash'],
+        persisted['storage_kind'],
+        persisted['data_type'],
+        persisted['size_bytes'],
+        persisted.get('extension'),
+        persisted.get('mime_type'),
+        persisted.get('preview'),
+    )
+    context.db.create_artifact_version(
+        node_id='producer',
+        artifact_name='value',
+        role=ArtifactRole.OUTPUT,
+        artifact_hash=persisted['artifact_hash'],
+        source_hash='producer-source',
+        upstream_code_hash='producer-code',
+        upstream_data_hash='producer-data',
+        run_id='upstream-run',
+        lineage_mode=LineageMode.MANAGED,
+        warnings=[],
+    )
+
+    metadata = context.resolve_pull('count')
+    context.record_pull('count', metadata)
+    context.db.set_artifact_head_state('producer', 'value', ArtifactState.STALE)
+
+    pushed = context.finalize_value_push(name='result', value=84, data_type='int', role=ArtifactRole.OUTPUT)
+    head = context.db.get_artifact_head('consumer', 'result')
+
+    assert pushed['state'] == ArtifactState.STALE.value
+    assert head is not None
+    assert head['state'] == ArtifactState.STALE.value
+    assert any(warning['code'] == 'stale_input' for warning in head['warnings'])
+
+
+def test_runtime_context_marks_output_stale_when_loaded_input_is_no_longer_current_head(tmp_path) -> None:
+    project_root = init_project_root(tmp_path / 'project').root
+    context = RuntimeContext(
+        project_root=project_root,
+        node_id='consumer',
+        run_id='run-interactive-outdated',
+        source_hash='consumer-source',
+        lineage_mode=LineageMode.INTERACTIVE_HEURISTIC,
+        bindings={
+            'count': Binding(
+                source_node='producer',
+                source_artifact='value',
+                data_type='int',
+            )
+        },
+        outputs={'result': Port(name='result', data_type='int', role=ArtifactRole.OUTPUT)},
+    )
+
+    persisted_old = context.object_store.persist_value(42, 'int')
+    context.db.upsert_artifact_object(
+        persisted_old['artifact_hash'],
+        persisted_old['storage_kind'],
+        persisted_old['data_type'],
+        persisted_old['size_bytes'],
+        persisted_old.get('extension'),
+        persisted_old.get('mime_type'),
+        persisted_old.get('preview'),
+    )
+    context.db.create_artifact_version(
+        node_id='producer',
+        artifact_name='value',
+        role=ArtifactRole.OUTPUT,
+        artifact_hash=persisted_old['artifact_hash'],
+        source_hash='producer-source',
+        upstream_code_hash='producer-code-old',
+        upstream_data_hash='producer-data-old',
+        run_id='upstream-run-old',
+        lineage_mode=LineageMode.MANAGED,
+        warnings=[],
+    )
+
+    metadata = context.resolve_pull('count')
+    context.record_pull('count', metadata)
+
+    persisted_new = context.object_store.persist_value(84, 'int')
+    context.db.upsert_artifact_object(
+        persisted_new['artifact_hash'],
+        persisted_new['storage_kind'],
+        persisted_new['data_type'],
+        persisted_new['size_bytes'],
+        persisted_new.get('extension'),
+        persisted_new.get('mime_type'),
+        persisted_new.get('preview'),
+    )
+    context.db.create_artifact_version(
+        node_id='producer',
+        artifact_name='value',
+        role=ArtifactRole.OUTPUT,
+        artifact_hash=persisted_new['artifact_hash'],
+        source_hash='producer-source',
+        upstream_code_hash='producer-code-new',
+        upstream_data_hash='producer-data-new',
+        run_id='upstream-run-new',
+        lineage_mode=LineageMode.MANAGED,
+        warnings=[],
+    )
+
+    pushed = context.finalize_value_push(name='result', value=126, data_type='int', role=ArtifactRole.OUTPUT)
+    head = context.db.get_artifact_head('consumer', 'result')
+
+    assert pushed['state'] == ArtifactState.STALE.value
+    assert head is not None
+    assert head['state'] == ArtifactState.STALE.value
+    assert any(warning['code'] == 'outdated_input' for warning in head['warnings'])
+
+
 def test_runtime_context_finalize_value_push_persists_dataframe_preview(tmp_path) -> None:
     project_root = init_project_root(tmp_path / 'project').root
     context = RuntimeContext(

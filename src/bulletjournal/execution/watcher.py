@@ -6,6 +6,7 @@ import time
 from pathlib import Path
 
 from bulletjournal.config import WATCH_INTERVAL_SECONDS
+from bulletjournal.parser.source_hash import compute_source_hash
 
 
 logger = logging.getLogger(__name__)
@@ -16,7 +17,7 @@ class NotebookWatcher:
         self.project_service = project_service
         self._thread: threading.Thread | None = None
         self._stop = threading.Event()
-        self._mtimes: dict[str, float] = {}
+        self._file_state: dict[str, tuple[float, str]] = {}
 
     def start(self) -> None:
         if self._thread and self._thread.is_alive():
@@ -41,21 +42,21 @@ class NotebookWatcher:
     def _scan(self) -> None:
         project = self.project_service.project
         if project is None:
-            self._mtimes.clear()
+            self._file_state.clear()
             return
         current_paths = {str(path) for path in project.paths.notebooks_dir.glob('*.py')}
-        self._mtimes = {
-            key: value
-            for key, value in self._mtimes.items()
-            if key in current_paths
-        }
+        self._file_state = {key: value for key, value in self._file_state.items() if key in current_paths}
         for notebook_path in sorted(project.paths.notebooks_dir.glob('*.py')):
             mtime = notebook_path.stat().st_mtime
             key = str(notebook_path)
-            previous = self._mtimes.get(key)
+            previous = self._file_state.get(key)
+            source_hash = compute_source_hash(notebook_path)
             if previous is None:
-                self._mtimes[key] = mtime
+                self._file_state[key] = (mtime, source_hash)
                 continue
-            if mtime != previous:
-                self._mtimes[key] = mtime
+            previous_mtime, previous_hash = previous
+            if mtime != previous_mtime:
+                self._file_state[key] = (mtime, source_hash)
+                if source_hash == previous_hash:
+                    continue
                 self.project_service.reparse_notebook_by_path(Path(key))

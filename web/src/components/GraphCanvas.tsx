@@ -1,11 +1,13 @@
-import { memo, useEffect, useMemo, useRef, useState } from 'react'
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import ReactFlow, {
   Background,
   ConnectionMode,
   Panel,
   Handle,
   MarkerType,
+  NodeResizeControl,
   Position,
+  ResizeControlVariant,
   SelectionMode,
   type NodeChange,
   useStore,
@@ -21,6 +23,7 @@ import ReactFlow, {
   useReactFlow,
 } from 'reactflow'
 
+import { areaSettings } from '../lib/area'
 import { artifactCounts, artifactFor, assetsForNode, badgeForNode, formatDurationSeconds, formatType, hiddenInputs, inputState, outputsForNode, visibleInputs } from '../lib/helpers'
 import type { ArtifactState, NodeRecord, Port, ProjectSnapshot } from '../lib/types'
 import { ArtifactCounts } from './ArtifactCounts'
@@ -45,6 +48,8 @@ type GraphCanvasProps = {
   onSelectionContextMenu: (position: { x: number; y: number }) => void
   onPortContextMenu: (nodeId: string, portName: string, side: 'input' | 'output', position: { x: number; y: number }) => void
   onEditFileNode: (nodeId: string) => void
+  onEditOrganizerNode: (nodeId: string) => void
+  onEditAreaNode: (nodeId: string) => void
   onOpenEditor: (nodeId: string) => void
   onKillEditor: (nodeId: string) => void
   onRunNode: (nodeId: string, mode: 'run_stale' | 'run_all' | 'edit_run') => void
@@ -52,12 +57,14 @@ type GraphCanvasProps = {
   onCanvasInteract: () => void
   onCanvasClear: () => void
   onNodeMove: (nodeId: string, x: number, y: number) => void
+  onNodeResize: (nodeId: string, x: number, y: number, w: number, h: number) => void
   onNodesDelete: (nodes: Node[]) => void
   draggedBlock: { title: string; kind: string } | null
   onBlockDrop: (x: number, y: number) => void
+  onViewportChange: (viewport: { center: { x: number; y: number }; zoom: number }) => void
 }
 
-const NON_RUNNABLE_NODE_KINDS = new Set(['file_input'])
+const NON_RUNNABLE_NODE_KINDS = new Set(['file_input', 'organizer', 'area'])
 
 function validationIssuesForNode(snapshot: ProjectSnapshot, nodeId: string) {
   return snapshot.validation_issues.filter((issue) => issue.node_id === nodeId)
@@ -75,11 +82,16 @@ type BulletJournalNodeData = {
   onNodeContextMenu: (nodeId: string, position: { x: number; y: number }) => void
   onPortContextMenu: (nodeId: string, portName: string, side: 'input' | 'output', position: { x: number; y: number }) => void
   onEditFileNode: (nodeId: string) => void
+  onEditOrganizerNode: (nodeId: string) => void
+  onEditAreaNode: (nodeId: string) => void
   onOpenEditor: (nodeId: string) => void
   onKillEditor: (nodeId: string) => void
   onRunNode: (nodeId: string, mode: 'run_stale' | 'run_all' | 'edit_run') => void
   onOpenArtifacts: (nodeId: string) => void
   activeEditorNodeIds: string[]
+  organizerGhostInsertIndex: number | null
+  onNodeResizePreview: (nodeId: string, x: number, y: number, w: number, h: number) => void
+  onNodeResize: (nodeId: string, x: number, y: number, w: number, h: number) => void
 }
 
 type ConnectionIntent = {
@@ -102,6 +114,23 @@ type FlowSelectionState = {
     height: number
   } | null
   transform: [number, number, number]
+}
+
+function useConnectionIntent(): ConnectionIntent {
+  const connectionNodeId = useStore((state: FlowConnectionState) => state.connectionNodeId)
+  const connectionHandleId = useStore((state: FlowConnectionState) => state.connectionHandleId)
+  const connectionHandleType = useStore((state: FlowConnectionState) => state.connectionHandleType)
+
+  return useMemo(() => {
+    if (!connectionNodeId || !connectionHandleId || !connectionHandleType) {
+      return null
+    }
+    return {
+      nodeId: connectionNodeId,
+      handleId: connectionHandleId,
+      handleType: connectionHandleType,
+    } satisfies NonNullable<ConnectionIntent>
+  }, [connectionHandleId, connectionHandleType, connectionNodeId])
 }
 
 const PORT_TOP_OFFSET = 82
@@ -145,6 +174,23 @@ function toggleIds(baseIds: string[], toggledIds: string[]): string[] {
   return Array.from(next)
 }
 
+function displayPortName(port: Port): string {
+  return port.label?.trim() || port.name
+}
+
+function portLayoutMetrics(node: NodeRecord) {
+  if (node.kind === 'organizer') {
+    return {
+      topOffset: 20,
+      step: 40,
+    }
+  }
+  return {
+    topOffset: PORT_TOP_OFFSET,
+    step: PORT_STEP,
+  }
+}
+
 function portAnchorForSelection(
   snapshot: ProjectSnapshot,
   node: NodeRecord,
@@ -161,8 +207,9 @@ function portAnchorForSelection(
   if (index === -1) {
     return null
   }
+  const metrics = portLayoutMetrics(node)
   const x = (layout?.x ?? 80) + (side === 'output' ? width : 0)
-  const y = (layout?.y ?? 80) + PORT_TOP_OFFSET + index * PORT_STEP
+  const y = (layout?.y ?? 80) + metrics.topOffset + index * metrics.step
   return { x, y }
 }
 
@@ -217,7 +264,7 @@ function PortRow({
         />
       ) : null}
       <div className="rf-port-copy">
-        <strong>{port.name}</strong>
+        <strong>{displayPortName(port)}</strong>
         <span>{formatType(port.data_type)}</span>
       </div>
       {side === 'output' ? (
@@ -234,8 +281,146 @@ function PortRow({
   )
 }
 
+function organizerGhostRows(
+  node: NodeRecord,
+  ghostInsertIndex: number | null,
+  connecting: boolean,
+): Array<{ kind: 'port'; port: Port } | { kind: 'ghost'; insertIndex: number }> {
+  const ports = outputsForNode(node)
+  if (!ports.length && !connecting) {
+    return [{ kind: 'ghost', insertIndex: 0 }]
+  }
+  if (ghostInsertIndex === null) {
+    return ports.map((port) => ({ kind: 'port', port }))
+  }
+  const rows: Array<{ kind: 'port'; port: Port } | { kind: 'ghost'; insertIndex: number }> = []
+  ports.forEach((port, index) => {
+    if (index === ghostInsertIndex) {
+      rows.push({ kind: 'ghost', insertIndex: ghostInsertIndex })
+    }
+    rows.push({ kind: 'port', port })
+  })
+  if (ghostInsertIndex >= ports.length) {
+    rows.push({ kind: 'ghost', insertIndex: ghostInsertIndex })
+  }
+  if (!rows.length) {
+    rows.push({ kind: 'ghost', insertIndex: ghostInsertIndex })
+  }
+  return rows
+}
+
+function OrganizerLaneRow({
+  node,
+  snapshot,
+  port,
+  connectionIntent,
+  onPortContextMenu,
+}: {
+  node: NodeRecord
+  snapshot: ProjectSnapshot
+  port: Port
+  connectionIntent: ConnectionIntent
+  onPortContextMenu: (nodeId: string, portName: string, side: 'input' | 'output', position: { x: number; y: number }) => void
+}) {
+  const inputArtifactState = inputState(snapshot, node.id, port)
+  const outputArtifactState = artifactFor(snapshot, node.id, port.name)?.state ?? inputArtifactState
+  const typeColor = TYPE_COLORS[port.data_type] ?? TYPE_COLORS.object
+  const sourceHandleId = `out:${port.name}`
+  const targetHandleId = `in:${port.name}`
+  const sourceStart = connectionIntent?.nodeId === node.id && connectionIntent.handleId === sourceHandleId && connectionIntent.handleType === 'source'
+  const targetStart = connectionIntent?.nodeId === node.id && connectionIntent.handleId === targetHandleId && connectionIntent.handleType === 'target'
+  const connecting = Boolean(connectionIntent)
+  const inputCompatible = !connectionIntent || isCompatibleWithIntent(snapshot, node, port, 'input', connectionIntent)
+  const outputCompatible = !connectionIntent || isCompatibleWithIntent(snapshot, node, port, 'output', connectionIntent)
+
+  function handleInputContextMenu(event: React.MouseEvent) {
+    event.preventDefault()
+    event.stopPropagation()
+    onPortContextMenu(node.id, port.name, 'input', { x: event.clientX, y: event.clientY })
+  }
+
+  function handleOutputContextMenu(event: React.MouseEvent) {
+    event.preventDefault()
+    event.stopPropagation()
+    onPortContextMenu(node.id, port.name, 'output', { x: event.clientX, y: event.clientY })
+  }
+
+  return (
+    <div className={`rf-organizer-row ${connecting ? 'connecting' : ''} ${!inputCompatible || !outputCompatible ? 'incompatible' : ''}`} title={`${displayPortName(port)} (${port.data_type})`}>
+      <Handle
+        type="target"
+        id={targetHandleId}
+        position={Position.Left}
+        className={`rf-handle ${targetStart ? 'connection-start' : ''} ${connecting ? 'connecting' : ''}`}
+        style={{ borderColor: typeColor, background: STATE_COLORS[inputArtifactState], top: 20 }}
+        onContextMenu={handleInputContextMenu}
+      />
+      <div className="rf-organizer-copy">
+        <strong>{displayPortName(port)}</strong>
+        <span>{formatType(port.data_type)}</span>
+      </div>
+      <Handle
+        type="source"
+        id={sourceHandleId}
+        position={Position.Right}
+        className={`rf-handle ${sourceStart ? 'connection-start' : ''} ${connecting ? 'connecting' : ''}`}
+        style={{ borderColor: typeColor, background: STATE_COLORS[outputArtifactState], top: 20 }}
+        onContextMenu={handleOutputContextMenu}
+      />
+    </div>
+  )
+}
+
+function OrganizerGhostRow({ insertIndex, connecting }: { insertIndex: number; connecting: boolean }) {
+  return (
+    <div className={`rf-organizer-row ghost ${connecting ? 'connecting' : ''}`}>
+      <div className="rf-organizer-copy ghost-copy">
+        <strong>New lane</strong>
+      </div>
+    </div>
+  )
+}
+
+function OrganizerGhostHandleLayer({
+  slotCount,
+  connecting,
+  visibleInsertIndex,
+}: {
+  slotCount: number
+  connecting: boolean
+  visibleInsertIndex: number | null
+}) {
+  const slotIndices = Array.from({ length: slotCount }, (_, index) => index)
+  return (
+    <div className="rf-organizer-slot-layer" aria-hidden="true">
+      {slotIndices.map((insertIndex) => (
+        <div
+          key={`slot:${insertIndex}`}
+          className={`rf-organizer-slot-row ${visibleInsertIndex === insertIndex ? 'visible-slot-row' : ''}`}
+          style={{ top: insertIndex * 40 }}
+        >
+          <Handle
+            type="target"
+            id={`ghost-in:${insertIndex}`}
+            position={Position.Left}
+            className={`rf-handle ghost-handle organizer-slot-handle ${connecting ? 'connecting' : ''} ${visibleInsertIndex === insertIndex ? 'visible-slot-handle' : ''}`}
+            isValidConnection={(connection) => Boolean(connection.source && connection.source !== connection.target)}
+          />
+          <Handle
+            type="source"
+            id={`ghost-out:${insertIndex}`}
+            position={Position.Right}
+            className={`rf-handle ghost-handle organizer-slot-handle ${connecting ? 'connecting' : ''} ${visibleInsertIndex === insertIndex ? 'visible-slot-handle' : ''}`}
+            isValidConnection={(connection) => Boolean(connection.target && connection.source !== connection.target)}
+          />
+        </div>
+      ))}
+    </div>
+  )
+}
+
 const BulletJournalNodeCard = memo(({ data, selected }: NodeProps<BulletJournalNodeData>) => {
-  const { node, snapshot, onSelect, onNodeContextMenu, onPortContextMenu, onEditFileNode, onOpenEditor, onKillEditor, onRunNode, onOpenArtifacts } = data
+  const { node, snapshot, onSelect, onNodeContextMenu, onPortContextMenu, onEditFileNode, onEditOrganizerNode, onEditAreaNode, onOpenEditor, onKillEditor, onRunNode, onOpenArtifacts } = data
   const visible = visibleInputs(node)
   const hidden = hiddenInputs(node)
   const outputs = outputsForNode(node)
@@ -261,16 +446,7 @@ const BulletJournalNodeCard = memo(({ data, selected }: NodeProps<BulletJournalN
   const [now, setNow] = useState(() => Date.now())
   const [menuOpen, setMenuOpen] = useState(false)
   const menuRef = useRef<HTMLDivElement | null>(null)
-  const connectionIntent = useStore((state: FlowConnectionState) => {
-    if (!state.connectionNodeId || !state.connectionHandleId || !state.connectionHandleType) {
-      return null
-    }
-    return {
-      nodeId: state.connectionNodeId,
-      handleId: state.connectionHandleId,
-      handleType: state.connectionHandleType,
-    } as NonNullable<ConnectionIntent>
-  })
+  const connectionIntent = useConnectionIntent()
 
   useEffect(() => {
     if (!isExecutionActive) {
@@ -321,6 +497,81 @@ const BulletJournalNodeCard = memo(({ data, selected }: NodeProps<BulletJournalN
     } else if (typeof executionMeta.duration_seconds === 'number') {
       executionTimerLabel = formatDurationSeconds(executionMeta.duration_seconds)
     }
+  }
+
+  if (node.kind === 'organizer') {
+    const organizerRows = organizerGhostRows(node, data.organizerGhostInsertIndex, Boolean(connectionIntent))
+    const organizerSlotCount = Math.max(1, outputsForNode(node).length + 1)
+    const visibleGhostInsertIndex = data.organizerGhostInsertIndex ?? (outputs.length === 0 ? 0 : null)
+    return (
+      <div
+        className={`rf-node organizer-node state-${node.state} ${node.ui?.frozen ? 'is-frozen' : ''} ${selected ? 'is-selected' : ''} ${hasBlockingValidationIssues ? 'has-validation-error' : ''}`}
+        title={validationSummary || undefined}
+        onDoubleClick={(event) => {
+          event.stopPropagation()
+          onEditOrganizerNode(node.id)
+        }}
+        onContextMenu={(event) => {
+          event.preventDefault()
+          event.stopPropagation()
+          onNodeContextMenu(node.id, { x: event.clientX, y: event.clientY })
+        }}
+      >
+        <div className="rf-organizer-body">
+          <OrganizerGhostHandleLayer
+            slotCount={organizerSlotCount}
+            connecting={Boolean(connectionIntent)}
+            visibleInsertIndex={visibleGhostInsertIndex}
+          />
+          {organizerRows.map((row) => row.kind === 'port'
+            ? <OrganizerLaneRow key={row.port.name} node={node} snapshot={snapshot} port={row.port} connectionIntent={connectionIntent} onPortContextMenu={onPortContextMenu} />
+            : <OrganizerGhostRow key={`ghost-${row.insertIndex}`} insertIndex={row.insertIndex} connecting={Boolean(connectionIntent)} />)}
+        </div>
+      </div>
+    )
+  }
+
+  if (node.kind === 'area') {
+    const area = areaSettings(node)
+    const title = node.title.trim()
+    return (
+      <div
+        className={`rf-area-node area-color-${area.color} ${area.filled ? 'filled' : 'transparent'} ${selected ? 'is-selected' : ''}`}
+        data-title-position={area.titlePosition}
+        onDoubleClick={(event) => {
+          event.stopPropagation()
+          onEditAreaNode(node.id)
+        }}
+        onContextMenu={(event) => {
+          event.preventDefault()
+          event.stopPropagation()
+          onNodeContextMenu(node.id, { x: event.clientX, y: event.clientY })
+        }}
+      >
+        {selected ? (
+          <>
+            {(['top-left', 'top-right', 'bottom-left', 'bottom-right'] as const).map((position) => (
+              <NodeResizeControl
+                key={position}
+                position={position}
+                variant={ResizeControlVariant.Handle}
+                className="area-resize-handle"
+                minWidth={160}
+                minHeight={120}
+                onResize={(_event, params) => {
+                  data.onNodeResizePreview(node.id, params.x, params.y, params.width, params.height)
+                }}
+                onResizeEnd={(_event, params) => {
+                  data.onNodeResizePreview(node.id, params.x, params.y, params.width, params.height)
+                  data.onNodeResize(node.id, params.x, params.y, params.width, params.height)
+                }}
+              />
+            ))}
+          </>
+        ) : null}
+        {title ? <div className="rf-area-title">{title}</div> : null}
+      </div>
+    )
   }
 
   return (
@@ -459,18 +710,63 @@ function isCompatibleWithIntent(snapshot: ProjectSnapshot, node: NodeRecord, por
   return targetPort?.data_type === port.data_type
 }
 
-export function GraphCanvas({ snapshot, serverNowMs = Date.now(), serverNowClientAnchorMs = Date.now(), selectedNodeIds, selectedEdgeIds, activeRunNodeId = null, queuedRunNodeIds = [], completedRunNodeIds = [], activeEditorNodeIds = [], onConnect, onEdgesChange, onSelectionChange, onNodeSelect, onEdgeSelect, onNodeContextMenu, onSelectionContextMenu, onPortContextMenu, onEditFileNode, onOpenEditor, onKillEditor, onRunNode, onOpenArtifacts, onCanvasInteract, onCanvasClear, onNodeMove, onNodesDelete, draggedBlock, onBlockDrop }: GraphCanvasProps) {
+function isGhostHandle(handleId: string | null | undefined): boolean {
+  return Boolean(handleId && (handleId.startsWith('ghost-in:') || handleId.startsWith('ghost-out:')))
+}
+
+export function GraphCanvas({ snapshot, serverNowMs = Date.now(), serverNowClientAnchorMs = Date.now(), selectedNodeIds, selectedEdgeIds, activeRunNodeId = null, queuedRunNodeIds = [], completedRunNodeIds = [], activeEditorNodeIds = [], onConnect, onEdgesChange, onSelectionChange, onNodeSelect, onEdgeSelect, onNodeContextMenu, onSelectionContextMenu, onPortContextMenu, onEditFileNode, onEditOrganizerNode, onEditAreaNode, onOpenEditor, onKillEditor, onRunNode, onOpenArtifacts, onCanvasInteract, onCanvasClear, onNodeMove, onNodeResize, onNodesDelete, draggedBlock, onBlockDrop, onViewportChange }: GraphCanvasProps) {
   const { screenToFlowPosition } = useReactFlow()
   const store = useStoreApi()
   const updateNodeInternals = useUpdateNodeInternals()
-  const pendingPositionsRef = useRef<Record<string, { x: number; y: number }>>({})
+  const shellRef = useRef<HTMLDivElement | null>(null)
+  const pendingLayoutRef = useRef<Record<string, { x: number; y: number; w?: number; h?: number }>>({})
   const selectionStateRef = useRef<{ additive: boolean; baseNodeIds: string[]; baseEdgeIds: string[] } | null>(null)
   const suppressNativeSelectionRef = useRef(false)
+  const [pointerFlowPosition, setPointerFlowPosition] = useState<{ x: number; y: number } | null>(null)
   const userSelectionRect = useStore((state: FlowSelectionState) => state.userSelectionRect)
   const transform = useStore((state: FlowSelectionState) => state.transform)
-  const [pendingPositionVersion, setPendingPositionVersion] = useState(0)
+  const connectionIntent = useConnectionIntent()
+  const [pendingLayoutVersion, setPendingLayoutVersion] = useState(0)
   const [nodeDimensions, setNodeDimensions] = useState<Record<string, { width: number; height: number }>>({})
   const lastHandleSignatureRef = useRef<Record<string, string>>({})
+
+  const organizerGhostByNodeId = useMemo(() => {
+    const previews: Record<string, number | null> = {}
+    if (!connectionIntent || !pointerFlowPosition) {
+      return previews
+    }
+    let nearest: { nodeId: string; insertIndex: number; distance: number } | null = null
+    for (const node of snapshot.graph.nodes) {
+      if (node.kind !== 'organizer') {
+        continue
+      }
+      const layout = snapshot.graph.layout.find((entry) => entry.node_id === node.id)
+      if (!layout) {
+        continue
+      }
+      const width = nodeDimensions[node.id]?.width ?? layout.w ?? 160
+      const height = nodeDimensions[node.id]?.height ?? layout.h ?? 140
+      const dx = Math.max(layout.x - pointerFlowPosition.x, 0, pointerFlowPosition.x - (layout.x + width))
+      const dy = Math.max(layout.y - pointerFlowPosition.y, 0, pointerFlowPosition.y - (layout.y + height))
+      const distance = Math.hypot(dx, dy)
+      if (distance > 80) {
+        continue
+      }
+      const portCount = outputsForNode(node).length
+      const insertIndex = Math.max(0, Math.min(portCount, Math.round((pointerFlowPosition.y - layout.y - 20) / 40)))
+      if (!nearest || distance < nearest.distance) {
+        nearest = { nodeId: node.id, insertIndex, distance }
+      }
+    }
+    if (nearest) {
+      previews[nearest.nodeId] = nearest.insertIndex
+    }
+    return previews
+  }, [connectionIntent, nodeDimensions, pointerFlowPosition, snapshot.graph.layout, snapshot.graph.nodes])
+  const organizerGhostSignature = useMemo(
+    () => JSON.stringify(Object.entries(organizerGhostByNodeId).sort(([left], [right]) => left.localeCompare(right))),
+    [organizerGhostByNodeId],
+  )
 
   const mappedNodes = useMemo<Node<BulletJournalNodeData>[]>(() => {
     const layoutByNode = Object.fromEntries(snapshot.graph.layout.map((entry) => [entry.node_id, entry]))
@@ -492,19 +788,29 @@ export function GraphCanvas({ snapshot, serverNowMs = Date.now(), serverNowClien
           onNodeContextMenu,
           onPortContextMenu,
           onEditFileNode,
+          onEditOrganizerNode,
+          onEditAreaNode,
           onOpenEditor,
           onKillEditor,
           onRunNode,
           onOpenArtifacts,
+          organizerGhostInsertIndex: organizerGhostByNodeId[node.id] ?? null,
+          onNodeResizePreview: previewNodeResize,
+          onNodeResize,
         },
         position: { x: layout?.x ?? 80, y: layout?.y ?? 80 },
-        style: { width: layout?.w ?? 360 },
+        style: {
+          width: layout?.w ?? 360,
+          height: node.kind === 'area' ? (layout?.h ?? 220) : undefined,
+        },
         width: nodeDimensions[node.id]?.width,
         height: nodeDimensions[node.id]?.height,
         selected: selectedNodeIds.includes(node.id),
+        connectable: node.kind !== 'area',
+        zIndex: node.kind === 'area' ? -1 : 0,
       }
     })
-  }, [snapshot, serverNowMs, serverNowClientAnchorMs, selectedNodeIds, activeRunNodeId, queuedRunNodeIds, completedRunNodeIds, activeEditorNodeIds, onNodeContextMenu, onPortContextMenu, onEditFileNode, onKillEditor, onNodeSelect, onOpenArtifacts, onOpenEditor, onRunNode, nodeDimensions])
+  }, [snapshot, serverNowMs, serverNowClientAnchorMs, selectedNodeIds, activeRunNodeId, queuedRunNodeIds, completedRunNodeIds, activeEditorNodeIds, onNodeContextMenu, onPortContextMenu, onEditFileNode, onEditOrganizerNode, onEditAreaNode, onKillEditor, onNodeResize, onNodeSelect, onOpenArtifacts, onOpenEditor, onRunNode, nodeDimensions, organizerGhostByNodeId, pendingLayoutVersion])
 
   useEffect(() => {
     const currentNodeIds = new Set(snapshot.graph.nodes.map((node) => node.id))
@@ -516,7 +822,7 @@ export function GraphCanvas({ snapshot, serverNowMs = Date.now(), serverNowClien
     })
   }, [snapshot.graph.nodes])
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const nextSignatureById = Object.fromEntries(
       snapshot.graph.nodes.map((node) => [
         node.id,
@@ -524,6 +830,7 @@ export function GraphCanvas({ snapshot, serverNowMs = Date.now(), serverNowClien
           inputs: (node.interface?.inputs ?? []).map((port) => [port.name, port.data_type, port.declaration_index ?? null]),
           outputs: (node.interface?.outputs ?? []).map((port) => [port.name, port.data_type, port.declaration_index ?? null]),
           assets: (node.interface?.assets ?? []).map((port) => [port.name, port.data_type, port.declaration_index ?? null]),
+          organizerGhostInsertIndex: node.kind === 'organizer' ? (organizerGhostByNodeId[node.id] ?? null) : null,
         }),
       ]),
     )
@@ -534,33 +841,45 @@ export function GraphCanvas({ snapshot, serverNowMs = Date.now(), serverNowClien
     if (!changedNodeIds.length) {
       return
     }
-    const frame = window.requestAnimationFrame(() => updateNodeInternals(changedNodeIds))
-    return () => window.cancelAnimationFrame(frame)
-  }, [snapshot.graph.nodes, updateNodeInternals])
+    updateNodeInternals(changedNodeIds)
+  }, [snapshot.graph.nodes, organizerGhostByNodeId, organizerGhostSignature, updateNodeInternals])
 
   const nodes = useMemo(() => {
     let changed = false
     const nextNodes = mappedNodes.map((node) => {
-      const pendingPosition = pendingPositionsRef.current[node.id]
-      if (!pendingPosition) {
+      const pendingLayout = pendingLayoutRef.current[node.id]
+      if (!pendingLayout) {
         return node
       }
-      const snapshotCaughtUp = node.position.x === pendingPosition.x && node.position.y === pendingPosition.y
+      const snapshotCaughtUp = node.position.x === pendingLayout.x
+        && node.position.y === pendingLayout.y
+        && (pendingLayout.w === undefined || node.style?.width === pendingLayout.w)
+        && (pendingLayout.h === undefined || node.style?.height === pendingLayout.h)
       if (snapshotCaughtUp) {
         changed = true
-        delete pendingPositionsRef.current[node.id]
+        delete pendingLayoutRef.current[node.id]
         return node
       }
       return {
         ...node,
-        position: pendingPosition,
+        position: { x: pendingLayout.x, y: pendingLayout.y },
+        style: {
+          ...node.style,
+          width: pendingLayout.w ?? node.style?.width,
+          height: pendingLayout.h ?? node.style?.height,
+        },
       }
     })
     if (changed) {
-      window.setTimeout(() => setPendingPositionVersion((current) => current + 1), 0)
+      window.setTimeout(() => setPendingLayoutVersion((current) => current + 1), 0)
     }
     return nextNodes
-  }, [mappedNodes, pendingPositionVersion])
+  }, [mappedNodes, pendingLayoutVersion])
+
+  function previewNodeResize(nodeId: string, x: number, y: number, w: number, h: number) {
+    pendingLayoutRef.current[nodeId] = { x, y, w, h }
+    setPendingLayoutVersion((current) => current + 1)
+  }
 
   const edges = useMemo<Edge[]>(() => {
     const nodeById = new Map(snapshot.graph.nodes.map((node) => [node.id, node]))
@@ -588,8 +907,8 @@ export function GraphCanvas({ snapshot, serverNowMs = Date.now(), serverNowClien
 
   const handleNodeDragStop: NodeDragHandler = (_event, node) => {
     onCanvasInteract()
-    pendingPositionsRef.current[node.id] = { x: node.position.x, y: node.position.y }
-    setPendingPositionVersion((current) => current + 1)
+    pendingLayoutRef.current[node.id] = { x: node.position.x, y: node.position.y }
+    setPendingLayoutVersion((current) => current + 1)
     onNodeMove(node.id, node.position.x, node.position.y)
   }
 
@@ -646,8 +965,34 @@ export function GraphCanvas({ snapshot, serverNowMs = Date.now(), serverNowClien
     onSelectionChange(rectSelectedNodeIds, rectSelectedEdgeIds)
   }, [nodeDimensions, onSelectionChange, snapshot.graph.edges, snapshot.graph.layout, snapshot.graph.nodes, transform, userSelectionRect])
 
+  useEffect(() => {
+    if (!shellRef.current) {
+      return
+    }
+    const rect = shellRef.current.getBoundingClientRect()
+    if (!rect.width || !rect.height) {
+      return
+    }
+    onViewportChange({
+      center: screenToFlowPosition({
+        x: rect.left + rect.width / 2,
+        y: rect.top + rect.height / 2,
+      }),
+      zoom: transform[2] ?? 1,
+    })
+  }, [onViewportChange, screenToFlowPosition, transform])
+
   return (
-    <div className="graph-canvas-shell">
+    <div
+      className="graph-canvas-shell"
+      ref={shellRef}
+      onPointerMove={(event) => {
+        if (!connectionIntent) {
+          return
+        }
+        setPointerFlowPosition(screenToFlowPosition({ x: event.clientX, y: event.clientY }))
+      }}
+    >
       <ReactFlow
         nodes={nodes}
         edges={edges}
@@ -657,6 +1002,7 @@ export function GraphCanvas({ snapshot, serverNowMs = Date.now(), serverNowClien
         defaultViewport={{ x: 0, y: 0, zoom: 1 }}
         zoomOnDoubleClick={false}
         connectionMode={ConnectionMode.Strict}
+        connectionRadius={26}
         snapToGrid
         snapGrid={[20, 20]}
         nodesDraggable
@@ -666,20 +1012,23 @@ export function GraphCanvas({ snapshot, serverNowMs = Date.now(), serverNowClien
         selectionMode={SelectionMode.Full}
         selectionKeyCode={['Shift']}
         multiSelectionKeyCode={['Shift']}
-        deleteKeyCode={['Backspace', 'Delete']}
+        elevateNodesOnSelect={false}
+        deleteKeyCode={null}
         onNodesChange={(changes: NodeChange[]) => {
           let positionChanged = false
           for (const change of changes) {
             if (change.type !== 'position' || !change.position) {
               continue
             }
-            const previous = pendingPositionsRef.current[change.id]
+            const previous = pendingLayoutRef.current[change.id]
             if (previous?.x === change.position.x && previous?.y === change.position.y) {
               continue
             }
-            pendingPositionsRef.current[change.id] = {
+            pendingLayoutRef.current[change.id] = {
               x: change.position.x,
               y: change.position.y,
+              w: previous?.w,
+              h: previous?.h,
             }
             positionChanged = true
           }
@@ -709,7 +1058,7 @@ export function GraphCanvas({ snapshot, serverNowMs = Date.now(), serverNowClien
             })
           }
           if (positionChanged) {
-            setPendingPositionVersion((current) => current + 1)
+            setPendingLayoutVersion((current) => current + 1)
           }
         }}
         onEdgesChange={(changes) => {
@@ -742,10 +1091,22 @@ export function GraphCanvas({ snapshot, serverNowMs = Date.now(), serverNowClien
           if (!sourceNode || !targetNode || sourceNode.id === targetNode.id) {
             return false
           }
+          const sourceGhost = isGhostHandle(connection.sourceHandle)
+          const targetGhost = isGhostHandle(connection.targetHandle)
+          if (sourceGhost && targetGhost) {
+            return false
+          }
+          if (sourceGhost || targetGhost) {
+            return true
+          }
           const sourcePortName = connection.sourceHandle.replace('out:', '')
           const targetPortName = connection.targetHandle.replace('in:', '')
-          const sourcePort = [...outputsForNode(sourceNode), ...assetsForNode(sourceNode)].find((item) => item.name === sourcePortName)
-          const targetPort = [...visibleInputs(targetNode), ...hiddenInputs(targetNode)].find((item) => item.name === targetPortName)
+          const sourcePort = sourceGhost
+            ? [...visibleInputs(targetNode), ...hiddenInputs(targetNode)].find((item) => item.name === targetPortName)
+            : [...outputsForNode(sourceNode), ...assetsForNode(sourceNode)].find((item) => item.name === sourcePortName)
+          const targetPort = targetGhost
+            ? [...outputsForNode(sourceNode), ...assetsForNode(sourceNode)].find((item) => item.name === sourcePortName)
+            : [...visibleInputs(targetNode), ...hiddenInputs(targetNode)].find((item) => item.name === targetPortName)
           return Boolean(sourcePort && targetPort && sourcePort.data_type === targetPort.data_type)
         }}
         onNodeDragStop={handleNodeDragStop}
@@ -806,6 +1167,10 @@ export function GraphCanvas({ snapshot, serverNowMs = Date.now(), serverNowClien
         onNodeDragStart={onCanvasInteract}
         onConnectStart={(_event, _params: OnConnectStartParams) => {
           onCanvasInteract()
+          setPointerFlowPosition(null)
+        }}
+        onConnectEnd={() => {
+          setPointerFlowPosition(null)
         }}
         defaultEdgeOptions={{ markerEnd: { type: MarkerType.ArrowClosed } }}
         onDragOver={(event) => {

@@ -9,6 +9,7 @@ import { ArtifactCounts } from './ArtifactCounts'
 import { ActionButtons } from './ActionButtons'
 import { Download } from './Icons'
 import { PortPill } from './PortPill'
+import { SimpleMarkdown } from './SimpleMarkdown'
 
 function ExecutionLogPanel({
   title,
@@ -185,7 +186,7 @@ export function NodeInspector({
       ) : null}
 
       <div className="inspector-block">
-        <h3>Notebook docs</h3>
+        <h3>{node.kind === 'organizer' || node.kind === 'area' ? 'Block docs' : 'Notebook docs'}</h3>
         <pre className="code-block docs-block">{node.interface?.docs ?? 'No notebook docs found.'}</pre>
       </div>
 
@@ -198,7 +199,7 @@ export function NodeInspector({
             const hidden = hiddenInputNames(node).has(port.name)
             return (
               <div key={port.name} className="inspector-port">
-                <PortPill name={port.name} dataType={port.data_type} state={state} side="input" compact />
+                <PortPill name={port.name} label={port.label} dataType={port.data_type} state={state} side="input" compact />
                 <div className="inspector-port-meta">
                   <span>{source ? `${source.source_node}/${source.source_port}` : port.has_default ? 'default value' : 'not connected'}</span>
                   {port.has_default ? <span>default: {JSON.stringify(port.default)}</span> : null}
@@ -222,6 +223,7 @@ export function NodeInspector({
             <div key={port.name} className="inspector-port">
               <PortPill
                 name={port.name}
+                label={port.label}
                 dataType={port.data_type}
                 state={artifactFor(snapshot, node.id, port.name)?.state ?? 'pending'}
                 side="output"
@@ -241,7 +243,7 @@ export function NodeInspector({
             return (
               <div key={issue.issue_id} className={`warning-chip ${issue.severity}`}>
                 <strong>{issue.code}</strong>
-                <span>{issue.message}</span>
+                <SimpleMarkdown className="warning-chip-message" text={issue.message} />
                 {details ? <pre className="warning-details">{details}</pre> : null}
               </div>
             )

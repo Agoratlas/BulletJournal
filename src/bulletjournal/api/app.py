@@ -184,10 +184,11 @@ def _route_path(base_path: str, suffix: str) -> str:
 def _resolve_public_origin(headers: Mapping[str, str], *, scheme: str) -> tuple[str | None, str, str | None]:
     forwarded_host = _first_forwarded_value(headers.get('x-forwarded-host'))
     host = _first_forwarded_value(headers.get('host'))
-    public_host, derived_port = _split_host_and_port(forwarded_host or host)
+    public_authority = forwarded_host or host
+    _, derived_port = _split_host_and_port(public_authority)
     public_proto = _first_forwarded_value(headers.get('x-forwarded-proto')) or scheme
     public_port = _first_forwarded_value(headers.get('x-forwarded-port')) or derived_port
-    return public_host, public_proto, public_port
+    return public_authority, public_proto, public_port
 
 
 def _first_forwarded_value(value: str | None) -> str | None:
@@ -214,10 +215,10 @@ def _split_host_and_port(host: str | None) -> tuple[str | None, str | None]:
 def _proxy_request_headers(request: Request) -> dict[str, str]:
     excluded = {'host', 'content-length'}
     resolved = {key: value for key, value in request.headers.items() if key.lower() not in excluded}
-    public_host, public_proto, public_port = _resolve_public_origin(request.headers, scheme=request.url.scheme)
-    if public_host is not None:
-        resolved['host'] = public_host
-        resolved['x-forwarded-host'] = public_host
+    public_authority, public_proto, public_port = _resolve_public_origin(request.headers, scheme=request.url.scheme)
+    if public_authority is not None:
+        resolved['host'] = public_authority
+        resolved['x-forwarded-host'] = public_authority
     resolved['x-forwarded-proto'] = public_proto
     if public_port is not None:
         resolved['x-forwarded-port'] = public_port
@@ -297,9 +298,9 @@ def _proxy_websocket_headers(websocket: WebSocket) -> list[tuple[str, str]]:
         'sec-websocket-protocol',
     }
     resolved = [(key, value) for key, value in websocket.headers.items() if key.lower() not in excluded]
-    public_host, public_proto, public_port = _resolve_public_origin(websocket.headers, scheme=websocket.url.scheme)
-    if public_host is not None:
-        resolved.append(('x-forwarded-host', public_host))
+    public_authority, public_proto, public_port = _resolve_public_origin(websocket.headers, scheme=websocket.url.scheme)
+    if public_authority is not None:
+        resolved.append(('x-forwarded-host', public_authority))
     resolved.append(('x-forwarded-proto', public_proto))
     if public_port is not None:
         resolved.append(('x-forwarded-port', public_port))

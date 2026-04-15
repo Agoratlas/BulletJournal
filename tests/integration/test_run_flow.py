@@ -170,6 +170,87 @@ if __name__ == '__main__':
     assert stale.json()['state'] == 'stale'
 
 
+def test_run_upstream_executes_through_organizer(tmp_path) -> None:
+    project_root = init_project_root(tmp_path / 'project').root
+    app = create_app(project_path=project_root)
+    client = TestClient(app)
+
+    opened = client.get('/api/v1/project/snapshot')
+    graph_version = opened.json()['graph']['meta']['graph_version']
+
+    patch = client.patch(
+        '/api/v1/graph',
+        json={
+            'graph_version': graph_version,
+            'operations': [
+                {
+                    'type': 'add_notebook_node',
+                    'node_id': 'value_source',
+                    'title': 'Value Source',
+                    'template_ref': 'builtin/value_input',
+                },
+                {
+                    'type': 'add_organizer_node',
+                    'node_id': 'organizer',
+                    'title': 'Organizer',
+                    'x': 260,
+                    'y': 80,
+                    'ui': {
+                        'organizer_ports': [
+                            {'key': 'value', 'name': 'value', 'data_type': 'int'},
+                        ]
+                    },
+                },
+                {
+                    'type': 'add_notebook_node',
+                    'node_id': 'table_sink',
+                    'title': 'Table Sink',
+                    'template_ref': 'builtin/test_starter_notebook',
+                    'x': 520,
+                    'y': 80,
+                },
+            ],
+        },
+    )
+    assert patch.status_code == 200
+
+    connect = client.patch(
+        '/api/v1/graph',
+        json={
+            'graph_version': patch.json()['meta']['graph_version'],
+            'operations': [
+                {
+                    'type': 'add_edge',
+                    'source_node': 'value_source',
+                    'source_port': 'value',
+                    'target_node': 'organizer',
+                    'target_port': 'value',
+                },
+                {
+                    'type': 'add_edge',
+                    'source_node': 'organizer',
+                    'source_port': 'value',
+                    'target_node': 'table_sink',
+                    'target_port': 'sample_count',
+                },
+            ],
+        },
+    )
+    assert connect.status_code == 200
+
+    run = client.post(
+        '/api/v1/nodes/table_sink/run',
+        json={'mode': 'run_stale', 'action': 'run_upstream'},
+    )
+    assert run.status_code == 200
+    assert run.json()['status'] == 'succeeded'
+
+    artifact = client.get('/api/v1/artifacts/table_sink/sample_df')
+    assert artifact.status_code == 200
+    assert artifact.json()['state'] == 'ready'
+    assert artifact.json()['preview']['rows'] == 42
+
+
 def test_disconnecting_edge_marks_downstream_artifact_stale_until_rerun(tmp_path) -> None:
     project_root = init_project_root(tmp_path / 'project').root
     app = create_app(project_path=project_root)
