@@ -39,3 +39,32 @@ project_root/
 ## SQLite state
 
 `metadata/state.db` stores mutable execution metadata such as notebook revisions, notices, artifacts, runs, checkpoints, and controller-facing activity timestamps.
+
+## Graph node kinds
+
+The graph stored under `graph/` includes node records whose `kind` is currently one of:
+
+- `notebook`
+- `file_input`
+- `organizer`
+- `area`
+
+`organizer` nodes persist their synthetic passthrough ports in `node.ui.organizer_ports`.
+
+Each organizer port is stored as:
+
+```json
+{ "key": "train", "name": "Train", "data_type": "dataframe" }
+```
+
+`area` nodes are visual-only and persist style data in `node.ui`:
+
+```json
+{
+  "title_position": "top-left",
+  "area_color": "blue",
+  "area_filled": true
+}
+```
+
+`area` nodes have layout entries like any other node, and their `w` / `h` values determine the visible rectangle size.
