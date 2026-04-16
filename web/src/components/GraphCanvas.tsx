@@ -24,10 +24,11 @@ import ReactFlow, {
 } from 'reactflow'
 
 import { areaSettings } from '../lib/area'
-import { artifactCounts, artifactFor, assetsForNode, badgeForNode, formatDurationSeconds, formatType, hiddenInputs, inputState, outputsForNode, visibleInputs } from '../lib/helpers'
+import { artifactCounts, artifactFor, assetsForNode, badgeForNode, formatDurationSeconds, hiddenInputs, inputState, outputsForNode, visibleInputs } from '../lib/helpers'
 import type { ArtifactState, NodeRecord, Port, ProjectSnapshot } from '../lib/types'
 import { ArtifactCounts } from './ArtifactCounts'
 import { Pencil, Play } from './Icons'
+import { PortLabel, TYPE_COLORS, displayPortName } from './PortLabel'
 
 type GraphCanvasProps = {
   snapshot: ProjectSnapshot
@@ -136,21 +137,6 @@ function useConnectionIntent(): ConnectionIntent {
 const PORT_TOP_OFFSET = 82
 const PORT_STEP = 40
 
-const TYPE_COLORS: Record<string, string> = {
-  int: '#bf6a02',
-  float: '#d97706',
-  bool: '#2f855a',
-  str: '#0f766e',
-  list: '#2563eb',
-  dict: '#4f46e5',
-  file: '#7c3aed',
-  object: '#6b7280',
-  'pandas.DataFrame': '#0f766e',
-  'pandas.Series': '#2563eb',
-  'networkx.Graph': '#b45309',
-  'networkx.DiGraph': '#92400e',
-}
-
 const STATE_COLORS: Record<ArtifactState | 'mixed', string> = {
   ready: '#2f855a',
   stale: '#c97c00',
@@ -172,10 +158,6 @@ function toggleIds(baseIds: string[], toggledIds: string[]): string[] {
     }
   }
   return Array.from(next)
-}
-
-function displayPortName(port: Port): string {
-  return port.label?.trim() || port.name
 }
 
 function portLayoutMetrics(node: NodeRecord) {
@@ -263,10 +245,7 @@ function PortRow({
           onContextMenu={handlePortCircleContextMenu}
         />
       ) : null}
-      <div className="rf-port-copy">
-        <strong>{displayPortName(port)}</strong>
-        <span>{formatType(port.data_type)}</span>
-      </div>
+      <PortLabel name={port.name} label={port.label} dataType={port.data_type} className="rf-port-copy" />
       {side === 'output' ? (
         <Handle
           type="source"
@@ -355,10 +334,7 @@ function OrganizerLaneRow({
         style={{ borderColor: typeColor, background: STATE_COLORS[inputArtifactState], top: 20 }}
         onContextMenu={handleInputContextMenu}
       />
-      <div className="rf-organizer-copy">
-        <strong>{displayPortName(port)}</strong>
-        <span>{formatType(port.data_type)}</span>
-      </div>
+      <PortLabel name={port.name} label={port.label} dataType={port.data_type} className="rf-organizer-copy" />
       <Handle
         type="source"
         id={sourceHandleId}

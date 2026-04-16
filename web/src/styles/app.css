@@ -2194,6 +2194,47 @@ label span,
   padding: 12px;
 }
 
+.inspector-port {
+  min-width: 0;
+  overflow: hidden;
+}
+
+.inspector-port.state-pending {
+  color: #586368;
+  background: rgba(152, 162, 163, 0.18);
+  border-color: rgba(107, 114, 128, 0.2);
+}
+
+.inspector-port.state-stale {
+  color: #8b5300;
+  background: rgba(201, 124, 0, 0.16);
+  border-color: rgba(201, 124, 0, 0.24);
+}
+
+.inspector-port.state-ready {
+  color: #1f6f49;
+  background: rgba(47, 133, 90, 0.16);
+  border-color: rgba(47, 133, 90, 0.22);
+}
+
+:root[data-theme='dark'] .inspector-port.state-pending {
+  color: #d4dbdf;
+  background: rgba(148, 163, 184, 0.18);
+  border-color: rgba(203, 213, 225, 0.16);
+}
+
+:root[data-theme='dark'] .inspector-port.state-stale {
+  color: #ffd38a;
+  background: rgba(230, 171, 59, 0.18);
+  border-color: rgba(230, 171, 59, 0.22);
+}
+
+:root[data-theme='dark'] .inspector-port.state-ready {
+  color: #baf0cf;
+  background: rgba(98, 196, 143, 0.18);
+  border-color: rgba(98, 196, 143, 0.22);
+}
+
 .template-tile {
   text-align: left;
   display: grid;
@@ -2483,21 +2524,44 @@ label span,
   display: inline-flex;
   gap: 10px;
   align-items: center;
+  width: 100%;
+  min-width: 0;
 }
 
 .port-pill-output {
-  justify-content: flex-end;
+  justify-content: flex-start;
+}
+
+.port-copy {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+}
+
+.port-copy strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.port-copy span {
+  flex: 0 0 auto;
+  white-space: nowrap;
 }
 
 .port-pill.compact .port-copy strong {
-  font-size: 12px;
+  font-size: 13px;
 }
 
 .port-circle {
   width: 14px;
   height: 14px;
   border-radius: 50%;
-  border: 3px solid;
+  flex: 0 0 14px;
 }
 
 .modal-backdrop {

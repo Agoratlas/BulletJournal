@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 
 import { executionLogDownloadUrl } from '../lib/api'
-import { artifactCounts, artifactFor, badgeForNode, formatDurationSeconds, formatTimestamp, hiddenInputNames, inputBindingSource, inputState, templateByRef } from '../lib/helpers'
+import { artifactCounts, artifactFor, assetsForNode, badgeForNode, formatDurationSeconds, formatTimestamp, hiddenInputNames, inputBindingSource, inputState, templateByRef } from '../lib/helpers'
 import { formatIssueDetails, frozenFileBlockMessage, nodeRunFailures, validationIssuesForNode } from '../lib/appHelpers'
 import type { NodeActionItem } from '../appTypes'
 import type { NodeRecord, ProjectSnapshot } from '../lib/types'
@@ -198,8 +198,8 @@ export function NodeInspector({
             const source = inputBindingSource(snapshot, node.id, port.name)
             const hidden = hiddenInputNames(node).has(port.name)
             return (
-              <div key={port.name} className="inspector-port">
-                <PortPill name={port.name} label={port.label} dataType={port.data_type} state={state} side="input" compact />
+              <div key={port.name} className={`inspector-port state-${state}`}>
+                <PortPill name={port.name} label={port.label} dataType={port.data_type} side="input" compact />
                 <div className="inspector-port-meta">
                   <span>{source ? `${source.source_node}/${source.source_port}` : port.has_default ? 'default value' : 'not connected'}</span>
                   {port.has_default ? <span>default: {JSON.stringify(port.default)}</span> : null}
@@ -219,19 +219,21 @@ export function NodeInspector({
       <div className="inspector-block">
         <h3>Outputs</h3>
         <div className="stack-list">
-          {(node.interface?.outputs ?? []).map((port) => (
-            <div key={port.name} className="inspector-port">
-              <PortPill
-                name={port.name}
-                label={port.label}
-                dataType={port.data_type}
-                state={artifactFor(snapshot, node.id, port.name)?.state ?? 'pending'}
-                side="output"
-                compact
-              />
-            </div>
-          ))}
-          {!node.interface?.outputs?.length ? <p className="muted-copy">No outputs.</p> : null}
+          {[...(node.interface?.outputs ?? []), ...assetsForNode(node)].map((port) => {
+            const state = artifactFor(snapshot, node.id, port.name)?.state ?? 'pending'
+            return (
+              <div key={port.name} className={`inspector-port state-${state}`}>
+                <PortPill
+                  name={port.name}
+                  label={port.label}
+                  dataType={port.data_type}
+                  side="output"
+                  compact
+                />
+              </div>
+            )
+          })}
+          {!(node.interface?.outputs?.length || assetsForNode(node).length) ? <p className="muted-copy">No outputs.</p> : null}
         </div>
       </div>
 
