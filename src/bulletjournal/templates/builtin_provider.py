@@ -5,7 +5,6 @@ from pathlib import Path
 
 from bulletjournal.templates.provider import TemplateAsset
 
-
 BUILTIN_PROVIDER = 'builtin'
 EXAMPLES_PROVIDER = 'examples'
 HIDDEN_BUILTIN_NOTEBOOK_TEMPLATES = {'empty_notebook', 'test_starter_notebook', 'value_input'}

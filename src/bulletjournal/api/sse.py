@@ -9,7 +9,9 @@ from fastapi.responses import StreamingResponse
 from bulletjournal.config import SSE_POLL_INTERVAL_SECONDS
 
 
-def sse_response(container, project_id: str, request: Request, *, last_event_id: int | None = None) -> StreamingResponse:
+def sse_response(
+    container, project_id: str, request: Request, *, last_event_id: int | None = None
+) -> StreamingResponse:
     resolved_last_event_id = _resolve_last_event_id(request.headers.get('last-event-id'), last_event_id)
 
     async def event_stream():

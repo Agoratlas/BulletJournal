@@ -4,9 +4,9 @@ __generated_with = '0.20.4'
 app = marimo.App(width='medium', app_title='{{NODE_ID}}')
 
 with app.setup:
-    from bulletjournal.runtime import artifacts
     import marimo as mo
-    import pandas as pd
+
+    from bulletjournal.runtime import artifacts
 
 
 @app.cell

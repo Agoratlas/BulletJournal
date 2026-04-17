@@ -1,4 +1,3 @@
-import http.cookiejar
 import os
 import subprocess
 import sys

@@ -122,7 +122,9 @@ class GraphStore:
                 provider=provider,
                 name=name,
                 ref=ref,
-                origin_revision=None if template_data.get('origin_revision') is None else str(template_data.get('origin_revision')),
+                origin_revision=None
+                if template_data.get('origin_revision') is None
+                else str(template_data.get('origin_revision')),
             )
         path_value = data.get('path')
         resolved_path = str(path_value) if isinstance(path_value, str) else None

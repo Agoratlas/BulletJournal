@@ -3,7 +3,6 @@ from __future__ import annotations
 import contextlib
 import io
 import json
-import os
 import sys
 import traceback
 from collections import deque
@@ -100,7 +99,7 @@ def _install_script_runner_progress_hooks(
             if total_cells > 0:
                 cell_number = cell_number_by_index.get(self._execution_index)
                 self._execution_index += 1
-                graph = getattr(self._runner, 'app').graph
+                graph = self._runner.app.graph
                 cell_impl = graph.cells[cell_id]
                 _write_progress(
                     progress_path,
@@ -114,12 +113,12 @@ def _install_script_runner_progress_hooks(
             return cell_id
 
     def _decorate_queue(runner: object) -> deque:
-        queue = getattr(runner, 'cells_to_run')
+        queue = runner.cells_to_run
         if getattr(runner, '_bulletjournal_progress_wrapped', False):
             return queue
         wrapped_queue = ProgressDeque(queue, runner)
-        setattr(runner, 'cells_to_run', wrapped_queue)
-        setattr(runner, '_bulletjournal_progress_wrapped', True)
+        runner.cells_to_run = wrapped_queue
+        runner._bulletjournal_progress_wrapped = True
         return wrapped_queue
 
     def patched_run_synchronous(self, post_execute_hooks):
@@ -194,7 +193,7 @@ def main(argv: list[str] | None = None) -> int:
             )
             with activate_runtime_context(context):
                 execute_notebook(Path(manifest.notebook_path), progress_path=progress_path)
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         payload = {
             'status': 'error',
             'error': str(exc),

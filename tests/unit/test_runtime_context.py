@@ -458,7 +458,7 @@ def _():
 
     try:
         context.validate_pull_contract(name='incoming', data_type='int')
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         raise AssertionError(f'Expected live binding refresh to succeed, got: {exc}') from exc
 
     binding = context.bindings['incoming']

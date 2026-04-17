@@ -13,7 +13,6 @@ from bulletjournal.domain.models import CheckpointRecord, ValidationIssue
 from bulletjournal.storage.migrations import MIGRATIONS
 from bulletjournal.utils import json_dumps, utc_now_iso
 
-
 LOG_PREVIEW_MAX_LINES = 50
 LOG_PREVIEW_MAX_CHARS = 10_000
 SUPPORTED_DB_JOURNAL_MODES = frozenset({'DELETE', 'TRUNCATE', 'PERSIST', 'MEMORY', 'WAL', 'OFF'})
@@ -285,7 +284,8 @@ class StateDB:
     ) -> None:
         with self._connect() as connection:
             connection.execute(
-                'INSERT OR IGNORE INTO artifact_heads (node_id, artifact_name, current_version_id, state) VALUES (?, ?, NULL, ?)',
+                'INSERT OR IGNORE INTO artifact_heads '
+                '(node_id, artifact_name, current_version_id, state) VALUES (?, ?, NULL, ?)',
                 (node_id, artifact_name, state.value),
             )
             connection.commit()
@@ -424,15 +424,18 @@ class StateDB:
                 (node_id, artifact_name, version_id, state.value),
             )
             existing = connection.execute(
-                'SELECT artifact_hash FROM cache_index WHERE node_id = ? AND artifact_name = ? AND upstream_data_hash = ?',
+                'SELECT artifact_hash FROM cache_index '
+                'WHERE node_id = ? AND artifact_name = ? AND upstream_data_hash = ?',
                 (node_id, artifact_name, upstream_data_hash),
             ).fetchone()
             is_nondeterministic = 1 if existing and existing['artifact_hash'] != artifact_hash else 0
             connection.execute(
-                'INSERT INTO cache_index (node_id, artifact_name, upstream_data_hash, artifact_hash, is_nondeterministic, updated_at) '
+                'INSERT INTO cache_index '
+                '(node_id, artifact_name, upstream_data_hash, artifact_hash, is_nondeterministic, updated_at) '
                 'VALUES (?, ?, ?, ?, ?, ?) '
                 'ON CONFLICT(node_id, artifact_name, upstream_data_hash) DO UPDATE SET '
-                'artifact_hash = excluded.artifact_hash, is_nondeterministic = MAX(cache_index.is_nondeterministic, excluded.is_nondeterministic), '
+                'artifact_hash = excluded.artifact_hash, '
+                'is_nondeterministic = MAX(cache_index.is_nondeterministic, excluded.is_nondeterministic), '
                 'updated_at = excluded.updated_at',
                 (node_id, artifact_name, upstream_data_hash, artifact_hash, is_nondeterministic, now),
             )
@@ -484,7 +487,8 @@ class StateDB:
         with self._connect() as connection:
             connection.execute(
                 'INSERT INTO run_records '
-                '(run_id, project_id, mode, status, target_json, graph_version, source_snapshot_json, started_at, ended_at, failure_json) '
+                '(run_id, project_id, mode, status, target_json, graph_version, '
+                'source_snapshot_json, started_at, ended_at, failure_json) '
                 'VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL)',
                 (
                     run_id,
@@ -513,7 +517,8 @@ class StateDB:
                 )
             elif ended_at is not None:
                 connection.execute(
-                    'UPDATE run_records SET status = ?, ended_at = ?, failure_json = COALESCE(?, failure_json) WHERE run_id = ?',
+                    'UPDATE run_records SET status = ?, ended_at = ?, '
+                    'failure_json = COALESCE(?, failure_json) WHERE run_id = ?',
                     (status.value, ended_at, None if failure_json is None else json_dumps(failure_json), run_id),
                 )
             else:
@@ -525,7 +530,9 @@ class StateDB:
     ) -> None:
         with self._connect() as connection:
             connection.execute(
-                'INSERT INTO run_inputs (run_id, logical_artifact_id, artifact_hash_at_load, state_at_load, loaded_at) VALUES (?, ?, ?, ?, ?)',
+                'INSERT INTO run_inputs '
+                '(run_id, logical_artifact_id, artifact_hash_at_load, state_at_load, loaded_at) '
+                'VALUES (?, ?, ?, ?, ?)',
                 (run_id, logical_artifact_id, artifact_hash_at_load, state_at_load, utc_now_iso()),
             )
             connection.commit()
@@ -533,7 +540,8 @@ class StateDB:
     def get_cache_hit(self, node_id: str, artifact_name: str, upstream_data_hash: str) -> dict[str, Any] | None:
         with self._connect() as connection:
             row = connection.execute(
-                'SELECT artifact_hash, is_nondeterministic FROM cache_index WHERE node_id = ? AND artifact_name = ? AND upstream_data_hash = ?',
+                'SELECT artifact_hash, is_nondeterministic FROM cache_index '
+                'WHERE node_id = ? AND artifact_name = ? AND upstream_data_hash = ?',
                 (node_id, artifact_name, upstream_data_hash),
             ).fetchone()
         if row is None:
@@ -573,7 +581,8 @@ class StateDB:
         with self._connect() as connection:
             connection.execute(
                 'INSERT INTO orchestrator_execution_meta '
-                '(node_id, run_id, status, started_at, ended_at, duration_seconds, current_cell_json, total_cells, last_completed_cell_number, stdout_path, stderr_path, updated_at) '
+                '(node_id, run_id, status, started_at, ended_at, duration_seconds, '
+                'current_cell_json, total_cells, last_completed_cell_number, stdout_path, stderr_path, updated_at) '
                 'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) '
                 'ON CONFLICT(node_id) DO UPDATE SET '
                 'run_id = excluded.run_id, '
@@ -635,7 +644,8 @@ class StateDB:
     def create_checkpoint(self, checkpoint_id: str, graph_version: int, path: str) -> None:
         with self._connect() as connection:
             connection.execute(
-                'INSERT INTO checkpoints (checkpoint_id, created_at, graph_version, path, restored_at) VALUES (?, ?, ?, ?, NULL)',
+                'INSERT INTO checkpoints (checkpoint_id, created_at, graph_version, path, restored_at) '
+                'VALUES (?, ?, ?, ?, NULL)',
                 (checkpoint_id, utc_now_iso(), graph_version, path),
             )
             connection.commit()

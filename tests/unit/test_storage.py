@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 import pandas as pd
@@ -19,6 +20,13 @@ def test_project_init_and_graph_roundtrip(tmp_path) -> None:
     assert paths.uv_lock_path.is_file()
     assert (paths.metadata_dir / 'environment.json').exists() is False
     assert (paths.metadata_dir / 'environment_packages.txt').exists() is False
+
+
+def test_project_init_defaults_project_id_from_directory_name(tmp_path) -> None:
+    paths = init_project_root(tmp_path / 'My Study')
+    project_json = json.loads(paths.project_json_path.read_text(encoding='utf-8'))
+
+    assert project_json['project_id'] == 'my_study'
 
 
 def test_object_store_persists_dataframe(tmp_path) -> None:

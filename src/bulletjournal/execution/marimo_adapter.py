@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 import importlib.util
-import json
 import os
 import subprocess
 import sys
 from pathlib import Path
 from types import ModuleType
+
 
 def load_notebook_module(path: Path) -> ModuleType:
     spec = importlib.util.spec_from_file_location(f'bulletjournal_notebook_{path.stem}', path)
@@ -45,7 +45,7 @@ def launch_editor(
     env = os.environ.copy()
     if environment:
         env.update(environment)
-    return subprocess.Popen(
+    return subprocess.Popen(  # noqa: S603
         [
             sys.executable,
             '-m',

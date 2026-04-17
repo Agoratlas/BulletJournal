@@ -1,19 +1,18 @@
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import subprocess
+import textwrap
 from dataclasses import dataclass
 from pathlib import Path
-import re
-import textwrap
 
 from bulletjournal.config import GRAPH_SCHEMA_VERSION, PROJECT_SCHEMA_VERSION, package_root
 from bulletjournal.domain.errors import ProjectValidationError
 from bulletjournal.storage.atomic_write import atomic_write_text
 from bulletjournal.storage.state_db import StateDB
 from bulletjournal.utils import ensure_directory, json_dumps, slugify, utc_now_iso
-
 
 PROJECT_ID_PATTERN = re.compile(r'^[a-z0-9][a-z0-9_-]{1,62}$')
 
@@ -192,7 +191,7 @@ def _default_project_pyproject(*, project_id: str) -> str:
         'description = "BulletJournal project environment"',
         'requires-python = ">=3.11"',
         'dependencies = [',
-        '  "bulletjournal",',
+        '  "bulletjournal-editor",',
         ']',
     ]
     if bulletjournal_source is not None:
@@ -200,7 +199,7 @@ def _default_project_pyproject(*, project_id: str) -> str:
             [
                 '',
                 '[tool.uv.sources]',
-                f'bulletjournal = {{ path = "{bulletjournal_source.as_posix()}", editable = true }}',
+                f'bulletjournal-editor = {{ path = "{bulletjournal_source.as_posix()}", editable = true }}',
             ]
         )
     return '\n'.join(lines) + '\n'
@@ -218,7 +217,7 @@ def _default_project_uv_lock(*, project_id: str) -> str:
         version = "0.1.0"
         source = {{ editable = "." }}
         dependencies = [
-          {{ name = "bulletjournal" }},
+          {{ name = "bulletjournal-editor" }},
         ]
         """
     ).lstrip()
@@ -227,7 +226,7 @@ def _default_project_uv_lock(*, project_id: str) -> str:
 def _initialize_project_uv_lock(paths: ProjectPaths, *, project_id: str) -> None:
     uv_executable = shutil.which('uv')
     if uv_executable is not None:
-        completed = subprocess.run(
+        completed = subprocess.run(  # noqa: S603
             [uv_executable, 'lock', '--project', str(paths.root)],
             capture_output=True,
             text=True,

@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from bulletjournal.domain.enums import NodeKind
-from bulletjournal.domain.models import Edge, GraphData, Node, NotebookInterface, Port
+from bulletjournal.domain.models import GraphData, Node, NotebookInterface, Port
 
 
 def organizer_ports_from_ui(ui: dict[str, Any] | None) -> list[dict[str, str]]:

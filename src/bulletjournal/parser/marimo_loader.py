@@ -10,11 +10,11 @@ def load_module_ast(path: Path) -> ast.Module:
 
 
 def iter_app_cells(module: ast.Module) -> list[ast.FunctionDef | ast.AsyncFunctionDef]:
-    cells: list[ast.FunctionDef | ast.AsyncFunctionDef] = []
-    for node in module.body:
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and _has_app_cell_decorator(node):
-            cells.append(node)
-    return cells
+    return [
+        node
+        for node in module.body
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef) and _has_app_cell_decorator(node)
+    ]
 
 
 def _has_app_cell_decorator(node: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
@@ -22,7 +22,11 @@ def _has_app_cell_decorator(node: ast.FunctionDef | ast.AsyncFunctionDef) -> boo
         if isinstance(decorator, ast.Attribute) and isinstance(decorator.value, ast.Name):
             if decorator.value.id == 'app' and decorator.attr == 'cell':
                 return True
-        if isinstance(decorator, ast.Call) and isinstance(decorator.func, ast.Attribute) and isinstance(decorator.func.value, ast.Name):
+        if (
+            isinstance(decorator, ast.Call)
+            and isinstance(decorator.func, ast.Attribute)
+            and isinstance(decorator.func.value, ast.Name)
+        ):
             if decorator.func.value.id == 'app' and decorator.func.attr == 'cell':
                 return True
     return False

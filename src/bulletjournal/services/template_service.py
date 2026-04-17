@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, cast
+from typing import Any, cast
 
 from bulletjournal.domain.models import TemplateRef
 from bulletjournal.parser.interface_parser import parse_notebook_interface
@@ -256,11 +257,15 @@ class TemplateService:
         if kind == 'notebook':
             if notebook_loader is None:
                 raise ValueError('Template provider must implement `load_notebook_template(name)`.')
-            source_loader = lambda name=name, notebook_loader=notebook_loader: str(notebook_loader(name))
+
+            def source_loader(name=name, notebook_loader=notebook_loader) -> str:
+                return str(notebook_loader(name))
         else:
             if pipeline_loader is None:
                 raise ValueError('Template provider must implement `load_pipeline_template(name)`.')
-            source_loader = lambda name=name, pipeline_loader=pipeline_loader: str(pipeline_loader(name))
+
+            def source_loader(name=name, pipeline_loader=pipeline_loader) -> str:
+                return str(pipeline_loader(name))
 
         return TemplateAsset(
             provider=provider_name,
@@ -274,7 +279,7 @@ class TemplateService:
             title=str(title) if isinstance(title, str) and title.strip() else None,
             description=str(description) if isinstance(description, str) else None,
             source_loader=source_loader,
-            aliases=tuple(str(alias).strip() for alias in aliases) if isinstance(aliases, (list, tuple)) else (),
+            aliases=tuple(str(alias).strip() for alias in aliases) if isinstance(aliases, list | tuple) else (),
         )
 
 

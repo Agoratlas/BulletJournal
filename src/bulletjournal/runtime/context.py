@@ -10,8 +10,8 @@ from pathlib import Path
 from typing import Any
 
 from bulletjournal.config import EDIT_STABILIZATION_SECONDS
-from bulletjournal.domain.graph_bindings import resolve_input_binding
 from bulletjournal.domain.enums import ArtifactRole, ArtifactState, LineageMode, ValidationSeverity
+from bulletjournal.domain.graph_bindings import resolve_input_binding
 from bulletjournal.domain.hashing import combine_hashes, hash_json
 from bulletjournal.domain.models import GraphData, Port
 from bulletjournal.parser.interface_parser import parse_notebook_interface
@@ -372,24 +372,14 @@ def current_runtime_context() -> RuntimeContext:
     env_outputs = os.environ.get('BULLETJOURNAL_OUTPUTS_JSON')
     if not all([env_root, env_node, env_run, env_source_hash, env_lineage]):
         raise RuntimeError('BulletJournal runtime context is not active.')
-    assert env_root is not None
-    assert env_node is not None
-    assert env_run is not None
-    assert env_source_hash is not None
-    assert env_lineage is not None
-    root = env_root
-    node_id = env_node
-    run_id = env_run
-    source_hash = env_source_hash
-    lineage_mode = env_lineage
     binding_data = json.loads(env_bindings) if env_bindings else {}
     output_data = json.loads(env_outputs) if env_outputs else {}
     context = RuntimeContext(
-        project_root=Path(root),
-        node_id=node_id,
-        run_id=run_id,
-        source_hash=source_hash,
-        lineage_mode=LineageMode(lineage_mode),
+        project_root=Path(env_root),
+        node_id=env_node,
+        run_id=env_run,
+        source_hash=env_source_hash,
+        lineage_mode=LineageMode(env_lineage),
         bindings={name: Binding(**value) for name, value in binding_data.items()},
         outputs={
             name: Port(
@@ -413,5 +403,6 @@ def get_node_id() -> str:
 
 def get_project_id() -> str:
     project_id = current_runtime_context().project_id
-    assert project_id is not None
+    if project_id is None:
+        raise RuntimeError('BulletJournal runtime context did not resolve a project id.')
     return project_id

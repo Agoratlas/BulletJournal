@@ -39,4 +39,12 @@ def __getattr__(name: str):
     raise AttributeError(name)
 
 
-__all__ = ['GraphStore', 'ObjectStore', 'ProjectPaths', 'StateDB', 'init_project_root', 'is_project_root', 'require_project_root']
+__all__ = [
+    'GraphStore',
+    'ObjectStore',
+    'ProjectPaths',
+    'StateDB',
+    'init_project_root',
+    'is_project_root',
+    'require_project_root',
+]

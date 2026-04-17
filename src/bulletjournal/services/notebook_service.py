@@ -3,8 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from bulletjournal.domain.errors import InvalidRequestError
 from bulletjournal.domain.enums import ArtifactState, NodeKind, ValidationSeverity
+from bulletjournal.domain.errors import InvalidRequestError
 from bulletjournal.domain.models import NotebookInterface, ValidationIssue
 from bulletjournal.parser import parse_notebook_interface
 from bulletjournal.parser.validation import build_issue

@@ -35,30 +35,21 @@ def run_notebook_app(app: Any, notebook_path: str | Path):
 def build_standalone_context(notebook_path: str | Path) -> RuntimeContext:
     resolved_notebook = Path(notebook_path).resolve()
     if not resolved_notebook.exists():
-        raise StandaloneRuntimeError(
-            f'Notebook path does not exist: {resolved_notebook}'
-        )
+        raise StandaloneRuntimeError(f'Notebook path does not exist: {resolved_notebook}')
     project_paths = _discover_project_paths(resolved_notebook)
     graph = GraphStore(project_paths).read()
     node_id = resolved_notebook.stem
-    node = _require_notebook_node(graph, node_id=node_id)
+    _require_notebook_node(graph, node_id=node_id)
     expected_path = project_paths.notebook_path(node_id)
     if resolved_notebook != expected_path:
         raise StandaloneRuntimeError(
-            f'Notebook `{resolved_notebook}` does not match '
-            f'project node path `{expected_path}`.'
+            f'Notebook `{resolved_notebook}` does not match project node path `{expected_path}`.'
         )
     interface = parse_notebook_interface(resolved_notebook, node_id=node_id)
-    error_messages = [
-        issue.message
-        for issue in interface.issues
-        if issue.severity == ValidationSeverity.ERROR
-    ]
+    error_messages = [issue.message for issue in interface.issues if issue.severity == ValidationSeverity.ERROR]
     if error_messages:
         joined = '; '.join(error_messages)
-        raise StandaloneRuntimeError(
-            f'Notebook `{node_id}` has validation errors: {joined}'
-        )
+        raise StandaloneRuntimeError(f'Notebook `{node_id}` has validation errors: {joined}')
     return RuntimeContext(
         project_root=project_paths.root,
         node_id=node_id,
@@ -75,8 +66,7 @@ def _discover_project_paths(notebook_path: Path) -> ProjectPaths:
         if is_project_root(parent):
             return ProjectPaths(parent.resolve())
     raise StandaloneRuntimeError(
-        'Standalone notebook execution requires a notebook inside an '
-        'BulletJournal project root.'
+        'Standalone notebook execution requires a notebook inside an BulletJournal project root.'
     )
 
 
@@ -84,27 +74,16 @@ def _require_notebook_node(graph: GraphData, *, node_id: str):
     for node in graph.nodes:
         if node.id == node_id:
             if node.kind != NodeKind.NOTEBOOK:
-                raise StandaloneRuntimeError(
-                    f'Node `{node_id}` is not a notebook node.'
-                )
+                raise StandaloneRuntimeError(f'Node `{node_id}` is not a notebook node.')
             return node
-    raise StandaloneRuntimeError(
-        f'No notebook node with id `{node_id}` exists in this project.'
-    )
+    raise StandaloneRuntimeError(f'No notebook node with id `{node_id}` exists in this project.')
 
 
-def _bindings_for_interface(
-    graph: GraphData, interface: NotebookInterface
-) -> dict[str, Binding]:
-    return {
-        port.name: _binding_for_port(graph.edges, interface.node_id, port)
-        for port in interface.inputs
-    }
+def _bindings_for_interface(graph: GraphData, interface: NotebookInterface) -> dict[str, Binding]:
+    return {port.name: _binding_for_port(graph.edges, interface.node_id, port) for port in interface.inputs}
 
 
-def _binding_for_port(
-    edges: list[Edge], node_id: str, port: Port
-) -> Binding:
+def _binding_for_port(edges: list[Edge], node_id: str, port: Port) -> Binding:
     for edge in edges:
         if edge.target_node == node_id and edge.target_port == port.name:
             return Binding(
@@ -124,9 +103,7 @@ def _binding_for_port(
 
 
 def _outputs_for_interface(interface: NotebookInterface) -> dict[str, Port]:
-    return {
-        port.name: port for port in [*interface.outputs, *interface.assets]
-    }
+    return {port.name: port for port in [*interface.outputs, *interface.assets]}
 
 
 def _record_run_started(context: RuntimeContext) -> None:
@@ -145,9 +122,7 @@ def _record_run_started(context: RuntimeContext) -> None:
     context.db.update_run_status(context.run_id, RunStatus.RUNNING)
 
 
-def _record_run_finished(
-    context: RuntimeContext, failure: Exception | None = None
-) -> None:
+def _record_run_finished(context: RuntimeContext, failure: Exception | None = None) -> None:
     from bulletjournal.domain.enums import RunStatus
 
     if failure is None:

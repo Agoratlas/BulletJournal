@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import enum
+from enum import StrEnum
 from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -143,7 +143,7 @@ class GraphPatchRequest(StrictModel):
     operations: list[GraphOperation]
 
 
-class RunAction(str, enum.Enum):
+class RunAction(StrEnum):
     USE_STALE = 'use_stale'
     RUN_UPSTREAM = 'run_upstream'
 

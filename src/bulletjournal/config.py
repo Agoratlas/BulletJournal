@@ -4,7 +4,6 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
-
 DEFAULT_HOST = '127.0.0.1'
 DEFAULT_PORT = 8765
 GRAPH_SCHEMA_VERSION = 1

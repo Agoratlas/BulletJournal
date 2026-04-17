@@ -5,13 +5,11 @@ from pathlib import Path
 from typing import cast
 
 from bulletjournal.templates.builtin_provider import (
-    BUILTIN_PROVIDER,
     builtin_notebook_assets,
     builtin_pipeline_assets,
     example_provider,
 )
 from bulletjournal.templates.provider import TemplateAsset, TemplateProvider
-
 
 ENTRY_POINT_GROUP = 'bulletjournal.templates'
 

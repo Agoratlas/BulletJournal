@@ -5,9 +5,6 @@ app = marimo.App(width='medium', app_title='Example 4')
 
 with app.setup:
     from bulletjournal.runtime import artifacts
-    import marimo as mo
-    import matplotlib.pyplot as plt
-    import pandas as pd
 
 
 @app.cell
