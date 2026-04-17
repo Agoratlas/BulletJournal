@@ -63,7 +63,7 @@ def deserialize_value(payload: bytes, data_type: str) -> Any:
     if data_type == 'pandas.Series':
         frame = pd.read_parquet(io.BytesIO(payload))
         return frame.iloc[:, 0]
-    return pickle.loads(gzip.decompress(payload))
+    return pickle.loads(gzip.decompress(payload))  # noqa: S301
 
 
 def serialize_file(path: Path, *, extension: str | None = None) -> dict[str, Any]:
@@ -102,7 +102,7 @@ def _dataframe_preview(frame: pd.DataFrame) -> dict[str, Any]:
         'rows': int(frame.shape[0]),
         'columns': int(frame.shape[1]),
         'column_names': list(map(str, frame.columns[:MAX_PREVIEW_COLS])),
-        'sample': sample.astype(object).where(sample.notnull(), None).to_dict(orient='records'),
+        'sample': sample.astype(object).where(sample.notna(), None).to_dict(orient='records'),
     }
 
 

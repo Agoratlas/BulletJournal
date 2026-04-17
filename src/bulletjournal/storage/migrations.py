@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-
 MIGRATIONS: list[tuple[str, str]] = [
     (
         '001_initial',

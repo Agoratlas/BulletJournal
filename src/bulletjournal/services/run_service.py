@@ -8,9 +8,10 @@ from pathlib import Path
 from threading import Event, Lock
 from typing import Any, cast
 
-from bulletjournal.domain.graph_bindings import resolve_input_binding
+from bulletjournal.config import ServerConfig, normalize_base_path
 from bulletjournal.domain.enums import ArtifactState, LineageMode, NodeKind, RunMode, RunStatus, ValidationSeverity
 from bulletjournal.domain.errors import InvalidRequestError, NotFoundError, RunConflictError
+from bulletjournal.domain.graph_bindings import resolve_input_binding
 from bulletjournal.domain.models import GraphData
 from bulletjournal.execution.manifests import RunManifest
 from bulletjournal.execution.planner import (
@@ -21,9 +22,8 @@ from bulletjournal.execution.planner import (
 )
 from bulletjournal.execution.runner import WorkerRunner
 from bulletjournal.execution.sessions import SessionManager
-from bulletjournal.parser.validation import build_issue_id
 from bulletjournal.parser.source_hash import compute_source_hash
-from bulletjournal.config import ServerConfig, normalize_base_path
+from bulletjournal.parser.validation import build_issue_id
 from bulletjournal.utils import utc_now_iso
 
 
@@ -69,7 +69,7 @@ class RunService:
         mode: str,
         action: str | None = None,
     ) -> dict[str, Any]:
-        project = self.project_service.require_project()
+        self.project_service.require_project()
         run_mode = RunMode(mode)
         node = self.project_service.get_node(node_id)
         if node.kind in {NodeKind.FILE_INPUT, NodeKind.ORGANIZER, NodeKind.AREA}:

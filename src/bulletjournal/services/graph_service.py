@@ -3,15 +3,13 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from bulletjournal.domain.enums import ArtifactState, NodeKind
+from bulletjournal.domain.errors import GraphValidationError, NotFoundError
 from bulletjournal.domain.graph_bindings import (
     organizer_interface_for_node,
     organizer_ports_from_ui,
     resolve_input_binding,
 )
-from bulletjournal.domain.hashing import combine_hashes, hash_json
-from bulletjournal.domain.errors import NotFoundError
-from bulletjournal.domain.enums import ArtifactState, NodeKind
-from bulletjournal.domain.errors import GraphValidationError
 from bulletjournal.domain.graph_rules import (
     assert_node_exists,
     validate_acyclic,
@@ -19,6 +17,7 @@ from bulletjournal.domain.graph_rules import (
     validate_unique_node_ids,
     validate_unique_target_ports,
 )
+from bulletjournal.domain.hashing import combine_hashes, hash_json
 from bulletjournal.domain.models import Edge, GraphData, LayoutEntry, Node, file_input_artifact_name
 from bulletjournal.domain.type_system import types_compatible
 from bulletjournal.execution.planner import downstream_closure, topological_nodes, visible_edge_id
@@ -459,7 +458,8 @@ class GraphService:
             resolved_node_id = f'{node_id_prefix}{template_node_id}' if node_id_prefix else template_node_id
             if any(node.id == resolved_node_id for node in graph.nodes) or resolved_node_id in node_id_map.values():
                 raise GraphValidationError(
-                    f'Pipeline template `{template_ref}` would create duplicate node `{resolved_node_id}`. Use a prefix to instantiate it.'
+                    f'Pipeline template `{template_ref}` would create duplicate node `{resolved_node_id}`. '
+                    'Use a prefix to instantiate it.'
                 )
             resolved_title = _apply_title_prefix(str(raw_node.get('title') or template_node_id), title_prefix)
             kind = str(raw_node.get('kind') or '')
@@ -546,9 +546,7 @@ class GraphService:
 
     def _add_edge(self, graph: GraphData, operation: dict[str, Any]) -> None:
         source_node = str(operation['source_node'])
-        source_port = str(operation['source_port'])
         target_node = str(operation['target_node'])
-        target_port = str(operation['target_port'])
         node_ids = {node.id for node in graph.nodes}
         assert_node_exists(node_ids, source_node)
         assert_node_exists(node_ids, target_node)

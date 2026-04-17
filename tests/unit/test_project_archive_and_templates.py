@@ -1,14 +1,14 @@
 from __future__ import annotations
 
+import zipfile
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
-import zipfile
 
 import pytest
 
-from bulletjournal.services.template_service import TemplateService
 import bulletjournal.storage.project_archive as project_archive_module
+from bulletjournal.services.template_service import TemplateService
 from bulletjournal.storage.project_archive import export_project_archive, import_project_archive
 from bulletjournal.storage.project_fs import init_project_root
 from bulletjournal.templates.builtin_provider import FilesystemTemplateProvider, example_provider

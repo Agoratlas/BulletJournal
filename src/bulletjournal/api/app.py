@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Mapping
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 from urllib.parse import urlencode, urlsplit
 
@@ -11,9 +11,9 @@ from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
+from starlette.websockets import WebSocketState
 from websockets.asyncio.client import connect as ws_connect
 from websockets.exceptions import ConnectionClosed
-from starlette.websockets import WebSocketState
 
 from bulletjournal.api.deps import ServiceContainer
 from bulletjournal.api.errors import install_error_handlers
@@ -321,10 +321,8 @@ async def _bridge_websocket(websocket: WebSocket, upstream) -> None:
         except WebSocketDisconnect:
             pass
         finally:
-            try:
+            with suppress(ConnectionClosed):
                 await upstream.close()
-            except ConnectionClosed:
-                pass
 
     async def upstream_to_client() -> None:
         close_code = 1000

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from collections import deque
 import threading
+from collections import deque
 from typing import Any
 
 from bulletjournal.config import SSE_EVENT_RETENTION
@@ -14,7 +14,9 @@ class EventService:
         self._events: deque[dict[str, Any]] = deque(maxlen=SSE_EVENT_RETENTION)
         self._counter = 0
 
-    def publish(self, event_type: str, *, project_id: str, graph_version: int, payload: dict[str, Any]) -> dict[str, Any]:
+    def publish(
+        self, event_type: str, *, project_id: str, graph_version: int, payload: dict[str, Any]
+    ) -> dict[str, Any]:
         with self._lock:
             self._counter += 1
             event = {

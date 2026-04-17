@@ -4,7 +4,6 @@ from bulletjournal.domain.enums import ValidationSeverity
 from bulletjournal.parser.docs_parser import extract_notebook_docs
 from bulletjournal.parser.interface_parser import parse_notebook_interface
 
-
 FIXTURES = Path(__file__).resolve().parents[1] / 'fixtures'
 
 

@@ -13,14 +13,13 @@ import pytest
 import bulletjournal.cli.dev as dev_module
 import bulletjournal.cli.doctor as doctor_module
 import bulletjournal.cli.export_project as export_project_module
-import bulletjournal.cli.init_project as init_project_module
 import bulletjournal.cli.import_project as import_project_module
+import bulletjournal.cli.init_project as init_project_module
 import bulletjournal.cli.mark_environment_changed as mark_environment_changed_module
 import bulletjournal.cli.rebuild_state as rebuild_state_module
 import bulletjournal.cli.start as start_module
 import bulletjournal.cli.validate_templates as validate_templates_module
 from bulletjournal.config import ServerConfig
-
 
 cli_app = importlib.import_module('bulletjournal.cli.app')
 
@@ -39,7 +38,8 @@ class DummyParser:
 def test_build_parser_parses_supported_commands() -> None:
     parser = cli_app.build_parser()
 
-    init_args = parser.parse_args(['init', 'demo', '--project-id', 'demo-id', '--title', 'Demo'])
+    init_args = parser.parse_args(['init', 'demo', '--title', 'Demo'])
+    init_with_project_id_args = parser.parse_args(['init', 'demo', '--project-id', 'demo-id', '--title', 'Demo'])
     start_args = parser.parse_args(['start', 'demo', '--open', '--base-path', '/p/demo'])
     dev_args = parser.parse_args(['dev', 'demo', '--base-path', '/p/demo'])
     doctor_args = parser.parse_args(['doctor', 'demo'])
@@ -50,8 +50,9 @@ def test_build_parser_parses_supported_commands() -> None:
     mark_env_args = parser.parse_args(['mark-environment-changed', 'demo', '--reason', 'deps changed'])
 
     assert init_args.command == 'init'
-    assert init_args.project_id == 'demo-id'
+    assert init_args.project_id is None
     assert init_args.title == 'Demo'
+    assert init_with_project_id_args.project_id == 'demo-id'
     assert start_args.open is True
     assert start_args.base_path == '/p/demo'
     assert dev_args.command == 'dev'

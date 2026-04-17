@@ -26,29 +26,27 @@ and managed execution on top of Marimo notebooks, and it can run standalone or b
 ## Quickstart
 
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -e ".[dev]"
-
-bulletjournal init my-study --project-id my-study
-cd my-study
-bulletjournal start . --open
+pip install bulletjournal-editor
+bulletjournal init testproject
+bulletjournal start testproject --open
 ```
 
 If you are already inside a project root, running `bulletjournal` with no subcommand starts the app.
+When `--project-id` is omitted, BulletJournal derives it from the target directory name.
 
 ## Common commands
 
 ```bash
-bulletjournal init my-study --project-id my-study
+bulletjournal init testproject
+bulletjournal init testproject --project-id custom-id
 bulletjournal start .
 bulletjournal dev . --open
 bulletjournal doctor .
 bulletjournal validate-templates
 bulletjournal rebuild-state .
 bulletjournal mark-environment-changed . --reason "dependencies updated"
-bulletjournal export . my-study.zip
-bulletjournal import my-study.zip restored-study
+bulletjournal export . testproject.zip
+bulletjournal import testproject.zip restored-study
 ```
 
 ## Project layout
@@ -87,7 +85,18 @@ project_root/
 ## Testing
 
 ```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -e ".[dev]"
 PYTHONPATH=src python -m pytest
+```
+
+## Pre-commit
+
+`ruff.toml` is consumed by `ruff` automatically from the repo root. To enable the git hook:
+
+```bash
+pre-commit install
 ```
 
 ## Status

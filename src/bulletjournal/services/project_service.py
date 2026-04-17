@@ -4,9 +4,9 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
-from bulletjournal.domain.graph_bindings import organizer_interface_for_node
-from bulletjournal.domain.errors import InvalidRequestError, NotFoundError
 from bulletjournal.domain.enums import ArtifactRole, ArtifactState, NodeKind, ValidationSeverity
+from bulletjournal.domain.errors import InvalidRequestError, NotFoundError
+from bulletjournal.domain.graph_bindings import organizer_interface_for_node
 from bulletjournal.domain.models import (
     GraphData,
     Node,

@@ -3,10 +3,9 @@ from __future__ import annotations
 import shutil
 from pathlib import Path
 
-from bulletjournal.domain.errors import NotFoundError
 from bulletjournal.domain.enums import ArtifactState, NodeKind
+from bulletjournal.domain.errors import NotFoundError
 from bulletjournal.domain.models import file_input_artifact_name
-from bulletjournal.storage import ProjectPaths
 from bulletjournal.utils import copy_tree, utc_now_iso
 
 

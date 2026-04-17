@@ -1,5 +1,3 @@
-from pathlib import Path
-
 from fastapi.testclient import TestClient
 
 from bulletjournal.api.app import create_app

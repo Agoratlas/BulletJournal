@@ -7,8 +7,7 @@ from textwrap import dedent
 from typing import TYPE_CHECKING
 
 from bulletjournal.domain.enums import ArtifactRole, ValidationSeverity
-from bulletjournal.domain.models import NotebookInterface, Port
-from bulletjournal.domain.models import ValidationIssue
+from bulletjournal.domain.models import NotebookInterface, Port, ValidationIssue
 from bulletjournal.domain.type_system import normalize_type_expr
 from bulletjournal.parser.docs_parser import extract_notebook_docs_from_module
 from bulletjournal.parser.marimo_loader import iter_app_cells
@@ -45,7 +44,7 @@ def parse_notebook_interface(path: NotebookSource, node_id: str) -> NotebookInte
                 )
             ],
         )
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         return NotebookInterface(
             node_id=node_id,
             source_hash=source_hash,
@@ -244,11 +243,7 @@ def _return_value_names(node: ast.AST | None) -> list[str]:
     if isinstance(node, ast.Name):
         return [node.id]
     if isinstance(node, ast.Tuple):
-        names: list[str] = []
-        for item in node.elts:
-            if isinstance(item, ast.Name):
-                names.append(item.id)
-        return names
+        return [item.id for item in node.elts if isinstance(item, ast.Name)]
     return []
 
 

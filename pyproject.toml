@@ -6,16 +6,17 @@ requires = [
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "bulletjournal"
+name = "bulletjournal-editor"
 version = "0.1.0"
 description = "Notebook editor and orchestrator for reproducible data science"
 readme = "README.md"
 requires-python = ">=3.11"
-license = { text = "MIT" }
+license = { text = "GNU Affero General Public License v3" }
 authors = [
     { name = "Agoratlas", email = "contact@agoratlas.com" },
 ]
 classifiers = [
+    "License :: OSI Approved :: GNU Affero General Public License v3",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.11",
     "Framework :: FastAPI",
@@ -36,10 +37,12 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
+    "pre-commit>=4.2.0",
     "pyright>=1.1.0",
     "pytest>=8.2.0",
     "pytest-asyncio>=0.23.0",
     "pytest-cov>=5.0.0",
+    "ruff>=0.11.0",
 ]
 
 [project.scripts]
@@ -51,6 +54,7 @@ Homepage = "https://github.com/Agoratlas/BulletJournal"
 [tool.setuptools]
 package-dir = { "" = "src" }
 include-package-data = true
+license-files = ["LICENSE"]
 
 [tool.setuptools.packages.find]
 where = ["src"]

@@ -8,7 +8,6 @@ from pathlib import Path
 from bulletjournal.config import WATCH_INTERVAL_SECONDS
 from bulletjournal.parser.source_hash import compute_source_hash
 
-
 logger = logging.getLogger(__name__)
 
 
@@ -35,7 +34,7 @@ class NotebookWatcher:
         while not self._stop.is_set():
             try:
                 self._scan()
-            except Exception:  # noqa: BLE001
+            except Exception:
                 logger.exception('Notebook watcher scan failed.')
             time.sleep(WATCH_INTERVAL_SECONDS)
 

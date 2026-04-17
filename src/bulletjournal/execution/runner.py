@@ -39,7 +39,7 @@ class WorkerRunner:
         manifest.stdout_path = str(stdout_path)
         manifest.stderr_path = str(stderr_path)
         atomic_write_text(manifest_path, json.dumps(manifest.to_dict(), sort_keys=True))
-        process = subprocess.Popen(
+        process = subprocess.Popen(  # noqa: S603
             [sys.executable, '-m', 'bulletjournal.execution.worker_main', str(manifest_path)],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,

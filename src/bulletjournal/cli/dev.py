@@ -18,7 +18,7 @@ def dev_server(path: str | None, *, open_browser: bool = False, base_path: str =
     web_root = Path(__file__).resolve().parents[3] / 'web'
     try:
         if vite_command is not None:
-            vite_process = subprocess.Popen(vite_command, cwd=web_root)
+            vite_process = subprocess.Popen(vite_command, cwd=web_root)  # noqa: S603
         start_server(
             path,
             open_browser=open_browser,

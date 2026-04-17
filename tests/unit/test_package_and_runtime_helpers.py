@@ -13,8 +13,9 @@ import pytest
 import bulletjournal
 import bulletjournal.api as bulletjournal_api
 import bulletjournal.cli as bulletjournal_cli
-import bulletjournal.runtime.context as runtime_context
+import bulletjournal.execution.worker_main as worker_main
 import bulletjournal.runtime.artifacts as runtime_artifacts
+import bulletjournal.runtime.context as runtime_context
 import bulletjournal.runtime.file_artifacts as file_artifacts
 import bulletjournal.storage as bulletjournal_storage
 import bulletjournal.templates as bulletjournal_templates
@@ -23,7 +24,6 @@ import bulletjournal.templates.registry as template_registry
 from bulletjournal.domain.enums import ArtifactRole, LineageMode
 from bulletjournal.execution import marimo_adapter
 from bulletjournal.execution import runner as runner_module
-import bulletjournal.execution.worker_main as worker_main
 from bulletjournal.execution.manifests import RunManifest
 from bulletjournal.storage.project_fs import init_project_root
 from bulletjournal.templates.builtin_provider import FilesystemTemplateProvider
@@ -31,13 +31,13 @@ from bulletjournal.templates.builtin_provider import FilesystemTemplateProvider
 
 def test_lazy_package_exports_and_attribute_errors() -> None:
     import bulletjournal.api.app as api_app_module
+    import bulletjournal.runtime as runtime_package
+    import bulletjournal.runtime.artifacts as runtime_artifacts_module
+    import bulletjournal.runtime.context as runtime_context_module
     import bulletjournal.storage.graph_store as graph_store_module
     import bulletjournal.storage.object_store as object_store_module
     import bulletjournal.storage.project_fs as project_fs_module
     import bulletjournal.storage.state_db as state_db_module
-    import bulletjournal.runtime as runtime_package
-    import bulletjournal.runtime.artifacts as runtime_artifacts_module
-    import bulletjournal.runtime.context as runtime_context_module
 
     assert bulletjournal.create_app is api_app_module.create_app
     assert bulletjournal_api.create_app is api_app_module.create_app
@@ -55,18 +55,18 @@ def test_lazy_package_exports_and_attribute_errors() -> None:
     assert runtime_package.get_project_id is runtime_context_module.get_project_id
 
     with pytest.raises(AttributeError):
-        getattr(bulletjournal, 'missing')
+        bulletjournal.missing
     with pytest.raises(AttributeError):
-        getattr(bulletjournal_api, 'missing')
+        bulletjournal_api.missing
     with pytest.raises(AttributeError):
-        getattr(bulletjournal_storage, 'missing')
+        bulletjournal_storage.missing
 
 
 def test_runtime_artifacts_module_exposes_helper_functions_after_submodule_import() -> None:
     runtime_package = importlib.import_module('bulletjournal.runtime')
     runtime_module = importlib.import_module('bulletjournal.runtime.artifacts')
 
-    imported = getattr(runtime_package, 'artifacts')
+    imported = runtime_package.artifacts
 
     assert callable(runtime_module.pull)
     assert callable(runtime_module.pull_file)

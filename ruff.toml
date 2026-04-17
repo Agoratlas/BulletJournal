@@ -1,6 +1,6 @@
 line-length = 120
 target-version = "py311"
-extend-exclude = ["*.ipynb"]
+extend-exclude = ["*.ipynb", "tests/fixtures/bad_notebook_syntax.py"]
 
 [lint]
 select = [
@@ -36,8 +36,18 @@ ignore = [
 ]
 
 [lint.per-file-ignores]
-"tests/*" = ["S101"]  # Allow assert statements in tests (standard pytest practice)
-
+"tests/**/*.py" = [
+    "B018",  # Allow direct attribute access checks in tests
+    "E501",  # Allow long fixture strings and snapshot-like literals in tests
+    "F841",  # Allow unused intermediates in integration-style tests
+    "PERF401",  # Avoid churn from list-comprehension micro-optimizations in tests
+    "S101",  # Allow assert statements in tests (standard pytest practice)
+    "S104",  # Allow test coverage for broad host bindings
+    "S106",  # Allow dummy tokens and passwords in tests
+    "S108",  # Allow fixed temporary paths in tests
+    "S603",  # Allow subprocess usage in integration tests
+    "SIM117",  # Allow nested context managers in tests when clearer
+]
 [format]
 quote-style = "single"
 indent-style = "space"

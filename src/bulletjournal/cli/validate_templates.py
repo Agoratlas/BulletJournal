@@ -50,12 +50,10 @@ def validate_templates(path: str | None = None) -> list[dict[str, object]]:
             notebook_paths_by_ref = {
                 template_path.relative_to(root).as_posix(): template_path for template_path in root.rglob('*.py')
             }
-    results = []
-    for template_path in template_paths:
-        results.append(
-            {
-                'path': str(template_path),
-                'issues': validate_template(template_path, notebook_paths_by_ref=notebook_paths_by_ref),
-            }
-        )
-    return results
+    return [
+        {
+            'path': str(template_path),
+            'issues': validate_template(template_path, notebook_paths_by_ref=notebook_paths_by_ref),
+        }
+        for template_path in template_paths
+    ]

@@ -23,7 +23,7 @@ class RunManifest:
         return asdict(self)
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> 'RunManifest':
+    def from_dict(cls, data: dict[str, Any]) -> RunManifest:
         return cls(**data)
 
     @property

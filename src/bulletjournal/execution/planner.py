@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections import defaultdict, deque
 
 from bulletjournal.domain.enums import ArtifactState, NodeKind
-from bulletjournal.domain.models import Edge, GraphData, Node
+from bulletjournal.domain.models import Edge, GraphData
 
 
 def dependency_maps(graph: GraphData) -> tuple[dict[str, set[str]], dict[str, set[str]]]:
@@ -65,7 +65,9 @@ def run_plan_for_node(graph: GraphData, node_id: str, upstream_node_ids: list[st
     return [candidate for candidate in ordered if candidate in requested]
 
 
-def stale_or_pending_nodes(graph: GraphData, artifact_heads: list[dict[str, object]], *, include_file_inputs: bool = False) -> list[str]:
+def stale_or_pending_nodes(
+    graph: GraphData, artifact_heads: list[dict[str, object]], *, include_file_inputs: bool = False
+) -> list[str]:
     states_by_node: dict[str, set[str]] = defaultdict(set)
     for head in artifact_heads:
         states_by_node[str(head['node_id'])].add(str(head['state']))

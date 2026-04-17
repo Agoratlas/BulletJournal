@@ -22,7 +22,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     init_parser = subparsers.add_parser('init', help='Initialize a new BulletJournal project')
     init_parser.add_argument('path')
-    init_parser.add_argument('--project-id', required=True)
+    init_parser.add_argument('--project-id', default=None)
     init_parser.add_argument('--title', default=None)
 
     start_parser = subparsers.add_parser('start', help='Start the BulletJournal server')
@@ -44,7 +44,9 @@ def build_parser() -> argparse.ArgumentParser:
     rebuild_parser = subparsers.add_parser('rebuild-state', help='Reparse notebooks and rebuild derived state')
     rebuild_parser.add_argument('path')
 
-    mark_env_parser = subparsers.add_parser('mark-environment-changed', help='Mark notebook outputs stale after an environment change')
+    mark_env_parser = subparsers.add_parser(
+        'mark-environment-changed', help='Mark notebook outputs stale after an environment change'
+    )
     mark_env_parser.add_argument('path')
     mark_env_parser.add_argument('--reason', required=True)
 
@@ -93,7 +95,13 @@ def app() -> None:
         print(json.dumps(mark_environment_changed(args.path, reason=args.reason), indent=2, sort_keys=True))
         return
     if args.command == 'export':
-        print(json.dumps(export_project(args.path, args.archive, include_artifacts=not args.without_artifacts), indent=2, sort_keys=True))
+        print(
+            json.dumps(
+                export_project(args.path, args.archive, include_artifacts=not args.without_artifacts),
+                indent=2,
+                sort_keys=True,
+            )
+        )
         return
     if args.command == 'import':
         print(json.dumps(import_project(args.archive, args.path), indent=2, sort_keys=True))

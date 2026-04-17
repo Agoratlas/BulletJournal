@@ -20,9 +20,23 @@ def _graph() -> GraphData:
             Node(id='leaf', kind=NodeKind.NOTEBOOK, title='Leaf'),
         ],
         edges=[
-            Edge(id='input_file.file__source.file', source_node='input_file', source_port='file', target_node='source', target_port='file'),
-            Edge(id='source.out__middle.in', source_node='source', source_port='out', target_node='middle', target_port='in'),
-            Edge(id='middle.out__leaf.in', source_node='middle', source_port='out', target_node='leaf', target_port='in'),
+            Edge(
+                id='input_file.file__source.file',
+                source_node='input_file',
+                source_port='file',
+                target_node='source',
+                target_port='file',
+            ),
+            Edge(
+                id='source.out__middle.in',
+                source_node='source',
+                source_port='out',
+                target_node='middle',
+                target_port='in',
+            ),
+            Edge(
+                id='middle.out__leaf.in', source_node='middle', source_port='out', target_node='leaf', target_port='in'
+            ),
         ],
         layout=[LayoutEntry(node_id='input_file', x=0, y=0, w=320, h=200)],
     )

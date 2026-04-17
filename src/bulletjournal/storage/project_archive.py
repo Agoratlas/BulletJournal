@@ -10,7 +10,6 @@ from bulletjournal.domain.errors import ProjectValidationError
 from bulletjournal.storage.project_fs import ProjectPaths, load_project_json, require_project_root
 from bulletjournal.utils import json_dumps, utc_now_iso
 
-
 EXCLUDED_NAMES = {'.DS_Store'}
 EXCLUDED_DIR_NAMES = {'__pycache__', '.runtime', '.venv', 'venv'}
 REQUIRED_EXPORT_MEMBERS = {
@@ -107,9 +106,7 @@ def _iter_project_files(paths: ProjectPaths, *, include_artifacts: bool) -> list
     if include_artifacts:
         included_roots.append(paths.artifacts_dir)
     included_files = [paths.pyproject_path, paths.uv_lock_path]
-    members: list[Path] = []
-    for file_path in included_files:
-        members.append(file_path.relative_to(paths.root))
+    members: list[Path] = [file_path.relative_to(paths.root) for file_path in included_files]
     for root in included_roots:
         if not root.exists():
             continue

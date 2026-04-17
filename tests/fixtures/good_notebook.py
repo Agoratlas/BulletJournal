@@ -4,7 +4,6 @@ app = marimo.App()
 
 with app.setup:
     from bulletjournal.runtime import artifacts
-    import pandas as pd
 
 
 @app.cell

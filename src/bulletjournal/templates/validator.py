@@ -5,9 +5,9 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-from bulletjournal.domain.graph_bindings import organizer_interface_for_ports, organizer_ports_from_ui
 from bulletjournal.domain.enums import ArtifactRole, NodeKind, ValidationSeverity
 from bulletjournal.domain.errors import GraphValidationError
+from bulletjournal.domain.graph_bindings import organizer_interface_for_ports, organizer_ports_from_ui
 from bulletjournal.domain.graph_rules import (
     validate_acyclic,
     validate_unique_edge_ids,
@@ -21,7 +21,6 @@ from bulletjournal.parser.validation import build_issue
 from bulletjournal.templates.builtin_provider import BUILTIN_PROVIDER, EXAMPLES_PROVIDER
 from bulletjournal.templates.provider import TemplateAsset
 from bulletjournal.templates.registry import default_notebook_assets
-
 
 BUILTIN_NOTEBOOK_TEMPLATE_ROOT = Path(__file__).resolve().parent / 'builtin'
 
@@ -162,26 +161,26 @@ def validate_pipeline_template(
             continue
         layout_rows[node_id] = raw_layout
 
-    for node_id in node_rows:
-        if node_id not in layout_rows:
-            issues.append(
-                build_issue(
-                    node_id=path.stem,
-                    severity=ValidationSeverity.ERROR,
-                    code='missing_pipeline_layout',
-                    message=f'Node `{node_id}` is missing a layout entry.',
-                ).to_dict()
-            )
-    for node_id in layout_rows:
-        if node_id not in node_rows:
-            issues.append(
-                build_issue(
-                    node_id=path.stem,
-                    severity=ValidationSeverity.ERROR,
-                    code='unknown_layout_node',
-                    message=f'Layout entry references unknown node `{node_id}`.',
-                ).to_dict()
-            )
+    issues.extend(
+        build_issue(
+            node_id=path.stem,
+            severity=ValidationSeverity.ERROR,
+            code='missing_pipeline_layout',
+            message=f'Node `{node_id}` is missing a layout entry.',
+        ).to_dict()
+        for node_id in node_rows
+        if node_id not in layout_rows
+    )
+    issues.extend(
+        build_issue(
+            node_id=path.stem,
+            severity=ValidationSeverity.ERROR,
+            code='unknown_layout_node',
+            message=f'Layout entry references unknown node `{node_id}`.',
+        ).to_dict()
+        for node_id in layout_rows
+        if node_id not in node_rows
+    )
 
     for raw_edge in edges_raw:
         if not isinstance(raw_edge, dict):
@@ -251,7 +250,10 @@ def validate_pipeline_template(
                     node_id=path.stem,
                     severity=ValidationSeverity.ERROR,
                     code='incompatible_edge_types',
-                    message=f'Cannot connect `{source_node}.{source_port}` ({source_type}) to `{target_node}.{target_port}` ({target_type}).',
+                    message=(
+                        f'Cannot connect `{source_node}.{source_port}` ({source_type}) to '
+                        f'`{target_node}.{target_port}` ({target_type}).'
+                    ),
                 ).to_dict()
             )
 
