@@ -497,14 +497,6 @@ export function applyOptimisticGraphOperations(snapshot: ProjectSnapshot, operat
       }
       continue
     }
-    if (type === 'update_node_hidden_inputs') {
-      const node = next.graph.nodes.find((entry) => entry.id === String(operation.node_id))
-      if (node) {
-        node.ui = { ...(node.ui ?? {}), hidden_inputs: Array.isArray(operation.hidden_inputs) ? operation.hidden_inputs.map(String) : [] }
-        changed = true
-      }
-      continue
-    }
     if (type === 'update_node_frozen') {
       const node = next.graph.nodes.find((entry) => entry.id === String(operation.node_id))
       if (node) {
@@ -709,7 +701,7 @@ export function buildConstantValueNotebookSource(
         'def _():',
         `    placeholder_note_${output.name} = \'Edit this notebook to set ${output.name} to a custom object.\'`,
         `    ${variableName} = None`,
-        `    artifacts.push(${variableName}, name='${output.name}', data_type='object', is_output=True, description='Constant value output')`,
+        `    artifacts.push(${variableName}, name='${output.name}', data_type='object', description='Constant value output')`,
         `    return placeholder_note_${output.name}, ${variableName}`,
         '',
       ]
@@ -719,7 +711,7 @@ export function buildConstantValueNotebookSource(
       '@app.cell',
       'def _():',
       `    ${variableName} = ${output.value}`,
-      `    artifacts.push(${variableName}, name='${output.name}', data_type=${dataTypeExpression}, is_output=True, description='Constant value output')`,
+      `    artifacts.push(${variableName}, name='${output.name}', data_type=${dataTypeExpression}, description='Constant value output')`,
       `    return ${variableName}`,
       '',
     ]

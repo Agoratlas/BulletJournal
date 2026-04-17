@@ -43,7 +43,7 @@ def _write_sample_notebook(project_root: Path) -> Path:
             '    from bulletjournal.runtime import artifacts\n\n'
             '@app.cell\n'
             'def _():\n'
-            "    artifacts.push(1, name='value', data_type=int, is_output=True)\n"
+            "    artifacts.push(1, name='value', data_type=int)\n"
             '    return\n'
         ),
         encoding='utf-8',

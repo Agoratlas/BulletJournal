@@ -3,7 +3,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import type { Connection, EdgeChange, Node } from 'reactflow'
 
 import { appUrl, cancelRun, createCheckpoint, currentProject, dismissNotice, downloadNotebookSource, getSnapshot, listSessions, notebookDownloadUrl, patchGraph, restoreCheckpoint, runAll, runNode, setArtifactState, setNodeOutputsState, stopSession, uploadFile } from './lib/api'
-import { activeRunNodeId, artifactFor, artifactsForDisplay, currentRun, formatTimestamp, globalArtifactCounts, hiddenInputNames, hiddenInputs, inputState, outputsForNode, queuedRunNodeIds, templateByRef, visibleInputs } from './lib/helpers'
+import { activeRunNodeId, artifactFor, artifactsForDisplay, currentRun, formatTimestamp, globalArtifactCounts, inputState, inputsForNode, outputsForNode, queuedRunNodeIds, templateByRef } from './lib/helpers'
 import { areaSettings, type AreaColorKey, type AreaTitlePosition } from './lib/area'
 import type { ArtifactRecord, GraphPatchOperation, LayoutRecord, NodeRecord, ProjectSnapshot, SessionRecord, TemplateRecord } from './lib/types'
 import type { AppNotice, ClipboardGraph, ClipboardNodeRecord, ConstantValueType, GraphHistoryEntry, GraphMutationPlan, NodeActionItem, OptimisticGraphState, PaletteEntry, PalettePreviewBlock, PortActionMenuState } from './appTypes'
@@ -1434,18 +1434,6 @@ function App() {
           undoOperations.push({ type: 'update_node_title', node_id: operation.node_id, title: node.title })
           break
         }
-        case 'update_node_hidden_inputs': {
-          const node = snapshotData.graph.nodes.find((entry) => entry.id === operation.node_id)
-          if (!node) {
-            return null
-          }
-          undoOperations.push({
-            type: 'update_node_hidden_inputs',
-            node_id: operation.node_id,
-            hidden_inputs: [...(node.ui?.hidden_inputs ?? [])],
-          })
-          break
-        }
         case 'update_organizer_ports': {
           const node = snapshotData.graph.nodes.find((entry) => entry.id === operation.node_id)
           if (!node) {
@@ -2473,7 +2461,7 @@ function App() {
       }
       const oppositePortName = oppositeHandleId.replace(/^out:|^in:/, '')
       const oppositePort = sourceGhost
-        ? [...visibleInputs(oppositeNode), ...hiddenInputs(oppositeNode)].find((port) => port.name === oppositePortName)
+        ? inputsForNode(oppositeNode).find((port) => port.name === oppositePortName)
         : [...outputsForNode(oppositeNode), ...(oppositeNode.interface?.assets ?? [])].find((port) => port.name === oppositePortName)
       if (!oppositePort) {
         return
@@ -2542,25 +2530,6 @@ function App() {
           source_port: pending.sourcePort || nextPort.key,
           target_node: pending.targetNode,
           target_port: pending.targetPort || nextPort.key,
-        } satisfies GraphPatchOperation,
-      ],
-    }
-    await mutateGraph(redo.operations, { history: liveSnapshot ? simpleHistoryEntryForPlan(liveSnapshot, redo) : null })
-  }
-
-  async function handleToggleHiddenInput(node: NodeRecord, inputName: string) {
-    const currentHidden = hiddenInputNames(node)
-    if (currentHidden.has(inputName)) {
-      currentHidden.delete(inputName)
-    } else {
-      currentHidden.add(inputName)
-    }
-    const redo = {
-      operations: [
-        {
-          type: 'update_node_hidden_inputs',
-          node_id: node.id,
-          hidden_inputs: Array.from(currentHidden),
         } satisfies GraphPatchOperation,
       ],
     }
@@ -2963,7 +2932,7 @@ function App() {
           {activeRun ? (
             <button className="danger" onClick={handleCancelRun}>Stop run</button>
           ) : (
-            <button className="play-action" onClick={handleRunAll} disabled={!projectId} aria-label="Run pipeline" title="Run pipeline"><Play width={20} height={20} /></button>
+            <button className="play-action" onClick={handleRunAll} disabled={!projectId} aria-label="Run pipeline" title="Run pipeline"><Play width={22} height={22} /></button>
           )}
           <button
             className="secondary artifact-summary-button"
@@ -3111,7 +3080,6 @@ function App() {
                 queuedRunNodeIds={queuedNodeIds}
                 completedRunNodeIds={completedNodeIds}
                 nodeActions={nodeActionsForNode(selectedNode)}
-                onToggleHiddenInput={handleToggleHiddenInput}
                 onUploadFile={handleUploadFile}
                 onOpenTemplate={setTemplateRefView}
               />

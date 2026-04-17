@@ -46,21 +46,18 @@ def _(expected_rows_count, iris_with_size_category):
         avg_petal_length,
         name='avg_petal_length',
         data_type=float,
-        is_output=True,
         description='Average petal length across the enriched iris dataset.',
     )
     artifacts.push(
         size_category_counts,
         name='size_category_counts',
         data_type=dict,
-        is_output=True,
         description='Counts of rows in each derived size category.',
     )
     artifacts.push(
         row_count_ok,
         name='row_count_ok',
         data_type=bool,
-        is_output=True,
         description='Whether the transformed dataset kept the expected number of rows.',
     )
     return avg_petal_length, row_count_ok, size_category_counts

@@ -9,7 +9,7 @@ with app.setup:
 @app.cell
 def _():
     p = artifacts.push
-    p(1, name='x', data_type=int, is_output=True)
+    p(1, name='x', data_type=int)
     return
 
 

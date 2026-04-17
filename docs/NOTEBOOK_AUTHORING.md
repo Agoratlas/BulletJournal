@@ -17,9 +17,9 @@ count = artifacts.pull(name='count', data_type=int, default=10)
 frame = artifacts.pull(name='frame', data_type=pd.DataFrame)
 
 artifacts.push(result, name='summary', data_type=str)
-artifacts.push(df, name='clean_df', data_type=pd.DataFrame, is_output=True)
+artifacts.push(df, name='clean_df', data_type=pd.DataFrame)
 
-with artifacts.push_file(name='plot', extension='.png', is_output=True) as path:
+with artifacts.push_file(name='plot', extension='.png') as path:
     plt.savefig(path)
 ```
 
@@ -44,9 +44,9 @@ BulletJournal runtime context.
 
 - artifact calls must be direct top-level calls
 - no aliasing, wrappers, loops, or conditionals around artifact declarations
-- names, descriptions, and `is_output` values must be literals
+- names and descriptions must be literals
 - unsupported type expressions normalize to `object` with a warning
-- runtime pushes must match the parsed contract exactly; undeclared outputs or type/role mismatches fail the run
+- runtime pushes must match the parsed contract exactly; undeclared outputs or type mismatches fail the run
 
 ## Rejected examples
 
@@ -59,11 +59,11 @@ count = puller(name='count', data_type=int)
 
 ```python
 if enabled:
-    artifacts.push(result, name='summary', data_type=str, is_output=True)
+    artifacts.push(result, name='summary', data_type=str)
 ```
 
 ```python
-artifacts.push(result, name=dynamic_name, data_type=str, is_output=True)
+artifacts.push(result, name=dynamic_name, data_type=str)
 ```
 
 ## Docs extraction

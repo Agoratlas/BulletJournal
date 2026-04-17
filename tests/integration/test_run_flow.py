@@ -89,7 +89,7 @@ with app.setup:
 
 @app.cell
 def _():
-    artifacts.push(4, name='number', data_type=int, is_output=True)
+    artifacts.push(4, name='number', data_type=int)
     return
 
 if __name__ == '__main__':
@@ -115,7 +115,7 @@ def _():
 
 @app.cell
 def _(value):
-    artifacts.push(value * 2, name='doubled', data_type=int, is_output=True)
+    artifacts.push(value * 2, name='doubled', data_type=int)
     return
 
 if __name__ == '__main__':
@@ -759,7 +759,7 @@ with app.setup:
 @app.cell
 def _(time):
     time.sleep(5)
-    artifacts.push(1, name='value', data_type=int, is_output=True)
+    artifacts.push(1, name='value', data_type=int)
     return
 
 if __name__ == '__main__':
@@ -795,8 +795,8 @@ if __name__ == '__main__':
 
         notebook_path.write_text(
             notebook_path.read_text(encoding='utf-8').replace(
-                "artifacts.push(1, name='value', data_type=int, is_output=True)",
-                "artifacts.push(2, name='value', data_type=int, is_output=True)",
+                "artifacts.push(1, name='value', data_type=int)",
+                "artifacts.push(2, name='value', data_type=int)",
             ),
             encoding='utf-8',
         )
@@ -860,7 +860,7 @@ with app.setup:
 @app.cell
 def _(time):
     time.sleep(2)
-    artifacts.push(1, name='value', data_type=int, is_output=True)
+    artifacts.push(1, name='value', data_type=int)
     return
 
 if __name__ == '__main__':
@@ -937,7 +937,7 @@ with app.setup:
 @app.cell
 def _():
     value = 7
-    artifacts.push(value, name='value', data_type=int, is_output=True)
+    artifacts.push(value, name='value', data_type=int)
     return
 
 
@@ -1000,7 +1000,7 @@ with app.setup:
 @app.cell
 def _():
     value = 7
-    artifacts.push(value, name='value', data_type=int, is_output=True)
+    artifacts.push(value, name='value', data_type=int)
     return
 
 
@@ -1088,7 +1088,7 @@ with app.setup:
 
 @app.cell
 def _():
-    artifacts.push(1, name='value', data_type=int, is_output=True)
+    artifacts.push(1, name='value', data_type=int)
     raise RuntimeError('boom')
 
 if __name__ == '__main__':
@@ -1163,7 +1163,7 @@ def _():
 
 @app.cell
 def _(file_path):
-    artifacts.push(len(file_path), name='path_length', data_type=int, is_output=True)
+    artifacts.push(len(file_path), name='path_length', data_type=int)
     return
 
 if __name__ == '__main__':
@@ -1233,7 +1233,7 @@ def _():
 
 @app.cell
 def _(threshold_value):
-    artifacts.push(threshold_value, name='threshold', data_type=int, is_output=True, description='Constant value output')
+    artifacts.push(threshold_value, name='threshold', data_type=int, description='Constant value output')
     return
 
 if __name__ == '__main__':
@@ -1311,7 +1311,7 @@ def _():
 
 @app.cell
 def _(file_path):
-    artifacts.push(len(file_path), name='path_length', data_type=int, is_output=True)
+    artifacts.push(len(file_path), name='path_length', data_type=int)
     return
 
 if __name__ == '__main__':
@@ -1392,7 +1392,7 @@ def _():
 
 @app.cell
 def _(file_path):
-    artifacts.push(0 if file_path is None else len(file_path), name='path_length', data_type=int, is_output=True)
+    artifacts.push(0 if file_path is None else len(file_path), name='path_length', data_type=int)
     return
 
 if __name__ == '__main__':
@@ -1420,7 +1420,7 @@ if __name__ == '__main__':
     assert artifact.json()['preview']['repr'] == '0'
 
 
-def test_hidden_inputs_require_existing_defaulted_ports(tmp_path) -> None:
+def test_hidden_input_updates_are_not_supported(tmp_path) -> None:
     project_root = init_project_root(tmp_path / 'project').root
     app = create_app(project_path=project_root)
     client = TestClient(app)
@@ -1444,7 +1444,7 @@ def test_hidden_inputs_require_existing_defaulted_ports(tmp_path) -> None:
     )
     assert patch.status_code == 200
 
-    hidden_missing_default = client.patch(
+    hidden_input_update = client.patch(
         '/api/v1/graph',
         json={
             'graph_version': patch.json()['meta']['graph_version'],
@@ -1457,7 +1457,7 @@ def test_hidden_inputs_require_existing_defaulted_ports(tmp_path) -> None:
             ],
         },
     )
-    assert hidden_missing_default.status_code == 409
+    assert hidden_input_update.status_code == 422
 
 
 def test_edit_run_url_authenticates_marimo_session(tmp_path) -> None:

@@ -22,7 +22,7 @@ def _():
 @app.cell
 def _(limit, pd):
     frame = pd.DataFrame({'value': list(range(limit))})
-    artifacts.push(frame, name='frame', data_type=pd.DataFrame, is_output=True)
+    artifacts.push(frame, name='frame', data_type=pd.DataFrame)
     artifacts.push('ok', name='summary', data_type=str)
     return
 

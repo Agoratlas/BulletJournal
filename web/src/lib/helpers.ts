@@ -10,18 +10,8 @@ export function slugify(value: string): string {
     .replace(/^_+|_+$/g, '') || 'node'
 }
 
-export function hiddenInputNames(node: NodeRecord): Set<string> {
-  return new Set(node.ui?.hidden_inputs ?? [])
-}
-
-export function visibleInputs(node: NodeRecord): Port[] {
-  const hidden = hiddenInputNames(node)
-  return (node.interface?.inputs ?? []).filter((port) => !hidden.has(port.name))
-}
-
-export function hiddenInputs(node: NodeRecord): Port[] {
-  const hidden = hiddenInputNames(node)
-  return (node.interface?.inputs ?? []).filter((port) => hidden.has(port.name))
+export function inputsForNode(node: NodeRecord): Port[] {
+  return node.interface?.inputs ?? []
 }
 
 export function organizerPorts(node: NodeRecord): Array<{ key: string; name: string; data_type: string }> {

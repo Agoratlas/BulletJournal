@@ -31,26 +31,35 @@ def push(
     *,
     name: str,
     data_type: Any,
-    is_output: bool = False,
     description: str | None = None,
+    **kwargs: Any,
 ) -> None:
     del description
+    if kwargs:
+        unexpected = ', '.join(sorted(kwargs))
+        raise TypeError(f'Unexpected artifact push kwargs: {unexpected}')
     context = current_runtime_context()
-    role = ArtifactRole.OUTPUT if is_output else ArtifactRole.ASSET
     normalized = _normalize_runtime_type(data_type)
-    context.finalize_value_push(name=name, value=value, data_type=normalized, role=role)
+    context.finalize_value_push(
+        name=name,
+        value=value,
+        data_type=normalized,
+        role=ArtifactRole.OUTPUT,
+    )
 
 
 def push_file(
     *,
     name: str,
     extension: str | None = None,
-    is_output: bool = False,
     description: str | None = None,
+    **kwargs: Any,
 ) -> FilePushHandle:
     del description
-    role = ArtifactRole.OUTPUT if is_output else ArtifactRole.ASSET
-    return FilePushHandle(name=name, role=role, extension=extension)
+    if kwargs:
+        unexpected = ', '.join(sorted(kwargs))
+        raise TypeError(f'Unexpected artifact push_file kwargs: {unexpected}')
+    return FilePushHandle(name=name, role=ArtifactRole.OUTPUT, extension=extension)
 
 
 def _normalize_runtime_type(data_type: Any) -> str:

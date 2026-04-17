@@ -86,8 +86,6 @@ class GraphService:
                 self._update_layout(graph, operation)
             elif op_type == 'update_node_title':
                 self._update_title(graph, operation)
-            elif op_type == 'update_node_hidden_inputs':
-                self._update_hidden_inputs(graph, operation)
             elif op_type == 'update_organizer_ports':
                 removed_targets = self._update_organizer_ports(graph, operation)
                 stale_roots.update(removed_targets)
@@ -646,30 +644,6 @@ class GraphService:
         for node in graph.nodes:
             if node.id == node_id:
                 node.title = title
-                return
-        raise GraphValidationError(f'Unknown node `{node_id}`.')
-
-    def _update_hidden_inputs(self, graph: GraphData, operation: dict[str, Any]) -> None:
-        node_id = str(operation['node_id'])
-        hidden_inputs_raw = operation.get('hidden_inputs', [])
-        if not isinstance(hidden_inputs_raw, list):
-            raise GraphValidationError('Hidden inputs must be a list of port names.')
-        hidden_inputs = sorted({str(item) for item in hidden_inputs_raw})
-        interface = self.project_service.latest_interface(node_id)
-        if interface is None:
-            raise GraphValidationError('Cannot configure hidden inputs before the notebook interface is parsed.')
-        inputs_by_name = {str(port['name']): port for port in interface.get('inputs', [])}
-        for hidden_input in hidden_inputs:
-            port = inputs_by_name.get(hidden_input)
-            if port is None:
-                raise GraphValidationError(f'Hidden input `{hidden_input}` does not exist on node `{node_id}`.')
-            if not bool(port.get('has_default', False)):
-                raise GraphValidationError(
-                    f'Hidden input `{hidden_input}` on node `{node_id}` must declare a default value.'
-                )
-        for node in graph.nodes:
-            if node.id == node_id:
-                node.ui = {**node.ui, 'hidden_inputs': hidden_inputs}
                 return
         raise GraphValidationError(f'Unknown node `{node_id}`.')
 

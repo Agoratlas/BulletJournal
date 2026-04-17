@@ -10,7 +10,7 @@ with app.setup:
 @app.cell
 def _():
     value = 42
-    artifacts.push(value, name='value', data_type=int, is_output=True, description='Constant value output')
+    artifacts.push(value, name='value', data_type=int, description='Constant value output')
     return value
 
 

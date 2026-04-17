@@ -24,7 +24,7 @@ import ReactFlow, {
 } from 'reactflow'
 
 import { areaSettings } from '../lib/area'
-import { artifactCounts, artifactFor, assetsForNode, badgeForNode, formatDurationSeconds, hiddenInputs, inputState, outputsForNode, visibleInputs } from '../lib/helpers'
+import { artifactCounts, artifactFor, assetsForNode, badgeForNode, formatDurationSeconds, inputState, inputsForNode, outputsForNode } from '../lib/helpers'
 import type { ArtifactState, NodeRecord, Port, ProjectSnapshot } from '../lib/types'
 import { ArtifactCounts } from './ArtifactCounts'
 import { Pencil, Play } from './Icons'
@@ -138,7 +138,7 @@ const PORT_TOP_OFFSET = 82
 const PORT_STEP = 40
 
 const STATE_COLORS: Record<ArtifactState | 'mixed', string> = {
-  ready: '#2f855a',
+  ready: '#34b85a',
   stale: '#c97c00',
   pending: '#98a2a3',
   mixed: '#2563eb',
@@ -182,7 +182,7 @@ function portAnchorForSelection(
 ): { x: number; y: number } | null {
   const layout = snapshot.graph.layout.find((entry) => entry.node_id === node.id)
   const width = nodeDimensions[node.id]?.width ?? layout?.w ?? 360
-  const inputs = visibleInputs(node)
+  const inputs = inputsForNode(node)
   const outputs = outputsForNode(node)
   const ports = side === 'input' ? inputs : outputs
   const index = ports.findIndex((port) => port.name === portName)
@@ -217,12 +217,14 @@ function PortRow({
       ? inputState(snapshot, node.id, port)
       : artifactFor(snapshot, node.id, port.name)?.state ?? 'pending'
   const typeColor = TYPE_COLORS[port.data_type] ?? TYPE_COLORS.object
-  const fillColor = STATE_COLORS[state]
+  const stateColor = STATE_COLORS[state]
   const isConnectionStart = connectionIntent?.nodeId === node.id
     && connectionIntent?.handleId === `${side === 'input' ? 'in' : 'out'}:${port.name}`
     && connectionIntent?.handleType === (side === 'input' ? 'target' : 'source')
   const isConnecting = Boolean(connectionIntent)
-  const isCompatible = !connectionIntent || isCompatibleWithIntent(snapshot, node, port, side, connectionIntent)
+  const matchesConnectionIntent = connectionIntent ? isCompatibleWithIntent(snapshot, node, port, side, connectionIntent) : true
+  const isCompatible = !connectionIntent || isConnectionStart || matchesConnectionIntent
+  const isHighlighted = isConnectionStart || (isConnecting && matchesConnectionIntent)
 
   function handlePortCircleContextMenu(event: React.MouseEvent) {
     event.preventDefault()
@@ -240,19 +242,19 @@ function PortRow({
           type="target"
           id={`in:${port.name}`}
           position={Position.Left}
-          className={`rf-handle ${isConnectionStart ? 'connection-start' : ''} ${isConnecting ? 'connecting' : ''}`}
-          style={{ borderColor: typeColor, background: fillColor, top: PORT_TOP_OFFSET + index * PORT_STEP }}
+          className={`rf-handle ${isConnectionStart ? 'connection-start' : ''} ${isConnecting ? 'connecting' : ''} ${isHighlighted ? 'connection-highlight' : ''}`}
+          style={{ color: typeColor, borderColor: stateColor, background: stateColor, top: PORT_TOP_OFFSET + index * PORT_STEP }}
           onContextMenu={handlePortCircleContextMenu}
         />
       ) : null}
-      <PortLabel name={port.name} label={port.label} dataType={port.data_type} className="rf-port-copy" />
+      <PortLabel name={port.name} label={port.label} dataType={port.data_type} className="rf-port-copy" showTypeDot typeDotPosition={side === 'input' ? 'before' : 'after'} />
       {side === 'output' ? (
         <Handle
           type="source"
           id={`out:${port.name}`}
           position={Position.Right}
-          className={`rf-handle ${isConnectionStart ? 'connection-start' : ''} ${isConnecting ? 'connecting' : ''}`}
-          style={{ borderColor: typeColor, background: fillColor, top: PORT_TOP_OFFSET + index * PORT_STEP }}
+          className={`rf-handle ${isConnectionStart ? 'connection-start' : ''} ${isConnecting ? 'connecting' : ''} ${isHighlighted ? 'connection-highlight' : ''}`}
+          style={{ color: typeColor, borderColor: stateColor, background: stateColor, top: PORT_TOP_OFFSET + index * PORT_STEP }}
           onContextMenu={handlePortCircleContextMenu}
         />
       ) : null}
@@ -309,8 +311,12 @@ function OrganizerLaneRow({
   const sourceStart = connectionIntent?.nodeId === node.id && connectionIntent.handleId === sourceHandleId && connectionIntent.handleType === 'source'
   const targetStart = connectionIntent?.nodeId === node.id && connectionIntent.handleId === targetHandleId && connectionIntent.handleType === 'target'
   const connecting = Boolean(connectionIntent)
+  const connectionHandleType = connectionIntent?.handleType ?? null
   const inputCompatible = !connectionIntent || isCompatibleWithIntent(snapshot, node, port, 'input', connectionIntent)
   const outputCompatible = !connectionIntent || isCompatibleWithIntent(snapshot, node, port, 'output', connectionIntent)
+  const highlightInput = targetStart || (connectionHandleType === 'source' && inputCompatible)
+  const highlightOutput = sourceStart || (connectionHandleType === 'target' && outputCompatible)
+  const rowCompatible = !connectionIntent || highlightInput || highlightOutput
 
   function handleInputContextMenu(event: React.MouseEvent) {
     event.preventDefault()
@@ -325,22 +331,22 @@ function OrganizerLaneRow({
   }
 
   return (
-    <div className={`rf-organizer-row ${connecting ? 'connecting' : ''} ${!inputCompatible || !outputCompatible ? 'incompatible' : ''}`} title={`${displayPortName(port)} (${port.data_type})`}>
+    <div className={`rf-organizer-row ${connecting ? 'connecting' : ''} ${rowCompatible ? '' : 'incompatible'}`} title={`${displayPortName(port)} (${port.data_type})`}>
       <Handle
         type="target"
         id={targetHandleId}
         position={Position.Left}
-        className={`rf-handle ${targetStart ? 'connection-start' : ''} ${connecting ? 'connecting' : ''}`}
-        style={{ borderColor: typeColor, background: STATE_COLORS[inputArtifactState], top: 20 }}
+        className={`rf-handle ${targetStart ? 'connection-start' : ''} ${connecting ? 'connecting' : ''} ${highlightInput ? 'connection-highlight' : ''}`}
+        style={{ color: typeColor, borderColor: STATE_COLORS[inputArtifactState], background: STATE_COLORS[inputArtifactState], top: 20 }}
         onContextMenu={handleInputContextMenu}
       />
-      <PortLabel name={port.name} label={port.label} dataType={port.data_type} className="rf-organizer-copy" />
+      <PortLabel name={port.name} label={port.label} dataType={port.data_type} className="rf-organizer-copy" showTypeDot />
       <Handle
         type="source"
         id={sourceHandleId}
         position={Position.Right}
-        className={`rf-handle ${sourceStart ? 'connection-start' : ''} ${connecting ? 'connecting' : ''}`}
-        style={{ borderColor: typeColor, background: STATE_COLORS[outputArtifactState], top: 20 }}
+        className={`rf-handle ${sourceStart ? 'connection-start' : ''} ${connecting ? 'connecting' : ''} ${highlightOutput ? 'connection-highlight' : ''}`}
+        style={{ color: typeColor, borderColor: STATE_COLORS[outputArtifactState], background: STATE_COLORS[outputArtifactState], top: 20 }}
         onContextMenu={handleOutputContextMenu}
       />
     </div>
@@ -397,8 +403,7 @@ function OrganizerGhostHandleLayer({
 
 const BulletJournalNodeCard = memo(({ data, selected }: NodeProps<BulletJournalNodeData>) => {
   const { node, snapshot, onSelect, onNodeContextMenu, onPortContextMenu, onEditFileNode, onEditOrganizerNode, onEditAreaNode, onOpenEditor, onKillEditor, onRunNode, onOpenArtifacts } = data
-  const visible = visibleInputs(node)
-  const hidden = hiddenInputs(node)
+  const inputs = inputsForNode(node)
   const outputs = outputsForNode(node)
   const assets = assetsForNode(node)
   const counts = artifactCounts(snapshot, node.id)
@@ -602,10 +607,9 @@ const BulletJournalNodeCard = memo(({ data, selected }: NodeProps<BulletJournalN
       </div>
       <div className="rf-node-body">
         <div className="rf-port-column">
-          {visible.map((port, index) => (
+          {inputs.map((port, index) => (
             <PortRow key={`in-${port.name}`} node={node} snapshot={snapshot} port={port} side="input" connectionIntent={connectionIntent} index={index} onPortContextMenu={onPortContextMenu} />
           ))}
-          {hidden.length ? <div className="rf-hidden-inputs">+ {hidden.length} hidden inputs</div> : null}
         </div>
         <div className="rf-port-column output">
           {outputs.map((port, index) => (
@@ -621,7 +625,7 @@ const BulletJournalNodeCard = memo(({ data, selected }: NodeProps<BulletJournalN
               <button className="round-node-action play" onClick={(event) => {
                 event.stopPropagation()
                 onRunNode(node.id, 'run_stale')
-              }} aria-label="Run notebook"><Play width={18} height={18} /></button>
+              }} aria-label="Run notebook"><Play width={20} height={20} /></button>
               {node.kind === 'notebook' ? (
                 <>
                   <button className={`round-node-action editor ${hasActiveEditor ? 'active-editor' : ''}`} onClick={(event) => {
@@ -631,7 +635,7 @@ const BulletJournalNodeCard = memo(({ data, selected }: NodeProps<BulletJournalN
                       return
                     }
                     onOpenEditor(node.id)
-                  }} aria-label={hasActiveEditor ? 'Editor actions' : 'Open editor'} disabled={isEditorBlockedByExecution} title={editorBlockedReason}><Pencil width={18} height={18} /></button>
+                  }} aria-label={hasActiveEditor ? 'Editor actions' : 'Open editor'} disabled={isEditorBlockedByExecution} title={editorBlockedReason}><Pencil width={20} height={20} style={{ transform: 'translate(0.5px, 0.5px)' }} /></button>
                   {menuOpen ? (
                     <div className="split-menu editor-menu" onClick={(event) => event.stopPropagation()}>
                       <button className="secondary menu-item" disabled={Boolean(editorBlockedReason)} title={editorBlockedReason} onClick={() => {
@@ -681,8 +685,7 @@ function isCompatibleWithIntent(snapshot: ProjectSnapshot, node: NodeRecord, por
   }
   const targetPortName = intent.handleId.replace('in:', '')
   const targetNode = snapshot.graph.nodes.find((item) => item.id === intent.nodeId)
-  const targetPort = visibleInputs(targetNode ?? node).find((item) => item.name === targetPortName)
-    ?? hiddenInputs(targetNode ?? node).find((item) => item.name === targetPortName)
+  const targetPort = inputsForNode(targetNode ?? node).find((item) => item.name === targetPortName)
   return targetPort?.data_type === port.data_type
 }
 
@@ -1078,11 +1081,11 @@ export function GraphCanvas({ snapshot, serverNowMs = Date.now(), serverNowClien
           const sourcePortName = connection.sourceHandle.replace('out:', '')
           const targetPortName = connection.targetHandle.replace('in:', '')
           const sourcePort = sourceGhost
-            ? [...visibleInputs(targetNode), ...hiddenInputs(targetNode)].find((item) => item.name === targetPortName)
+            ? inputsForNode(targetNode).find((item) => item.name === targetPortName)
             : [...outputsForNode(sourceNode), ...assetsForNode(sourceNode)].find((item) => item.name === sourcePortName)
           const targetPort = targetGhost
             ? [...outputsForNode(sourceNode), ...assetsForNode(sourceNode)].find((item) => item.name === sourcePortName)
-            : [...visibleInputs(targetNode), ...hiddenInputs(targetNode)].find((item) => item.name === targetPortName)
+            : inputsForNode(targetNode).find((item) => item.name === targetPortName)
           return Boolean(sourcePort && targetPort && sourcePort.data_type === targetPort.data_type)
         }}
         onNodeDragStop={handleNodeDragStop}

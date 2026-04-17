@@ -95,12 +95,6 @@ class UpdateNodeTitleOperation(StrictModel):
     title: str
 
 
-class UpdateNodeHiddenInputsOperation(StrictModel):
-    type: Literal['update_node_hidden_inputs']
-    node_id: str
-    hidden_inputs: list[str]
-
-
 class UpdateOrganizerPortsOperation(StrictModel):
     type: Literal['update_organizer_ports']
     node_id: str
@@ -136,7 +130,6 @@ GraphOperation = Annotated[
     | RemoveEdgeOperation
     | UpdateNodeLayoutOperation
     | UpdateNodeTitleOperation
-    | UpdateNodeHiddenInputsOperation
     | UpdateOrganizerPortsOperation
     | UpdateAreaStyleOperation
     | DeleteNodeOperation

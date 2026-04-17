@@ -391,7 +391,7 @@ with app.setup:
 @app.cell
 def _():
     value = 1
-    artifacts.push(value, name='fresh_output', data_type=int, is_output=True)
+    artifacts.push(value, name='fresh_output', data_type=int)
     return
 """,
         encoding='utf-8',

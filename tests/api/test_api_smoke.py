@@ -324,8 +324,8 @@ def test_invalid_notebook_changes_keep_previous_ports_and_surface_errors(tmp_pat
     original_source = notebook_path.read_text(encoding='utf-8')
     notebook_path.write_text(
         original_source.replace(
-            "artifacts.push(frame, name='sample_df', data_type=pd.DataFrame, is_output=True, description='Sample output frame')",
-            "artifacts.push(frame, name='renamed_df', data_type=pd.DataFrame, is_output=True, description='Sample output frame')\n    broken =",
+            "artifacts.push(frame, name='sample_df', data_type=pd.DataFrame, description='Sample output frame')",
+            "artifacts.push(frame, name='renamed_df', data_type=pd.DataFrame, description='Sample output frame')\n    broken =",
         ),
         encoding='utf-8',
     )
@@ -373,8 +373,8 @@ def test_unparsable_marimo_cell_keeps_previous_ports_and_surfaces_errors(tmp_pat
     original_source = notebook_path.read_text(encoding='utf-8')
     notebook_path.write_text(
         original_source.replace(
-            "@app.cell\ndef _(pd, sample_count):\n    frame = pd.DataFrame({'value': list(range(sample_count))})\n    artifacts.push(frame, name='sample_df', data_type=pd.DataFrame, is_output=True, description='Sample output frame')\n    return frame",
-            'app._unparsable_cell(\n    r"""\nframe = pd.DataFrame({\'value\': list(range(sample_count))})\nartifacts.push(frame, name=\'renamed_df\', data_type=pd.DataFrame, is_output=True, description=\'Sample output frame\')\nbroken =\nreturn frame\n"""\n)',
+            "@app.cell\ndef _(pd, sample_count):\n    frame = pd.DataFrame({'value': list(range(sample_count))})\n    artifacts.push(frame, name='sample_df', data_type=pd.DataFrame, description='Sample output frame')\n    return frame",
+            'app._unparsable_cell(\n    r"""\nframe = pd.DataFrame({\'value\': list(range(sample_count))})\nartifacts.push(frame, name=\'renamed_df\', data_type=pd.DataFrame, description=\'Sample output frame\')\nbroken =\nreturn frame\n"""\n)',
         ),
         encoding='utf-8',
     )
@@ -419,7 +419,7 @@ def _():
 
 @app.cell
 def _(value):
-    artifacts.push(value, name='value', data_type=int, is_output=True)
+    artifacts.push(value, name='value', data_type=int)
     return
 
 if __name__ == '__main__':
@@ -1481,7 +1481,7 @@ def test_freezing_downstream_block_also_freezes_upstream_file_blocks(tmp_path) -
                         '    return file_path\n\n'
                         '@app.cell\n'
                         'def _(file_path):\n'
-                        "    artifacts.push(len(file_path), name='path_length', data_type=int, is_output=True)\n"
+                        "    artifacts.push(len(file_path), name='path_length', data_type=int)\n"
                         '    return\n\n'
                         "if __name__ == '__main__':\n"
                         '    from bulletjournal.runtime.standalone import run_notebook_app\n\n'

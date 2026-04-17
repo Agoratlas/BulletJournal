@@ -469,12 +469,13 @@ def _parse_push(call: ast.Call, *, node_id: str) -> tuple[Port | None, list[Vali
     description = _literal_string(kwargs.get('description')) if 'description' in kwargs else None
     if 'description' in kwargs and description is None:
         issues.append(_literal_issue(node_id, 'description', 'Description must be a literal string.'))
-    is_output = _literal_bool(kwargs.get('is_output')) if 'is_output' in kwargs else False
-    if 'is_output' in kwargs and is_output is None:
-        issues.append(_literal_issue(node_id, 'is_output', 'is_output must be a literal boolean.'))
-        is_output = False
-    role = ArtifactRole.OUTPUT if is_output else ArtifactRole.ASSET
-    return Port(name=name, data_type=data_type, role=role, description=description, kind='value'), issues
+    return Port(
+        name=name,
+        data_type=data_type,
+        role=ArtifactRole.OUTPUT,
+        description=description,
+        kind='value',
+    ), issues
 
 
 def _parse_push_file(call: ast.Call, *, node_id: str) -> tuple[Port | None, list[ValidationIssue]]:
@@ -486,12 +487,7 @@ def _parse_push_file(call: ast.Call, *, node_id: str) -> tuple[Port | None, list
     issues: list[ValidationIssue] = []
     if 'description' in kwargs and description is None:
         issues.append(_literal_issue(node_id, 'description', 'Description must be a literal string.'))
-    is_output = _literal_bool(kwargs.get('is_output')) if 'is_output' in kwargs else False
-    if 'is_output' in kwargs and is_output is None:
-        issues.append(_literal_issue(node_id, 'is_output', 'is_output must be a literal boolean.'))
-        is_output = False
-    role = ArtifactRole.OUTPUT if is_output else ArtifactRole.ASSET
-    return Port(name=name, data_type='file', role=role, description=description, kind='file'), issues
+    return Port(name=name, data_type='file', role=ArtifactRole.OUTPUT, description=description, kind='file'), issues
 
 
 def _literal_string(node: ast.AST | None) -> str | None:

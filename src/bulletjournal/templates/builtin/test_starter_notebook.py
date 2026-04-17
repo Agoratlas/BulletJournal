@@ -28,7 +28,7 @@ def _():
 @app.cell
 def _(pd, sample_count):
     frame = pd.DataFrame({'value': list(range(sample_count))})
-    artifacts.push(frame, name='sample_df', data_type=pd.DataFrame, is_output=True, description='Sample output frame')
+    artifacts.push(frame, name='sample_df', data_type=pd.DataFrame, description='Sample output frame')
     return frame
 
 

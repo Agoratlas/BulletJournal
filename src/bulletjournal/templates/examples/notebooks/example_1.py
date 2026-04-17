@@ -63,14 +63,12 @@ def _(iris_csv, pd):
         iris_dataframe,
         name='iris_dataframe',
         data_type=pd.DataFrame,
-        is_output=True,
         description='Clean iris dataframe loaded from the CSV input block.',
     )
     artifacts.push(
         iris_rows_count,
         name='iris_rows_count',
         data_type=int,
-        is_output=True,
         description='Number of rows loaded from the iris CSV file.',
     )
     return iris_dataframe, iris_rows_count

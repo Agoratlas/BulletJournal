@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 
 import { executionLogDownloadUrl } from '../lib/api'
-import { artifactCounts, artifactFor, assetsForNode, badgeForNode, formatDurationSeconds, formatTimestamp, hiddenInputNames, inputBindingSource, inputState, templateByRef } from '../lib/helpers'
+import { artifactCounts, artifactFor, assetsForNode, badgeForNode, formatDurationSeconds, formatTimestamp, inputBindingSource, inputState, templateByRef } from '../lib/helpers'
 import { formatIssueDetails, frozenFileBlockMessage, nodeRunFailures, validationIssuesForNode } from '../lib/appHelpers'
 import type { NodeActionItem } from '../appTypes'
 import type { NodeRecord, ProjectSnapshot } from '../lib/types'
@@ -46,7 +46,6 @@ export function NodeInspector({
   queuedRunNodeIds,
   completedRunNodeIds,
   nodeActions,
-  onToggleHiddenInput,
   onUploadFile,
   onOpenTemplate,
 }: {
@@ -58,7 +57,6 @@ export function NodeInspector({
   queuedRunNodeIds: string[]
   completedRunNodeIds: string[]
   nodeActions: NodeActionItem[]
-  onToggleHiddenInput: (node: NodeRecord, inputName: string) => Promise<void>
   onUploadFile: (nodeId: string, file: File) => Promise<void>
   onOpenTemplate: (templateRef: string) => void
 }) {
@@ -196,7 +194,6 @@ export function NodeInspector({
           {(node.interface?.inputs ?? []).map((port) => {
             const state = inputState(snapshot, node.id, port)
             const source = inputBindingSource(snapshot, node.id, port.name)
-            const hidden = hiddenInputNames(node).has(port.name)
             return (
               <div key={port.name} className={`inspector-port state-${state}`}>
                 <PortPill name={port.name} label={port.label} dataType={port.data_type} side="input" compact />
@@ -204,11 +201,6 @@ export function NodeInspector({
                   <span>{source ? `${source.source_node}/${source.source_port}` : port.has_default ? 'default value' : 'not connected'}</span>
                   {port.has_default ? <span>default: {JSON.stringify(port.default)}</span> : null}
                 </div>
-                {port.has_default ? (
-                  <button className="secondary small" onClick={() => onToggleHiddenInput(node, port.name)}>
-                    {hidden ? 'Show on node' : 'Hide on node'}
-                  </button>
-                ) : null}
               </div>
             )
           })}

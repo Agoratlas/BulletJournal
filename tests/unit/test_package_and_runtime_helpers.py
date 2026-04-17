@@ -193,14 +193,14 @@ def test_artifacts_api_delegates_to_runtime_context(monkeypatch: pytest.MonkeyPa
 
     value = runtime_artifacts.pull(name='count', data_type=int, default=10, description='ignored')
     file_path = runtime_artifacts.pull_file(name='dataset', allow_missing=True, description='ignored')
-    runtime_artifacts.push(42, name='result', data_type=int, is_output=True, description='ignored')
-    handle = runtime_artifacts.push_file(name='report', extension='.txt', is_output=False)
+    runtime_artifacts.push(42, name='result', data_type=int, description='ignored')
+    handle = runtime_artifacts.push_file(name='report', extension='.txt')
 
     assert value == 7
     assert file_path == '/tmp/data.csv'
     assert handle.name == 'report'
     assert handle.extension == '.txt'
-    assert handle.role == ArtifactRole.ASSET
+    assert handle.role == ArtifactRole.OUTPUT
     assert calls == [
         ('validate', ('count', 'int')),
         ('resolve_pull', 'count'),

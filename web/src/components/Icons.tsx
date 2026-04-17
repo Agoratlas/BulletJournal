@@ -58,7 +58,7 @@ export function ChevronDown(props: SVGProps<SVGSVGElement>) {
 export function Play(props: SVGProps<SVGSVGElement>) {
   return (
     <IconBase {...props}>
-      <path d="M8 6.5v11l8.5-5.5-8.5-5.5Z" fill="currentColor" stroke="none" />
+      <path d="M6.4 5.3Q6.4 4 7.6 4.7L18 10.8Q19.8 12 18 13.2L7.6 19.3Q6.4 20 6.4 18.7Z" fill="currentColor" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" strokeLinecap="round" />
     </IconBase>
   )
 }

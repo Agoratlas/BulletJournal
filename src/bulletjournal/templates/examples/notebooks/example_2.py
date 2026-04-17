@@ -47,7 +47,6 @@ def _(iris_dataframe, pd):
         iris_with_size_category,
         name='iris_with_size_category',
         data_type=pd.DataFrame,
-        is_output=True,
         description='Iris dataframe enriched with a petal-length size category.',
     )
     return iris_with_size_category

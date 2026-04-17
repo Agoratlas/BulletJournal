@@ -1,7 +1,7 @@
 import marimo
 
-__generated_with = "0.20.4"
-app = marimo.App(width="medium", app_title="{{NODE_ID}}")
+__generated_with = '0.20.4'
+app = marimo.App(width='medium', app_title='{{NODE_ID}}')
 
 with app.setup:
     from bulletjournal.runtime import artifacts
@@ -30,9 +30,9 @@ def _():
 def _():
     # Create an output:
     # frame = pd.DataFrame({'value': list(range(sample_count))})
-    # artifacts.push(frame, name='sample_df', data_type=pd.DataFrame, is_output=True, description='Sample output frame')
+    # artifacts.push(frame, name='sample_df', data_type=pd.DataFrame, description='Sample output frame')
     return
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     app.run()

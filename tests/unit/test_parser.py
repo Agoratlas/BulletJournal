@@ -13,8 +13,8 @@ def test_parser_extracts_interface_and_docs() -> None:
     interface = parse_notebook_interface(notebook, node_id='good_notebook')
 
     assert [port.name for port in interface.inputs] == ['limit']
-    assert [port.name for port in interface.outputs] == ['frame']
-    assert [port.name for port in interface.assets] == ['summary']
+    assert [port.name for port in interface.outputs] == ['frame', 'summary']
+    assert [port.name for port in interface.assets] == []
     assert interface.outputs[0].data_type == 'pandas.DataFrame'
     assert interface.inputs[0].has_default is True
     assert extract_notebook_docs(notebook) == '# Notebook docs'
@@ -67,8 +67,8 @@ def _():
 
 @app.cell
 def _(second, first):
-    artifacts.push(second, name='zeta', data_type=int, is_output=True)
-    artifacts.push(first, name='alpha', data_type=int, is_output=True)
+    artifacts.push(second, name='zeta', data_type=int)
+    artifacts.push(first, name='alpha', data_type=int)
     artifacts.push('notes', name='later_asset', data_type=str)
     artifacts.push('summary', name='earlier_asset', data_type=str)
     return
@@ -80,8 +80,8 @@ def _(second, first):
     interface = parse_notebook_interface(notebook, node_id='port_order')
 
     assert [port.name for port in interface.inputs] == ['second', 'first']
-    assert [port.name for port in interface.outputs] == ['zeta', 'alpha']
-    assert [port.name for port in interface.assets] == ['later_asset', 'earlier_asset']
+    assert [port.name for port in interface.outputs] == ['zeta', 'alpha', 'later_asset', 'earlier_asset']
+    assert [port.name for port in interface.assets] == []
 
 
 def test_parser_rejects_non_literal_pull_file_allow_missing(tmp_path) -> None:
