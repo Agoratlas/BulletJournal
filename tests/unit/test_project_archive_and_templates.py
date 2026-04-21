@@ -278,3 +278,13 @@ def test_template_service_supports_provider_loaders_without_files(monkeypatch) -
     assert pipeline.source_text == pipeline_source
     assert listed['agoratlas/private/helper']['hidden'] is True
     assert listed['agoratlas/iris_pipeline']['title'] == 'Iris Pipeline'
+
+
+def test_template_service_renders_notebook_template_placeholders() -> None:
+    rendered = TemplateService.render_notebook_template_source(
+        "app = marimo.App(width='medium', app_title='{{NODE_ID}} / {{TITLE}}')\n",
+        title='Sample Node',
+        node_id='sample_node',
+    )
+
+    assert rendered == "app = marimo.App(width='medium', app_title='sample_node / Sample Node')\n"

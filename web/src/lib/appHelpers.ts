@@ -107,6 +107,69 @@ export function runFailureMessage(response: Record<string, unknown>, fallback: s
   return fallback
 }
 
+export function runFailureNodeId(response: Record<string, unknown>): string | null {
+  if (typeof response.node_id === 'string' && response.node_id.trim()) {
+    return response.node_id
+  }
+  const nodeResults = response.node_results
+  if (nodeResults && typeof nodeResults === 'object') {
+    const nestedNodeId = (nodeResults as { node_id?: unknown }).node_id
+    if (typeof nestedNodeId === 'string' && nestedNodeId.trim()) {
+      return nestedNodeId
+    }
+  }
+  return null
+}
+
+export function formatRunFailureMessage(snapshot: ProjectSnapshot | null | undefined, response: Record<string, unknown>, fallback: string): string {
+  const message = runFailureMessage(response, fallback)
+  const nodeId = runFailureNodeId(response)
+  if (!nodeId) {
+    return message
+  }
+  const failedNode = snapshot?.graph.nodes.find((node) => node.id === nodeId)
+  if (!failedNode) {
+    return `Run failed in \`${nodeId}\`. ${message}`
+  }
+  return `Run failed in ${failedNode.title} (\`${failedNode.id}\`). ${message}`
+}
+
+function describeNode(snapshot: ProjectSnapshot | null | undefined, nodeId: string): string {
+  const node = snapshot?.graph.nodes.find((entry) => entry.id === nodeId)
+  if (!node) {
+    return `\`${nodeId}\``
+  }
+  return `${node.title} (\`${node.id}\`)`
+}
+
+export function formatRunBlockedMessage(
+  snapshot: ProjectSnapshot | null | undefined,
+  nodeId: string | null | undefined,
+  response: Record<string, unknown>,
+): string {
+  const blockedInputs = Array.isArray(response.blocked_inputs) ? response.blocked_inputs : []
+  const runLabel = typeof nodeId === 'string' && nodeId.trim() ? `Run for ${describeNode(snapshot, nodeId)} ` : 'This run '
+  if (!blockedInputs.length) {
+    return `${runLabel}is blocked by missing or pending inputs.`
+  }
+  const summaries = blockedInputs
+    .map((blockedInput) => {
+      if (!blockedInput || typeof blockedInput !== 'object') {
+        return null
+      }
+      const record = blockedInput as { name?: unknown; source?: unknown; state?: unknown }
+      const name = typeof record.name === 'string' && record.name.trim() ? record.name : 'unknown input'
+      const source = typeof record.source === 'string' && record.source.trim() ? ` from \`${record.source}\`` : ''
+      const state = typeof record.state === 'string' && record.state.trim() ? record.state : 'missing'
+      return `\`${name}\`${source} is ${state}`
+    })
+    .filter((summary): summary is string => summary !== null)
+  if (!summaries.length) {
+    return `${runLabel}is blocked by missing or pending inputs.`
+  }
+  return `${runLabel}is blocked by missing or pending inputs: ${summaries.join(', ')}.`
+}
+
 export function isManagedRunFailure(response: Record<string, unknown>): boolean {
   return response.status === 'failed' && typeof response.run_id === 'string'
 }
@@ -305,7 +368,6 @@ export function expandMutationPlan(plan: GraphMutationPlan): GraphPatchOperation
 
 function cloneNodeUi(node: NodeRecord): NonNullable<GraphPatchOperation & { type: 'add_notebook_node' }>['ui'] {
   return {
-    hidden_inputs: [...(node.ui?.hidden_inputs ?? [])],
     origin: node.ui?.origin ?? null,
     frozen: Boolean(node.ui?.frozen),
   }
@@ -423,17 +485,15 @@ export function applyOptimisticGraphOperations(snapshot: ProjectSnapshot, operat
               }
               : type === 'add_area_node'
                 ? {
-                  hidden_inputs: [],
                   frozen: Boolean((operation.ui as { frozen?: unknown } | undefined)?.frozen),
                   title_position: String((operation.ui as { title_position?: unknown } | undefined)?.title_position ?? 'top-left'),
                   area_color: String((operation.ui as { area_color?: unknown } | undefined)?.area_color ?? 'blue'),
                   area_filled: Boolean((operation.ui as { area_filled?: unknown } | undefined)?.area_filled ?? true),
                 }
               : {
-                hidden_inputs: [],
-                frozen: Boolean((operation.ui as { frozen?: unknown } | undefined)?.frozen),
-                origin: (operation.ui as { origin?: 'constant_value' | null } | undefined)?.origin ?? null,
-              },
+                  frozen: Boolean((operation.ui as { frozen?: unknown } | undefined)?.frozen),
+                  origin: (operation.ui as { origin?: 'constant_value' | null } | undefined)?.origin ?? null,
+                },
           interface: null,
           execution_meta: null,
           orchestrator_state: null,
@@ -578,7 +638,6 @@ function cloneUiState(ui: NodeRecord['ui'] | undefined): NodeRecord['ui'] | unde
   }
   return {
     ...ui,
-    hidden_inputs: ui.hidden_inputs ? [...ui.hidden_inputs] : ui.hidden_inputs,
     organizer_ports: ui.organizer_ports ? ui.organizer_ports.map((port) => ({ ...port })) : ui.organizer_ports,
     title_position: ui.title_position,
     area_color: ui.area_color,

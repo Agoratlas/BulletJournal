@@ -26,6 +26,8 @@ from bulletjournal.storage.object_store import ObjectStore
 from bulletjournal.storage.project_fs import ProjectPaths, load_project_json
 from bulletjournal.storage.state_db import StateDB
 
+MISSING_BINDING_HELP = 'Please ensure you have connected an input or set a default value.'
+
 
 @dataclass(slots=True)
 class Binding:
@@ -77,7 +79,7 @@ class RuntimeContext:
                     'source_artifact': '',
                     'loaded_version_id': None,
                 }
-            raise FileNotFoundError(f'Artifact binding for `{name}` is missing.')
+            raise FileNotFoundError(f'Artifact binding for `{name}` is missing. {MISSING_BINDING_HELP}')
         head = self.db.get_artifact_head(binding.source_node, binding.source_artifact)
         if head is None or head['current_version_id'] is None:
             raise FileNotFoundError(f'Artifact `{binding.source_node}/{binding.source_artifact}` is pending.')
@@ -128,7 +130,7 @@ class RuntimeContext:
                     'source_artifact': '',
                     'loaded_version_id': None,
                 }
-            raise FileNotFoundError(f'Artifact binding for `{name}` is missing.')
+            raise FileNotFoundError(f'Artifact binding for `{name}` is missing. {MISSING_BINDING_HELP}')
         head = self.db.get_artifact_head(binding.source_node, binding.source_artifact)
         if head is None or head['current_version_id'] is None:
             raise FileNotFoundError(f'Artifact `{binding.source_node}/{binding.source_artifact}` is pending.')

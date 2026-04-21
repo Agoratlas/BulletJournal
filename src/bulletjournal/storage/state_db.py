@@ -274,6 +274,7 @@ class StateDB:
                 'UNION SELECT node_id FROM artifact_versions '
                 'UNION SELECT node_id FROM artifact_heads '
                 'UNION SELECT node_id FROM cache_index '
+                'UNION SELECT node_id FROM orchestrator_execution_meta '
                 'UNION SELECT node_id FROM run_outputs '
                 'ORDER BY node_id'
             ).fetchall()
@@ -305,6 +306,7 @@ class StateDB:
             connection.execute('DELETE FROM cache_index WHERE node_id = ?', (node_id,))
             connection.execute('DELETE FROM artifact_heads WHERE node_id = ?', (node_id,))
             connection.execute('DELETE FROM artifact_versions WHERE node_id = ?', (node_id,))
+            connection.execute('DELETE FROM orchestrator_execution_meta WHERE node_id = ?', (node_id,))
             connection.execute('DELETE FROM validation_issues WHERE node_id = ?', (node_id,))
             connection.execute('DELETE FROM persistent_notices WHERE node_id = ?', (node_id,))
             connection.execute('DELETE FROM notebook_revisions WHERE node_id = ?', (node_id,))

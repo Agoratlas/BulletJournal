@@ -321,16 +321,27 @@ class ProjectService:
             raw_target = run.get('target_json')
             target = raw_target if isinstance(raw_target, dict) else {}
             target_node_ids: list[str] = []
+            failure = run.get('failure_json') if isinstance(run.get('failure_json'), dict) else None
+            failed_node_id = (
+                str(failure.get('node_id')).strip()
+                if isinstance(failure, dict) and failure.get('node_id') is not None
+                else ''
+            )
+            if run['status'] == 'failed' and failed_node_id:
+                target_node_ids.append(failed_node_id)
             if isinstance(target, dict):
-                node_id_value = target.get('node_id')
-                if node_id_value is not None:
-                    target_node_ids.append(str(node_id_value))
-                raw_node_ids = target.get('node_ids')
-                if isinstance(raw_node_ids, list):
-                    target_node_ids.extend(str(node_id) for node_id in raw_node_ids)
-                raw_plan = target.get('plan')
-                if isinstance(raw_plan, list):
-                    target_node_ids.extend(str(node_id) for node_id in raw_plan)
+                if not target_node_ids:
+                    node_id_value = target.get('node_id')
+                    if node_id_value is not None:
+                        target_node_ids.append(str(node_id_value))
+                if not target_node_ids:
+                    raw_node_ids = target.get('node_ids')
+                    if isinstance(raw_node_ids, list):
+                        target_node_ids.extend(str(node_id) for node_id in raw_node_ids)
+                if not target_node_ids:
+                    raw_plan = target.get('plan')
+                    if isinstance(raw_plan, list):
+                        target_node_ids.extend(str(node_id) for node_id in raw_plan)
             deduped_target_node_ids = list(dict.fromkeys(target_node_ids))
             for node_key in deduped_target_node_ids:
                 if node_key not in last_run_by_node:

@@ -57,7 +57,6 @@ def test_graph_store_round_trip_preserves_organizer_ui(tmp_path) -> None:
             kind=NodeKind.ORGANIZER,
             title='Organizer',
             ui={
-                'hidden_inputs': [],
                 'organizer_ports': [
                     {'key': 'dataset', 'name': 'dataset', 'data_type': 'file'},
                     {'key': 'count', 'name': 'sample_count', 'data_type': 'int'},

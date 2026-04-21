@@ -129,7 +129,7 @@ class GraphStore:
         path_value = data.get('path')
         resolved_path = str(path_value) if isinstance(path_value, str) else None
         ui_value = data.get('ui')
-        resolved_ui = ui_value if isinstance(ui_value, dict) else {'hidden_inputs': []}
+        resolved_ui = ui_value if isinstance(ui_value, dict) else {}
         return Node(
             id=str(data['id']),
             kind=NodeKind(str(data['kind'])),

@@ -118,12 +118,16 @@ function createPalettePreviewBlock(block: PalettePreviewBlock, scale: number): H
   node.style.width = `${Math.max(block.width * scale, 1)}px`
   node.style.height = `${Math.max(block.height * scale, 1)}px`
 
+  if (block.kind === 'area') {
+    return node
+  }
+
   const header = document.createElement('div')
   header.className = 'palette-drag-preview-node-header'
 
   const badge = document.createElement('div')
   badge.className = 'palette-drag-preview-badge'
-  badge.textContent = block.kind === 'file_input' ? 'F' : block.kind === 'organizer' ? 'O' : block.kind === 'area' ? 'A' : 'N'
+  badge.textContent = block.kind === 'file_input' ? 'F' : block.kind === 'organizer' ? 'O' : 'N'
   header.appendChild(badge)
 
   const copy = document.createElement('div')
@@ -134,7 +138,7 @@ function createPalettePreviewBlock(block: PalettePreviewBlock, scale: number): H
   copy.appendChild(title)
 
   const subtitle = document.createElement('span')
-  subtitle.textContent = block.kind === 'file_input' ? 'File input' : block.kind === 'organizer' ? 'Organizer' : block.kind === 'area' ? 'Area' : 'Notebook'
+  subtitle.textContent = block.kind === 'file_input' ? 'File input' : block.kind === 'organizer' ? 'Organizer' : 'Notebook'
   copy.appendChild(subtitle)
   header.appendChild(copy)
 

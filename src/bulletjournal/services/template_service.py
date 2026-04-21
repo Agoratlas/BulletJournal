@@ -113,8 +113,12 @@ class TemplateService:
         return interfaces
 
     def empty_notebook_source(self, *, title: str, node_id: str) -> str:
-        template = self.resolve_template_source('builtin/test_starter_notebook')
-        return template.source_text.replace('{{TITLE}}', title).replace('{{NODE_ID}}', node_id)
+        template = self.resolve_template_source('builtin/empty_notebook')
+        return self.render_notebook_template_source(template.source_text, title=title, node_id=node_id)
+
+    @staticmethod
+    def render_notebook_template_source(source_text: str, *, title: str, node_id: str) -> str:
+        return source_text.replace('{{TITLE}}', title).replace('{{NODE_ID}}', node_id)
 
     def template_ref(self, ref: str) -> TemplateRef:
         asset = self._require_asset(ref, kind='notebook', allow_inactive=False)

@@ -506,7 +506,7 @@ label span,
   display: grid;
   grid-template-rows: auto 1fr auto;
   border-radius: max(8px, calc(24px * var(--palette-preview-scale, 1)));
-  border: max(1px, calc(2px * var(--palette-preview-scale, 1))) solid rgba(15, 118, 110, 0.42);
+  border: max(2px, calc(4px * var(--palette-preview-scale, 1))) solid rgba(15, 118, 110, 0.42);
   background: rgba(255, 250, 242, 0.96);
   box-shadow: 0 22px 54px rgba(15, 23, 42, 0.18);
   color: var(--ink);
@@ -523,10 +523,12 @@ label span,
 }
 
 .palette-drag-preview-node.kind-area {
-  border-style: dashed;
-  border-width: 2px;
-  border-color: rgba(82, 120, 104, 0.48);
-  background: rgba(82, 120, 104, 0.12);
+  display: block;
+  border-style: dotted;
+  border-width: max(2px, calc(4px * var(--palette-preview-scale, 1)));
+  border-color: rgba(82, 120, 104, 0.52);
+  background: rgba(255, 250, 242, 0.96);
+  box-shadow: none;
 }
 
 .palette-drag-preview.kind-pipeline .palette-drag-preview-node {
@@ -616,6 +618,11 @@ label span,
 :root[data-theme='dark'] .palette-drag-preview-node {
   background: rgba(18, 22, 24, 0.96);
   border-color: rgba(92, 189, 180, 0.38);
+}
+
+:root[data-theme='dark'] .palette-drag-preview-node.kind-area {
+  background: rgba(18, 22, 24, 0.96);
+  border-color: rgba(148, 163, 184, 0.58);
 }
 
 :root[data-theme='dark'] .palette-drag-preview.kind-pipeline .palette-drag-preview-node {
@@ -1108,7 +1115,10 @@ label span,
 }
 
 .rf-node-progress-track {
-  position: relative;
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
   height: 6px;
   overflow: hidden;
   background: rgba(15, 118, 110, 0.08);
@@ -1124,6 +1134,7 @@ label span,
 }
 
 .rf-node-header {
+  position: relative;
   min-height: 54px;
   border-bottom: 1px solid var(--line);
 }

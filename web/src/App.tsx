@@ -3,11 +3,11 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import type { Connection, EdgeChange, Node } from 'reactflow'
 
 import { appUrl, cancelRun, createCheckpoint, currentProject, dismissNotice, downloadNotebookSource, getSnapshot, listSessions, notebookDownloadUrl, patchGraph, restoreCheckpoint, runAll, runNode, setArtifactState, setNodeOutputsState, stopSession, uploadFile } from './lib/api'
-import { activeRunNodeId, artifactFor, artifactsForDisplay, currentRun, formatTimestamp, globalArtifactCounts, inputState, inputsForNode, outputsForNode, queuedRunNodeIds, templateByRef } from './lib/helpers'
+import { GRID_SIZE, activeRunNodeId, artifactFor, artifactsForDisplay, currentRun, formatTimestamp, globalArtifactCounts, inputState, inputsForNode, outputsForNode, queuedRunNodeIds, templateByRef } from './lib/helpers'
 import { areaSettings, type AreaColorKey, type AreaTitlePosition } from './lib/area'
 import type { ArtifactRecord, GraphPatchOperation, LayoutRecord, NodeRecord, ProjectSnapshot, SessionRecord, TemplateRecord } from './lib/types'
 import type { AppNotice, ClipboardGraph, ClipboardNodeRecord, ConstantValueType, GraphHistoryEntry, GraphMutationPlan, NodeActionItem, OptimisticGraphState, PaletteEntry, PalettePreviewBlock, PortActionMenuState } from './appTypes'
-import { applyOptimisticGraphOperations, areaAddOperationForNode, artifactTargetForPort, blockCreateMode, buildConstantValueNotebookSource, clampContextMenuPosition, cloneSnapshot, copiedTitle, createClientNotice, edgeIdForPorts, edgeIdsForPort, editorSessionDetails, expandMutationPlan, fileInputAddOperationForNode, freezeBlockMessage, frozenBlockBlockersForDelete, frozenBlockBlockersForRemovedEdges, frozenBlockBlockersForStaleRoots, isEditableTarget, isEditorOpenConflict, isFreezeConflict, isManagedRunFailure, mergeGraphIntoSnapshot, normalizeNodeId, notebookAddOperationForNode, organizerAddOperationForNode, pipelineDefinitionNodeIds, pipelineTemplateNodeRecords, pipelineTopLeftForCenter, runFailureMessage, SNAPSHOT_REFRESH_EVENTS, SNAPSHOT_REFRESH_THROTTLE_MS, snapToGrid, uniqueCopiedNodeId } from './lib/appHelpers'
+import { applyOptimisticGraphOperations, areaAddOperationForNode, artifactTargetForPort, blockCreateMode, buildConstantValueNotebookSource, clampContextMenuPosition, cloneSnapshot, copiedTitle, createClientNotice, edgeIdForPorts, edgeIdsForPort, editorSessionDetails, expandMutationPlan, fileInputAddOperationForNode, formatRunBlockedMessage, formatRunFailureMessage, freezeBlockMessage, frozenBlockBlockersForDelete, frozenBlockBlockersForRemovedEdges, frozenBlockBlockersForStaleRoots, isEditableTarget, isEditorOpenConflict, isFreezeConflict, isManagedRunFailure, mergeGraphIntoSnapshot, normalizeNodeId, notebookAddOperationForNode, organizerAddOperationForNode, pipelineDefinitionNodeIds, pipelineTemplateNodeRecords, pipelineTopLeftForCenter, SNAPSHOT_REFRESH_EVENTS, SNAPSHOT_REFRESH_THROTTLE_MS, snapToGrid, uniqueCopiedNodeId } from './lib/appHelpers'
 import { ArtifactCard } from './components/ArtifactCard'
 import { ArtifactCounts } from './components/ArtifactCounts'
 import { BlockPalette } from './components/BlockPalette'
@@ -85,6 +85,20 @@ type AreaNodeEditState = {
 
 const NEW_NODE_WIDTH = 360
 const NEW_NODE_HEIGHT = 220
+const ORGANIZER_NODE_WIDTH = 160
+const ORGANIZER_NODE_HEIGHT = 140
+const AREA_NODE_WIDTH = 480
+const AREA_NODE_HEIGHT = 280
+const PLACEMENT_PADDING = 40
+const PLACEMENT_SEARCH_STEP = GRID_SIZE * 2
+const MAX_PLACEMENT_RINGS = 24
+
+type PlacementRect = {
+  left: number
+  top: number
+  right: number
+  bottom: number
+}
 
 type ArtifactMutationState = 'ready' | 'stale'
 
@@ -238,6 +252,13 @@ function App() {
 
   function selectSingleNode(nodeId: string | null, options: { openInspector?: boolean } = {}) {
     applySelection(nodeId ? [nodeId] : [], [], { openInspector: options.openInspector ?? Boolean(nodeId) })
+  }
+
+  function selectCreatedNodes(nodeIds: string[]) {
+    if (!nodeIds.length) {
+      return
+    }
+    applySelection(nodeIds, [], { openInspector: nodeIds.length === 1 })
   }
 
   function selectionMatches(left: string[], right: string[]): boolean {
@@ -585,6 +606,11 @@ function App() {
     return liveSnapshot?.graph.nodes.find((node) => node.id === nodeId)?.title ?? nodeId
   }
 
+  function nodeLabel(nodeId: string): string {
+    const title = nodeTitle(nodeId)
+    return title === nodeId ? `\`${nodeId}\`` : `${title} (\`${nodeId}\`)`
+  }
+
   function isOrganizerGhostHandle(handleId: string | null | undefined): boolean {
     return Boolean(handleId && (handleId.startsWith('ghost-in:') || handleId.startsWith('ghost-out:')))
   }
@@ -708,7 +734,7 @@ function App() {
       reportClientWarning(
         `run-editor-open:${session.node_id}`,
         'editor_already_open',
-        'Cannot start this orchestrated run while an editor is open for this notebook.',
+        `Cannot start this orchestrated run while an editor is open for ${nodeLabel(session.node_id)}.`,
         {
           nodeId: session.node_id,
           details: { session_id: session.session_id, session_url: session.url, ready: session.ready },
@@ -727,8 +753,8 @@ function App() {
 
   function reportEditorBlockedByExecution(nodeId: string) {
     const message = isNodeQueuedForExecution(nodeId)
-      ? 'Cannot open the editor while this notebook is queued or running in the orchestrated execution queue.'
-      : 'Cannot open the editor right now.'
+      ? `Cannot open the editor for ${nodeLabel(nodeId)} while it is queued or running in the orchestrated execution queue.`
+      : `Cannot open the editor for ${nodeLabel(nodeId)} right now.`
     reportClientWarning(`editor-blocked-by-run:${nodeId}`, 'editor_blocked_by_execution', message, { nodeId })
   }
 
@@ -1872,8 +1898,8 @@ function App() {
   ) {
     const baseX = 120 + ((liveSnapshot?.graph.nodes.length ?? 0) % 4) * 420
     const baseY = 120 + Math.floor((liveSnapshot?.graph.nodes.length ?? 0) / 4) * 280
-    const width = payload.type === 'organizer' ? 160 : payload.type === 'area' ? 480 : NEW_NODE_WIDTH
-    const height = payload.type === 'organizer' ? 140 : payload.type === 'area' ? 280 : NEW_NODE_HEIGHT
+    const width = payload.type === 'organizer' ? ORGANIZER_NODE_WIDTH : payload.type === 'area' ? AREA_NODE_WIDTH : NEW_NODE_WIDTH
+    const height = payload.type === 'organizer' ? ORGANIZER_NODE_HEIGHT : payload.type === 'area' ? AREA_NODE_HEIGHT : NEW_NODE_HEIGHT
     const x = snapToGrid((placement?.x ?? baseX) - width / 2)
     const y = snapToGrid((placement?.y ?? baseY) - height / 2)
     if (payload.type === 'file_input') {
@@ -1882,7 +1908,10 @@ function App() {
           { type: 'add_file_input_node', node_id: payload.nodeId, title: payload.title, x, y, w: NEW_NODE_WIDTH, h: NEW_NODE_HEIGHT } satisfies GraphPatchOperation,
         ],
       }
-      await mutateGraph(redo.operations, { history: liveSnapshot ? simpleHistoryEntryForPlan(liveSnapshot, redo) : null })
+      await mutateGraph(redo.operations, {
+        history: liveSnapshot ? simpleHistoryEntryForPlan(liveSnapshot, redo) : null,
+        onSuccess: () => selectCreatedNodes([payload.nodeId]),
+      })
       return
     }
     if (payload.type === 'organizer') {
@@ -1891,7 +1920,10 @@ function App() {
           { type: 'add_organizer_node', node_id: payload.nodeId, title: payload.title, x, y, w: width, h: height } satisfies GraphPatchOperation,
         ],
       }
-      await mutateGraph(redo.operations, { history: liveSnapshot ? simpleHistoryEntryForPlan(liveSnapshot, redo) : null })
+      await mutateGraph(redo.operations, {
+        history: liveSnapshot ? simpleHistoryEntryForPlan(liveSnapshot, redo) : null,
+        onSuccess: () => selectCreatedNodes([payload.nodeId]),
+      })
       return
     }
     if (payload.type === 'area') {
@@ -1913,7 +1945,10 @@ function App() {
           } satisfies GraphPatchOperation,
         ],
       }
-      await mutateGraph(redo.operations, { history: liveSnapshot ? simpleHistoryEntryForPlan(liveSnapshot, redo) : null })
+      await mutateGraph(redo.operations, {
+        history: liveSnapshot ? simpleHistoryEntryForPlan(liveSnapshot, redo) : null,
+        onSuccess: () => selectCreatedNodes([payload.nodeId]),
+      })
       return
     }
     if (payload.type === 'template') {
@@ -1933,7 +1968,10 @@ function App() {
           } satisfies GraphPatchOperation,
         ],
       }
-      await mutateGraph(redo.operations, { history: liveSnapshot ? simpleHistoryEntryForPlan(liveSnapshot, redo) : null })
+      await mutateGraph(redo.operations, {
+        history: liveSnapshot ? simpleHistoryEntryForPlan(liveSnapshot, redo) : null,
+        onSuccess: () => selectCreatedNodes([payload.nodeId]),
+      })
       return
     }
     const redo = {
@@ -1941,7 +1979,10 @@ function App() {
         { type: 'add_notebook_node', node_id: payload.nodeId, title: payload.title, x, y, w: NEW_NODE_WIDTH, h: NEW_NODE_HEIGHT } satisfies GraphPatchOperation,
       ],
     }
-    await mutateGraph(redo.operations, { history: liveSnapshot ? simpleHistoryEntryForPlan(liveSnapshot, redo) : null })
+    await mutateGraph(redo.operations, {
+      history: liveSnapshot ? simpleHistoryEntryForPlan(liveSnapshot, redo) : null,
+      onSuccess: () => selectCreatedNodes([payload.nodeId]),
+    })
   }
 
   async function handleCreatePipelineTemplate(templateRef: string, placement: { x: number; y: number }, nodeIdPrefix?: string | null) {
@@ -1968,7 +2009,10 @@ function App() {
           redo,
         }
       : null
-    await mutateGraph(redo.operations, { history })
+    await mutateGraph(redo.operations, {
+      history,
+      onSuccess: () => selectCreatedNodes(createdNodes.map((node) => node.nodeId)),
+    })
   }
 
   function pipelineTemplateByEntry(entry: PaletteEntry): TemplateRecord | null {
@@ -1976,6 +2020,120 @@ function App() {
       return null
     }
     return liveSnapshot.templates.find((template) => template.kind === 'pipeline' && template.ref === entry.templateRef) ?? null
+  }
+
+  function pipelinePlacementSize(template: TemplateRecord): { width: number; height: number } {
+    const layout = template.definition?.layout ?? []
+    if (!layout.length) {
+      return {
+        width: template.definition?.nodes?.length ? template.definition.nodes.length * NEW_NODE_WIDTH : NEW_NODE_WIDTH,
+        height: NEW_NODE_HEIGHT,
+      }
+    }
+    const minX = Math.min(...layout.map((entry) => entry.x))
+    const minY = Math.min(...layout.map((entry) => entry.y))
+    const maxRight = Math.max(...layout.map((entry) => entry.x + entry.w))
+    const maxBottom = Math.max(...layout.map((entry) => entry.y + entry.h))
+    return {
+      width: Math.max(maxRight - minX, NEW_NODE_WIDTH),
+      height: Math.max(maxBottom - minY, NEW_NODE_HEIGHT),
+    }
+  }
+
+  function placementSizeForEntry(entry: PaletteEntry): { width: number; height: number } {
+    if (entry.kind === 'organizer') {
+      return { width: ORGANIZER_NODE_WIDTH, height: ORGANIZER_NODE_HEIGHT }
+    }
+    if (entry.kind === 'area') {
+      return { width: AREA_NODE_WIDTH, height: AREA_NODE_HEIGHT }
+    }
+    if (entry.kind === 'pipeline') {
+      const template = pipelineTemplateByEntry(entry)
+      return template ? pipelinePlacementSize(template) : { width: NEW_NODE_WIDTH, height: NEW_NODE_HEIGHT }
+    }
+    return { width: NEW_NODE_WIDTH, height: NEW_NODE_HEIGHT }
+  }
+
+  function placementRectFromCenter(center: { x: number; y: number }, size: { width: number; height: number }): PlacementRect {
+    return {
+      left: center.x - size.width / 2,
+      top: center.y - size.height / 2,
+      right: center.x + size.width / 2,
+      bottom: center.y + size.height / 2,
+    }
+  }
+
+  function placementRectForLayout(layout: LayoutRecord): PlacementRect {
+    return {
+      left: layout.x - PLACEMENT_PADDING,
+      top: layout.y - PLACEMENT_PADDING,
+      right: layout.x + layout.w + PLACEMENT_PADDING,
+      bottom: layout.y + layout.h + PLACEMENT_PADDING,
+    }
+  }
+
+  function placementRectsIntersect(left: PlacementRect, right: PlacementRect): boolean {
+    return left.left < right.right
+      && left.right > right.left
+      && left.top < right.bottom
+      && left.bottom > right.top
+  }
+
+  function placementRingOffsets(ring: number): Array<{ dx: number; dy: number }> {
+    if (ring === 0) {
+      return [{ dx: 0, dy: 0 }]
+    }
+    const offsets: Array<{ dx: number; dy: number }> = []
+    const seen = new Set<string>()
+    const push = (dx: number, dy: number) => {
+      const key = `${dx}:${dy}`
+      if (seen.has(key)) {
+        return
+      }
+      seen.add(key)
+      offsets.push({ dx, dy })
+    }
+    push(ring, 0)
+    for (let dy = 1; dy <= ring; dy += 1) {
+      push(ring, dy)
+    }
+    for (let dx = ring - 1; dx >= -ring; dx -= 1) {
+      push(dx, ring)
+    }
+    for (let dy = ring - 1; dy >= -ring; dy -= 1) {
+      push(-ring, dy)
+    }
+    for (let dx = -ring + 1; dx <= ring; dx += 1) {
+      push(dx, -ring)
+    }
+    for (let dy = -ring + 1; dy < 0; dy += 1) {
+      push(ring, dy)
+    }
+    return offsets
+  }
+
+  function preferredPlacementAnchor(size: { width: number; height: number }): { x: number; y: number } {
+    if (liveSnapshot && selectedNodeIds.length === 1) {
+      const selectedNodeId = selectedNodeIds[0]
+      const selectedNode = liveSnapshot.graph.nodes.find((node) => node.id === selectedNodeId)
+      const selectedLayout = liveSnapshot.graph.layout.find((entry) => entry.node_id === selectedNodeId)
+      if (selectedNode && selectedNode.kind !== 'area' && selectedLayout) {
+        return {
+          x: snapToGrid(selectedLayout.x + selectedLayout.w + PLACEMENT_PADDING + size.width / 2),
+          y: snapToGrid(selectedLayout.y + selectedLayout.h / 2),
+        }
+      }
+    }
+    if (paletteViewport) {
+      return {
+        x: snapToGrid(paletteViewport.center.x),
+        y: snapToGrid(paletteViewport.center.y),
+      }
+    }
+    return {
+      x: 120 + ((liveSnapshot?.graph.nodes.length ?? 0) % 4) * 420,
+      y: 120 + Math.floor((liveSnapshot?.graph.nodes.length ?? 0) / 4) * 280,
+    }
   }
 
   function pipelineTemplateNodeIds(template: TemplateRecord): string[] {
@@ -2001,21 +2159,36 @@ function App() {
     }
   }
 
-  function defaultPalettePlacement(): { x: number; y: number } {
-    if (paletteViewport) {
-      return paletteViewport.center
+  function suggestPalettePlacement(entry: PaletteEntry): { x: number; y: number } {
+    const size = placementSizeForEntry(entry)
+    const anchor = preferredPlacementAnchor(size)
+    if (!liveSnapshot) {
+      return anchor
     }
-    return {
-      x: 120 + ((liveSnapshot?.graph.nodes.length ?? 0) % 4) * 420,
-      y: 120 + Math.floor((liveSnapshot?.graph.nodes.length ?? 0) / 4) * 280,
+    const nodeById = new Map(liveSnapshot.graph.nodes.map((node) => [node.id, node]))
+    const occupied = liveSnapshot.graph.layout
+      .filter((layout) => nodeById.get(layout.node_id)?.kind !== 'area')
+      .map(placementRectForLayout)
+    for (let ring = 0; ring <= MAX_PLACEMENT_RINGS; ring += 1) {
+      for (const offset of placementRingOffsets(ring)) {
+        const candidate = {
+          x: snapToGrid(anchor.x + offset.dx * PLACEMENT_SEARCH_STEP),
+          y: snapToGrid(anchor.y + offset.dy * PLACEMENT_SEARCH_STEP),
+        }
+        const candidateRect = placementRectFromCenter(candidate, size)
+        if (!occupied.some((rect) => placementRectsIntersect(candidateRect, rect))) {
+          return candidate
+        }
+      }
     }
+    return anchor
   }
 
   async function openCreateBlockDialog(entry: PaletteEntry, placement?: { x: number; y: number }) {
     if (!liveSnapshot) {
       return
     }
-    const defaultPlacement = defaultPalettePlacement()
+    const defaultPlacement = suggestPalettePlacement(entry)
     const x = placement?.x ?? defaultPlacement.x
     const y = placement?.y ?? defaultPlacement.y
     if (entry.kind === 'pipeline') {
@@ -2109,10 +2282,9 @@ function App() {
     if (entry.kind === 'empty') {
       await handleCreateNode(
         {
-          type: 'template',
+          type: 'empty',
           nodeId: payload.nodeId,
           title: payload.title,
-          templateRef: 'builtin/empty_notebook',
         },
         { x, y },
       )
@@ -2162,7 +2334,7 @@ function App() {
     )
     const response = await runNode(payload.nodeId, 'run_stale', 'use_stale')
     if (response.status === 'failed') {
-      reportClientError(`run:${payload.nodeId}:run_stale`, 'run_failed', runFailureMessage(response, 'Run failed.'), { nodeId: payload.nodeId, details: response })
+      reportClientError(`run:${payload.nodeId}:run_stale`, 'run_failed', formatRunFailureMessage(liveSnapshot, response, 'Run failed.'), { nodeId: payload.nodeId, details: response })
     }
     await refreshSnapshot()
   }
@@ -2187,7 +2359,13 @@ function App() {
         } satisfies GraphPatchOperation,
       ],
     }
-    await mutateGraph(redo.operations, { history: liveSnapshot ? simpleHistoryEntryForPlan(liveSnapshot, redo) : null })
+    const success = await mutateGraph(redo.operations, {
+      history: liveSnapshot ? simpleHistoryEntryForPlan(liveSnapshot, redo) : null,
+      onSuccess: () => selectCreatedNodes([payload.nodeId]),
+    })
+    if (!success) {
+      return
+    }
     if (payload.file) {
       await handleUploadFile(payload.nodeId, payload.file)
     }
@@ -2241,7 +2419,12 @@ function App() {
       let response = initialResponse
       if (initialResponse.requires_confirmation) {
         if (mode === 'edit_run') {
-          reportClientError(`run:${nodeId}:${mode}`, 'run_failed', 'Edit runs do not support upstream refresh confirmation.', { nodeId })
+          reportClientError(
+            `run:${nodeId}:${mode}`,
+            'run_failed',
+            `Edit runs do not support upstream refresh confirmation for ${nodeLabel(nodeId)}.`,
+            { nodeId },
+          )
           return
         }
         setConfirmationState({
@@ -2258,13 +2441,13 @@ function App() {
         launchEditorTab(response.session_id, nodeId)
       } else if (response.status === 'failed') {
         if (!isManagedRunFailure(response)) {
-          reportClientError(`run:${nodeId}:${mode}`, 'run_failed', runFailureMessage(response, 'Run failed.'), { nodeId, details: response })
+          reportClientError(`run:${nodeId}:${mode}`, 'run_failed', formatRunFailureMessage(liveSnapshot, response, 'Run failed.'), { nodeId, details: response })
         }
       } else if (response.status === 'blocked') {
         reportClientWarning(
           `run-blocked:${nodeId}:${mode}`,
           'run_blocked',
-          'This run is blocked by missing or pending inputs.',
+          formatRunBlockedMessage(liveSnapshot, nodeId, response),
           { nodeId, details: response },
         )
       }
@@ -2277,7 +2460,7 @@ function App() {
         reportClientWarning(
           `editor-open:${nodeId}`,
           'editor_already_open',
-          'An editor is open for this notebook.',
+          `An editor is already open for ${nodeLabel(nodeId)}.`,
           {
             nodeId,
             details: session
@@ -2317,13 +2500,13 @@ function App() {
       const response = await runNode(nodeId, mode, action)
       if (response.status === 'failed') {
         if (!isManagedRunFailure(response)) {
-          reportClientError(`run:${nodeId}:${mode}`, 'run_failed', runFailureMessage(response, 'Run failed.'), { nodeId, details: response })
+          reportClientError(`run:${nodeId}:${mode}`, 'run_failed', formatRunFailureMessage(liveSnapshot, response, 'Run failed.'), { nodeId, details: response })
         }
       } else if (response.status === 'blocked') {
         reportClientWarning(
           `run-blocked:${nodeId}:${mode}`,
           'run_blocked',
-          'This run is blocked by missing or pending inputs.',
+          formatRunBlockedMessage(liveSnapshot, nodeId, response),
           { nodeId, details: response },
         )
       }
@@ -2346,7 +2529,7 @@ function App() {
       const response = await runAll()
       if (response.status === 'failed') {
         if (!isManagedRunFailure(response)) {
-          reportClientError('run-all', 'run_queue_failed', runFailureMessage(response, 'Run queue failed.'), { details: response })
+          reportClientError('run-all', 'run_queue_failed', formatRunFailureMessage(liveSnapshot, response, 'Run queue failed.'), { details: response })
         }
       }
       await refreshSnapshot()

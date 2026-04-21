@@ -5,6 +5,9 @@ app = marimo.App(width='medium', app_title='{{NODE_ID}}')
 
 with app.setup:
     import marimo as mo
+    import pandas as pd
+
+    from bulletjournal.runtime import artifacts
 
 
 @app.cell

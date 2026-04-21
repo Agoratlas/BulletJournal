@@ -338,14 +338,18 @@ class GraphService:
             template=None
             if template_ref is None or source_text is not None
             else self.project_service.template_service.template_ref(str(template_ref)),
-            ui={**({'hidden_inputs': []}), **ui} if isinstance(ui, dict) else {'hidden_inputs': []},
+            ui=dict(ui) if isinstance(ui, dict) else {},
         )
         graph.nodes.append(node)
         graph.layout.append(self._layout_entry(node_id, operation))
         source = (
             str(source_text)
             if source_text is not None
-            else template.source_text
+            else self.project_service.template_service.render_notebook_template_source(
+                template.source_text,
+                title=title,
+                node_id=node_id,
+            )
             if template is not None
             else self.project_service.template_service.empty_notebook_source(title=title, node_id=node_id)
         )
@@ -363,9 +367,9 @@ class GraphService:
                 id=node_id,
                 kind=NodeKind.FILE_INPUT,
                 title=title,
-                ui={**({'hidden_inputs': [], 'artifact_name': artifact_name}), **ui}
+                ui={**({'artifact_name': artifact_name}), **ui}
                 if isinstance(ui, dict)
-                else {'hidden_inputs': [], 'artifact_name': artifact_name},
+                else {'artifact_name': artifact_name},
             )
         )
         graph.layout.append(self._layout_entry(node_id, operation))
@@ -378,10 +382,9 @@ class GraphService:
             raise GraphValidationError(f'Node `{node_id}` already exists.')
         ui = operation.get('ui')
         resolved_ui = (
-            {**({'hidden_inputs': [], 'organizer_ports': []}), **ui}
+            {**({'organizer_ports': []}), **ui}
             if isinstance(ui, dict)
             else {
-                'hidden_inputs': [],
                 'organizer_ports': [],
             }
         )
@@ -881,7 +884,6 @@ def _coerce_area_ui(raw: Any) -> dict[str, Any]:
     if area_color not in AREA_COLOR_KEYS:
         area_color = 'blue'
     return {
-        'hidden_inputs': [],
         'frozen': bool(ui.get('frozen', False)),
         'title_position': title_position,
         'area_color': area_color,

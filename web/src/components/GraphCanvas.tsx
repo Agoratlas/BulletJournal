@@ -16,10 +16,12 @@ import ReactFlow, {
   type Connection,
   type Edge,
   type EdgeChange,
+  getViewportForBounds,
   type Node,
   type NodeDragHandler,
   type OnConnectStartParams,
   type NodeProps,
+  type Viewport,
   useReactFlow,
 } from 'reactflow'
 
@@ -66,6 +68,10 @@ type GraphCanvasProps = {
 }
 
 const NON_RUNNABLE_NODE_KINDS = new Set(['file_input', 'organizer', 'area'])
+const GRAPH_MIN_ZOOM = 0.18
+const GRAPH_MAX_ZOOM = 1.35
+const GRAPH_DEFAULT_ZOOM = 0.78
+const GRAPH_FIT_PADDING = 0.12
 
 function validationIssuesForNode(snapshot: ProjectSnapshot, nodeId: string) {
   return snapshot.validation_issues.filter((issue) => issue.node_id === nodeId)
@@ -451,6 +457,7 @@ const BulletJournalNodeCard = memo(({ data, selected }: NodeProps<BulletJournalN
   }, [menuOpen])
 
   const shouldShowExecutionTimer = Boolean(executionMeta) && (isExecutionActive || executionMeta?.status === 'succeeded')
+  const shouldShowExecutionProgress = !hasActiveEditor && Boolean(executionMeta)
   const approxServerNowMs = serverNowMs + (now - data.serverNowClientAnchorMs)
   const totalCells = executionMeta?.total_cells ?? null
   const runningCellNumber = executionMeta?.current_cell?.cell_number ?? null
@@ -587,22 +594,24 @@ const BulletJournalNodeCard = memo(({ data, selected }: NodeProps<BulletJournalN
         {node.ui?.frozen ? <div className="rf-node-freeze-pill">Frozen</div> : null}
         {hasBlockingValidationIssues ? <div className="rf-node-issue-pill" title={validationSummary}>{blockingValidationIssues.length} error{blockingValidationIssues.length === 1 ? '' : 's'}</div> : null}
         {executionTimerLabel ? <div className={`rf-node-timer ${isExecutionActive ? 'running' : 'complete'}`} title={isExecutionActive ? 'Current orchestrated run time' : 'Most recent orchestrated run time'}>{executionTimerLabel}</div> : null}
-      </div>
-      <div className="rf-node-progress-track" aria-hidden="true">
-        <div
-          className="rf-node-progress"
-          style={{
-            width: `${completedProgressPercent}%`,
-          }}
-        />
-        {isExecutionActive && runningSegmentPercent > 0 ? (
-          <div
-            className="rf-node-progress-current"
-            style={{
-              left: `${runningSegmentLeftPercent}%`,
-              width: `${runningSegmentPercent}%`,
-            }}
-          />
+        {shouldShowExecutionProgress ? (
+          <div className="rf-node-progress-track" aria-hidden="true">
+            <div
+              className="rf-node-progress"
+              style={{
+                width: `${completedProgressPercent}%`,
+              }}
+            />
+            {isExecutionActive && runningSegmentPercent > 0 ? (
+              <div
+                className="rf-node-progress-current"
+                style={{
+                  left: `${runningSegmentLeftPercent}%`,
+                  width: `${runningSegmentPercent}%`,
+                }}
+              />
+            ) : null}
+          </div>
         ) : null}
       </div>
       <div className="rf-node-body">
@@ -694,13 +703,14 @@ function isGhostHandle(handleId: string | null | undefined): boolean {
 }
 
 export function GraphCanvas({ snapshot, serverNowMs = Date.now(), serverNowClientAnchorMs = Date.now(), selectedNodeIds, selectedEdgeIds, activeRunNodeId = null, queuedRunNodeIds = [], completedRunNodeIds = [], activeEditorNodeIds = [], onConnect, onEdgesChange, onSelectionChange, onNodeSelect, onEdgeSelect, onNodeContextMenu, onSelectionContextMenu, onPortContextMenu, onEditFileNode, onEditOrganizerNode, onEditAreaNode, onOpenEditor, onKillEditor, onRunNode, onOpenArtifacts, onCanvasInteract, onCanvasClear, onNodeMove, onNodeResize, onNodesDelete, draggedBlock, onBlockDrop, onViewportChange }: GraphCanvasProps) {
-  const { screenToFlowPosition } = useReactFlow()
+  const { screenToFlowPosition, setViewport } = useReactFlow()
   const store = useStoreApi()
   const updateNodeInternals = useUpdateNodeInternals()
   const shellRef = useRef<HTMLDivElement | null>(null)
   const pendingLayoutRef = useRef<Record<string, { x: number; y: number; w?: number; h?: number }>>({})
   const selectionStateRef = useRef<{ additive: boolean; baseNodeIds: string[]; baseEdgeIds: string[] } | null>(null)
   const suppressNativeSelectionRef = useRef(false)
+  const initializedViewportProjectIdRef = useRef<string | null>(null)
   const [pointerFlowPosition, setPointerFlowPosition] = useState<{ x: number; y: number } | null>(null)
   const userSelectionRect = useStore((state: FlowSelectionState) => state.userSelectionRect)
   const transform = useStore((state: FlowSelectionState) => state.transform)
@@ -800,6 +810,68 @@ export function GraphCanvas({ snapshot, serverNowMs = Date.now(), serverNowClien
       return Object.keys(next).length === Object.keys(current).length ? current : next
     })
   }, [snapshot.graph.nodes])
+
+  useLayoutEffect(() => {
+    if (!shellRef.current) {
+      return
+    }
+    if (initializedViewportProjectIdRef.current === snapshot.project.project_id) {
+      return
+    }
+    const shell = shellRef.current
+    const frame = window.requestAnimationFrame(() => {
+      const rect = shell.getBoundingClientRect()
+      if (!rect.width || !rect.height) {
+        return
+      }
+      if (!snapshot.graph.nodes.length) {
+        const emptyViewport: Viewport = { x: 0, y: 0, zoom: GRAPH_DEFAULT_ZOOM }
+        initializedViewportProjectIdRef.current = snapshot.project.project_id
+        void setViewport(emptyViewport)
+        return
+      }
+
+      const layoutByNodeId = new Map(snapshot.graph.layout.map((entry) => [entry.node_id, entry]))
+      let minX = Number.POSITIVE_INFINITY
+      let minY = Number.POSITIVE_INFINITY
+      let maxX = Number.NEGATIVE_INFINITY
+      let maxY = Number.NEGATIVE_INFINITY
+
+      for (const node of snapshot.graph.nodes) {
+        const layout = layoutByNodeId.get(node.id)
+        const width = nodeDimensions[node.id]?.width ?? layout?.w ?? 360
+        const height = nodeDimensions[node.id]?.height ?? layout?.h ?? 220
+        const x = layout?.x ?? 80
+        const y = layout?.y ?? 80
+        minX = Math.min(minX, x)
+        minY = Math.min(minY, y)
+        maxX = Math.max(maxX, x + width)
+        maxY = Math.max(maxY, y + height)
+      }
+
+      if (!Number.isFinite(minX) || !Number.isFinite(minY) || !Number.isFinite(maxX) || !Number.isFinite(maxY)) {
+        return
+      }
+
+      initializedViewportProjectIdRef.current = snapshot.project.project_id
+      void setViewport(
+        getViewportForBounds(
+          {
+            x: minX,
+            y: minY,
+            width: Math.max(maxX - minX, 1),
+            height: Math.max(maxY - minY, 1),
+          },
+          rect.width,
+          rect.height,
+          GRAPH_MIN_ZOOM,
+          GRAPH_DEFAULT_ZOOM,
+          GRAPH_FIT_PADDING,
+        ),
+      )
+    })
+    return () => window.cancelAnimationFrame(frame)
+  }, [nodeDimensions, setViewport, snapshot.graph.layout, snapshot.graph.nodes, snapshot.project.project_id])
 
   useLayoutEffect(() => {
     const nextSignatureById = Object.fromEntries(
@@ -976,9 +1048,9 @@ export function GraphCanvas({ snapshot, serverNowMs = Date.now(), serverNowClien
         nodes={nodes}
         edges={edges}
         nodeTypes={nodeTypes}
-        minZoom={0.18}
-        maxZoom={1.35}
-        defaultViewport={{ x: 0, y: 0, zoom: 1 }}
+        minZoom={GRAPH_MIN_ZOOM}
+        maxZoom={GRAPH_MAX_ZOOM}
+        defaultViewport={{ x: 0, y: 0, zoom: GRAPH_DEFAULT_ZOOM }}
         zoomOnDoubleClick={false}
         connectionMode={ConnectionMode.Strict}
         connectionRadius={26}

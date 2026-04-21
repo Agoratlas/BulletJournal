@@ -66,6 +66,28 @@ def test_runtime_context_resolves_optional_missing_file_input(tmp_path) -> None:
     assert metadata['warnings'] == []
 
 
+def test_runtime_context_missing_binding_error_includes_guidance(tmp_path) -> None:
+    project_root = init_project_root(tmp_path / 'project').root
+    context = RuntimeContext(
+        project_root=project_root,
+        node_id='consumer',
+        run_id='run-missing-binding',
+        source_hash='source-hash',
+        lineage_mode=LineageMode.MANAGED,
+        bindings={
+            'incoming': Binding(
+                source_node='',
+                source_artifact='',
+                data_type='int',
+            )
+        },
+        outputs={},
+    )
+
+    with pytest.raises(FileNotFoundError, match='Please ensure you have connected an input or set a default value'):
+        context.resolve_pull('incoming')
+
+
 def test_runtime_context_resolves_stale_upstream_with_warning_and_hashes(tmp_path) -> None:
     project_root = init_project_root(tmp_path / 'project').root
     context = RuntimeContext(
@@ -439,7 +461,7 @@ def _():
         encoding='utf-8',
     )
     (graph_dir / 'nodes.json').write_text(
-        '[\n  {"id": "producer", "kind": "notebook", "title": "Producer", "path": "notebooks/producer.py", "template": null, "ui": {"hidden_inputs": []}},\n  {"id": "consumer", "kind": "notebook", "title": "Consumer", "path": "notebooks/consumer.py", "template": null, "ui": {"hidden_inputs": []}}\n]\n',
+        '[\n  {"id": "producer", "kind": "notebook", "title": "Producer", "path": "notebooks/producer.py", "template": null, "ui": {}},\n  {"id": "consumer", "kind": "notebook", "title": "Consumer", "path": "notebooks/consumer.py", "template": null, "ui": {}}\n]\n',
         encoding='utf-8',
     )
     (graph_dir / 'edges.json').write_text(

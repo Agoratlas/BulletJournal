@@ -1110,8 +1110,97 @@ if __name__ == '__main__':
     snapshot = client.get('/api/v1/project/snapshot').json()
     notice = next(notice for notice in snapshot['notices'] if notice['code'] == 'run_failed')
     assert notice['node_id'] == 'broken_node'
+    assert 'Broken Node (broken_node)' in notice['message']
     assert notice['details']['node_id'] == 'broken_node'
     assert 'Traceback' in notice['details']['traceback']
+
+
+def test_orchestrated_failure_marks_only_failing_node_as_error(tmp_path) -> None:
+    project_root = init_project_root(tmp_path / 'project').root
+    app = create_app(project_path=project_root)
+    client = TestClient(app)
+
+    consumer_source = (
+        """
+import marimo
+
+app = marimo.App()
+
+with app.setup:
+    from bulletjournal.runtime import artifacts
+
+
+@app.cell
+def _():
+    sample_count = artifacts.pull(name='sample_count', data_type=int)
+    raise RuntimeError(f'boom: {sample_count}')
+
+
+if __name__ == '__main__':
+    from bulletjournal.runtime.standalone import run_notebook_app
+
+    run_notebook_app(app, __file__)
+""".strip()
+        + '\n'
+    )
+
+    opened = client.get('/api/v1/project/snapshot')
+    graph_version = opened.json()['graph']['meta']['graph_version']
+
+    patch = client.patch(
+        '/api/v1/graph',
+        json={
+            'graph_version': graph_version,
+            'operations': [
+                {
+                    'type': 'add_notebook_node',
+                    'node_id': 'value_source',
+                    'title': 'Value Source',
+                    'template_ref': 'builtin/value_input',
+                },
+                {
+                    'type': 'add_notebook_node',
+                    'node_id': 'broken_consumer',
+                    'title': 'Broken Consumer',
+                    'source_text': consumer_source,
+                    'x': 520,
+                    'y': 80,
+                },
+            ],
+        },
+    )
+    assert patch.status_code == 200
+
+    connect = client.patch(
+        '/api/v1/graph',
+        json={
+            'graph_version': patch.json()['meta']['graph_version'],
+            'operations': [
+                {
+                    'type': 'add_edge',
+                    'source_node': 'value_source',
+                    'source_port': 'value',
+                    'target_node': 'broken_consumer',
+                    'target_port': 'sample_count',
+                },
+            ],
+        },
+    )
+    assert connect.status_code == 200
+
+    run = client.post(
+        '/api/v1/nodes/broken_consumer/run',
+        json={'mode': 'run_stale', 'action': 'run_upstream'},
+    )
+    assert run.status_code == 200
+    assert run.json()['status'] == 'failed'
+
+    snapshot = client.get('/api/v1/project/snapshot').json()
+    producer = next(node for node in snapshot['graph']['nodes'] if node['id'] == 'value_source')
+    consumer = next(node for node in snapshot['graph']['nodes'] if node['id'] == 'broken_consumer')
+
+    assert producer['state'] == 'ready'
+    assert consumer['state'] == 'error'
 
 
 def test_run_all_is_blocked_by_pending_file_input(tmp_path) -> None:
@@ -1457,6 +1546,105 @@ def test_hidden_input_updates_are_not_supported(tmp_path) -> None:
         },
     )
     assert hidden_input_update.status_code == 422
+
+
+def test_recreating_deleted_node_id_clears_execution_metadata(tmp_path) -> None:
+    project_root = init_project_root(tmp_path / 'project').root
+    app = create_app(project_path=project_root)
+    client = TestClient(app)
+    container = app.state.container
+
+    opened = client.get('/api/v1/project/snapshot')
+    graph_version = opened.json()['graph']['meta']['graph_version']
+
+    patch = client.patch(
+        '/api/v1/graph',
+        json={
+            'graph_version': graph_version,
+            'operations': [
+                {
+                    'type': 'add_notebook_node',
+                    'node_id': 'sample_node',
+                    'title': 'Sample Node',
+                }
+            ],
+        },
+    )
+    assert patch.status_code == 200
+
+    container.project_service.require_project().state_db.upsert_orchestrator_execution_meta(
+        node_id='sample_node',
+        run_id='run-1',
+        status='running',
+        started_at='2026-03-26T00:00:00Z',
+        current_cell={'cell_id': 'cell-1', 'cell_number': 2, 'total_cells': 5, 'cell_code': 'x = 1'},
+        total_cells=5,
+        last_completed_cell_number=1,
+    )
+
+    deleted = client.patch(
+        '/api/v1/graph',
+        json={
+            'graph_version': patch.json()['meta']['graph_version'],
+            'operations': [
+                {
+                    'type': 'delete_node',
+                    'node_id': 'sample_node',
+                }
+            ],
+        },
+    )
+    assert deleted.status_code == 200
+
+    recreated = client.patch(
+        '/api/v1/graph',
+        json={
+            'graph_version': deleted.json()['meta']['graph_version'],
+            'operations': [
+                {
+                    'type': 'add_notebook_node',
+                    'node_id': 'sample_node',
+                    'title': 'Sample Node',
+                }
+            ],
+        },
+    )
+    assert recreated.status_code == 200
+
+    snapshot = client.get('/api/v1/project/snapshot')
+    assert snapshot.status_code == 200
+    node = next(node for node in snapshot.json()['graph']['nodes'] if node['id'] == 'sample_node')
+    assert node['execution_meta'] is None
+    assert node['orchestrator_state'] is None
+
+
+def test_template_backed_node_renders_node_id_in_notebook_source(tmp_path) -> None:
+    project_root = init_project_root(tmp_path / 'project').root
+    app = create_app(project_path=project_root)
+    client = TestClient(app)
+
+    opened = client.get('/api/v1/project/snapshot')
+    graph_version = opened.json()['graph']['meta']['graph_version']
+
+    patch = client.patch(
+        '/api/v1/graph',
+        json={
+            'graph_version': graph_version,
+            'operations': [
+                {
+                    'type': 'add_notebook_node',
+                    'node_id': 'starter_node',
+                    'title': 'Starter Node',
+                    'template_ref': 'builtin/test_starter_notebook',
+                }
+            ],
+        },
+    )
+
+    assert patch.status_code == 200
+    notebook_source = (project_root / 'notebooks' / 'starter_node.py').read_text(encoding='utf-8')
+    assert "app_title='starter_node'" in notebook_source
+    assert '{{NODE_ID}}' not in notebook_source
 
 
 def test_edit_run_url_authenticates_marimo_session(tmp_path) -> None:

@@ -49,6 +49,42 @@ def test_node_detail_endpoint_available_at_project_nodes_path(tmp_path) -> None:
     assert detail.json()['id'] == 'sample_node'
 
 
+def test_new_notebook_is_custom_and_uses_empty_template_source(tmp_path) -> None:
+    project_root = init_project_root(tmp_path / 'project').root
+    app = create_app(project_path=project_root)
+    client = TestClient(app)
+
+    opened = client.get('/api/v1/project/snapshot')
+    graph_version = opened.json()['graph']['meta']['graph_version']
+
+    patched = client.patch(
+        '/api/v1/graph',
+        json={
+            'graph_version': graph_version,
+            'operations': [
+                {
+                    'type': 'add_notebook_node',
+                    'node_id': 'custom_node',
+                    'title': 'Custom Node',
+                }
+            ],
+        },
+    )
+    assert patched.status_code == 200
+
+    snapshot = client.get('/api/v1/project/snapshot').json()
+    node = next(item for item in snapshot['graph']['nodes'] if item['id'] == 'custom_node')
+
+    assert node['template'] is None
+
+    notebook = client.get('/api/v1/nodes/custom_node/notebook/download')
+    assert notebook.status_code == 200
+    source = notebook.text
+    assert 'from bulletjournal.runtime import artifacts' in source
+    assert 'import marimo as mo' in source
+    assert 'import pandas as pd' in source
+
+
 def test_graph_patch_rejects_unknown_operation_fields(tmp_path) -> None:
     project_root = init_project_root(tmp_path / 'project').root
     app = create_app(project_path=project_root)

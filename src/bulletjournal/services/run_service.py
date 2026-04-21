@@ -517,6 +517,12 @@ class RunService:
     def _record_run_failure_notice(self, *, run_id: str, result: dict[str, Any]) -> None:
         node_id = str(result.get('node_id') or 'project')
         error = str(result.get('error') or 'Run failed.')
+        message = error
+        if node_id != 'project':
+            graph = self.project_service.graph()
+            failed_node = next((node for node in graph.nodes if node.id == node_id), None)
+            if failed_node is not None:
+                message = f'Run failed in {failed_node.title} ({failed_node.id}). {error}'
         details = {
             'run_id': run_id,
             **result,
@@ -525,7 +531,7 @@ class RunService:
             node_id=node_id,
             severity=ValidationSeverity.ERROR,
             code='run_failed',
-            message=error,
+            message=message,
             details=details,
         )
         self.project_service.record_notice(
@@ -533,7 +539,7 @@ class RunService:
             node_id=None if node_id == 'project' else node_id,
             severity=ValidationSeverity.ERROR,
             code='run_failed',
-            message=error,
+            message=message,
             details=details,
         )
 

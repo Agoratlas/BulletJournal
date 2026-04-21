@@ -1,22 +1,13 @@
 # BulletJournal
 
-BulletJournal is a single-project notebook orchestration platform for reproducible data science.
+BulletJournal is a notebook orchestration platform for reproducible data science.
 It layers explicit artifact passing, persistent graph state, stale detection, checkpoints,
-and managed execution on top of Marimo notebooks, and it can run standalone or behind
-`BulletJournal-Controller`.
+and managed execution on top of Marimo notebooks.
+
+For multi-project orchestration with separated environments through Docker containers, see
+[BulletJournal-Controller](https://github.com/Agoratlas/BulletJournal-Controller).
 
 **DISCLAIMER**: This project is part of an experiment to evaluate the potential of AI tooling for software engineering. Most of the code in this repo was produced by an LLM and may not offer the same security or robustness as human-written code. Please don't deploy it in a critical production environment without isolation, especially given that the project was made to run user-provided Python code.
-
-## What the MVP includes
-
-- FastAPI backend with REST + SSE updates
-- Project format rooted in `graph/`, `notebooks/`, `artifacts/`, `metadata/`, `checkpoints/`, `pyproject.toml`, and `uv.lock`
-- Strict AST parsing for notebook inputs, outputs, assets, and notebook docs
-- Managed notebook execution in subprocesses with persisted artifact lineage and stale propagation
-- File input nodes plus built-in and provider-discovered notebook and pipeline templates
-- Checkpoint create/list/restore flows
-- Zip import and export flows
-- A bundled ReactFlow-based web UI for browsing projects, nodes, artifacts, issues, and events
 
 ## Requirements
 
@@ -32,7 +23,6 @@ bulletjournal start testproject --open
 ```
 
 If you are already inside a project root, running `bulletjournal` with no subcommand starts the app.
-When `--project-id` is omitted, BulletJournal derives it from the target directory name.
 
 ## Common commands
 
@@ -98,19 +88,3 @@ PYTHONPATH=src python -m pytest
 ```bash
 pre-commit install
 ```
-
-## Status
-
-This repository now contains a functional MVP with tested core flows for:
-
-- single-project startup
-- interface parsing
-- graph persistence and validation
-- managed notebook runs
-- artifact state transitions
-- checkpoints and restore
-- controller-facing status and environment invalidation hooks
-- zip import/export
-- SSE event streaming and API-driven UI updates
-
-Known MVP constraints remain around deployment hardening and background execution semantics, but the repository is no longer just a skeleton.

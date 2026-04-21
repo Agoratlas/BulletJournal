@@ -190,6 +190,43 @@ def test_create_app_downloads_execution_logs(monkeypatch, tmp_path: Path) -> Non
     assert 'run-1_node_a.stdout.log' in response.headers['content-disposition']
 
 
+def test_create_app_reports_verbose_execution_log_errors(monkeypatch, tmp_path: Path) -> None:
+    web_root = tmp_path / 'web'
+    web_root.mkdir()
+    project_root = init_project_root(tmp_path / 'project').root
+    app, _ = _make_app(monkeypatch, web_root, project_path=project_root)
+
+    with TestClient(app) as client:
+        bad_stream = client.get('/api/v1/nodes/node_a/execution-logs/log/download')
+        missing_meta = client.get('/api/v1/nodes/node_a/execution-logs/stdout/download')
+
+    assert bad_stream.status_code == 404
+    assert bad_stream.json()['detail'] == 'Unknown execution log stream `log`. Expected `stdout` or `stderr`.'
+    assert missing_meta.status_code == 404
+    assert missing_meta.json()['detail'] == 'No execution metadata found for node `node_a`.'
+
+
+def test_create_app_reports_missing_execution_log_with_node_and_stream(monkeypatch, tmp_path: Path) -> None:
+    web_root = tmp_path / 'web'
+    web_root.mkdir()
+    project_root = init_project_root(tmp_path / 'project').root
+    app, _ = _make_app(monkeypatch, web_root, project_path=project_root)
+
+    with TestClient(app) as client:
+        project_paths = require_project_root(project_root)
+        state_db = StateDB(project_paths.state_db_path)
+        state_db.upsert_orchestrator_execution_meta(
+            node_id='node_a',
+            run_id='run-1',
+            status='succeeded',
+            started_at='2026-03-26T00:00:00Z',
+        )
+        response = client.get('/api/v1/nodes/node_a/execution-logs/stderr/download')
+
+    assert response.status_code == 404
+    assert response.json()['detail'] == 'No `stderr` execution log found for node `node_a`.'
+
+
 def test_create_app_redirects_to_dev_frontend(monkeypatch, tmp_path: Path) -> None:
     web_root = tmp_path / 'web'
     web_root.mkdir()

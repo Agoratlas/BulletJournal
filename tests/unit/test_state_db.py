@@ -150,17 +150,30 @@ def test_state_db_delete_node_state_removes_all_visible_node_records(tmp_path) -
         lineage_mode=LineageMode.MANAGED,
         warnings=[],
     )
+    db.upsert_orchestrator_execution_meta(
+        node_id='node_a',
+        run_id='run-1',
+        status='succeeded',
+        started_at='2026-03-26T00:00:00Z',
+        ended_at='2026-03-26T00:00:05Z',
+        duration_seconds=5.0,
+        current_cell=None,
+        total_cells=3,
+        last_completed_cell_number=3,
+    )
 
     assert 'node_a' in db.list_state_node_ids()
     assert db.latest_interface_json('node_a') is not None
     assert any(issue['node_id'] == 'node_a' for issue in db.list_validation_issues())
     assert any(head['node_id'] == 'node_a' for head in db.list_artifact_heads())
+    assert 'node_a' in db.list_orchestrator_execution_meta()
 
     db.delete_node_state('node_a')
 
     assert db.latest_interface_json('node_a') is None
     assert all(issue['node_id'] != 'node_a' for issue in db.list_validation_issues())
     assert all(head['node_id'] != 'node_a' for head in db.list_artifact_heads())
+    assert 'node_a' not in db.list_orchestrator_execution_meta()
     assert 'node_a' not in db.list_state_node_ids()
 
 

@@ -27,7 +27,7 @@ def _append_sample_node(project_service: ProjectService) -> None:
             title='Sample Node',
             path='notebooks/sample_node.py',
             template=None,
-            ui={'hidden_inputs': []},
+            ui={},
         )
     )
     project_service.write_graph(graph)

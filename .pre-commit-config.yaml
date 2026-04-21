@@ -3,5 +3,10 @@ repos:
     rev: v0.11.13
     hooks:
       - id: ruff-check
+        exclude: ^src/bulletjournal/templates/(builtin|examples/notebooks)/.*\.py$
         args: [--fix]
+      - id: ruff-check
+        name: ruff-check-templates
+        files: ^src/bulletjournal/templates/(builtin|examples/notebooks)/.*\.py$
+        args: [--fix, --ignore, F401]
       - id: ruff-format
