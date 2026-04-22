@@ -5,6 +5,7 @@ import io
 import json
 import mimetypes
 import pickle
+from datetime import date, datetime, time
 from pathlib import Path
 from typing import Any
 
@@ -102,10 +103,29 @@ def _dataframe_preview(frame: pd.DataFrame) -> dict[str, Any]:
         'rows': int(frame.shape[0]),
         'columns': int(frame.shape[1]),
         'column_names': list(map(str, frame.columns[:MAX_PREVIEW_COLS])),
-        'sample': sample.astype(object).where(sample.notna(), None).to_dict(orient='records'),
+        'sample': _json_safe_preview_value(sample.astype(object).where(sample.notna(), None).to_dict(orient='records')),
     }
 
 
 def _series_preview(series: pd.Series) -> dict[str, Any]:
     sample = series.iloc[:MAX_PREVIEW_ROWS].tolist()
-    return {'kind': 'series', 'rows': int(series.shape[0]), 'sample': sample}
+    return {'kind': 'series', 'rows': int(series.shape[0]), 'sample': _json_safe_preview_value(sample)}
+
+
+def _json_safe_preview_value(value: Any) -> Any:
+    if value is None or isinstance(value, str | int | float | bool):
+        return value
+    if isinstance(value, pd.Timestamp | datetime | date | time):
+        return value.isoformat()
+    if isinstance(value, pd.Timedelta):
+        return str(value)
+    if isinstance(value, dict):
+        return {str(key): _json_safe_preview_value(item) for key, item in value.items()}
+    if isinstance(value, list | tuple):
+        return [_json_safe_preview_value(item) for item in value]
+    item = getattr(value, 'item', None)
+    if callable(item):
+        normalized = item()
+        if normalized is not value:
+            return _json_safe_preview_value(normalized)
+    return repr(value)

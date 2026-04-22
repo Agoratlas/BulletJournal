@@ -25,6 +25,7 @@ class TemplateSource:
     ref: str
     provider: str
     name: str
+    documentation: str | None
     source_text: str
     source_hash: str
     origin_revision: str
@@ -36,7 +37,7 @@ class PipelineTemplateSource:
     provider: str
     name: str
     title: str
-    description: str | None
+    documentation: str | None
     source_text: str
     source_hash: str
     definition: dict[str, Any]
@@ -67,6 +68,7 @@ class TemplateService:
             ref=asset.ref,
             provider=asset.provider,
             name=asset.name,
+            documentation=asset.documentation,
             source_text=source_text,
             source_hash=normalized_source_hash_text(source_text),
             origin_revision=asset.origin_revision,
@@ -80,13 +82,13 @@ class TemplateService:
         except (json.JSONDecodeError, ValueError) as exc:
             raise ValueError(f'Invalid pipeline template `{ref}`: {exc}.') from exc
         title = asset.title or str(definition.get('title') or Path(asset.name).stem.replace('_', ' ').title())
-        description = asset.description if asset.description is not None else definition.get('description')
+        documentation = asset.documentation if asset.documentation is not None else definition.get('documentation')
         return PipelineTemplateSource(
             ref=asset.ref,
             provider=asset.provider,
             name=asset.name,
             title=title,
-            description=str(description) if isinstance(description, str) and description.strip() else None,
+            documentation=str(documentation) if isinstance(documentation, str) and documentation.strip() else None,
             source_text=source_text,
             source_hash=normalized_source_hash_text(source_text),
             definition=definition,
@@ -151,7 +153,7 @@ class TemplateService:
                     'origin_revision': asset.origin_revision,
                     'hidden': asset.hidden,
                     'title': asset.title or Path(asset.name).stem.replace('_', ' ').title(),
-                    'description': asset.description if asset.description is not None else asset.name,
+                    'documentation': asset.documentation,
                     'source': asset.provider,
                     'source_text': source_text,
                     'source_hash': normalized_source_hash_text(source_text),
@@ -178,7 +180,7 @@ class TemplateService:
                     'origin_revision': asset.origin_revision,
                     'hidden': False,
                     'title': resolved.title,
-                    'description': resolved.description or asset.name,
+                    'documentation': resolved.documentation,
                     'source': asset.provider,
                     'source_text': resolved.source_text,
                     'source_hash': resolved.source_hash,
@@ -252,7 +254,7 @@ class TemplateService:
             raw_asset.get('origin_revision') or getattr(provider, 'provider_revision', '') or ''
         ).strip()
         title = raw_asset.get('title')
-        description = raw_asset.get('description')
+        documentation = raw_asset.get('documentation')
         hidden = bool(raw_asset.get('hidden', False))
         aliases = raw_asset.get('aliases')
         notebook_loader = cast(Callable[[str], str] | None, getattr(provider, 'load_notebook_template', None))
@@ -281,7 +283,7 @@ class TemplateService:
             origin_revision=origin_revision,
             hidden=hidden,
             title=str(title) if isinstance(title, str) and title.strip() else None,
-            description=str(description) if isinstance(description, str) else None,
+            documentation=str(documentation) if isinstance(documentation, str) and documentation.strip() else None,
             source_loader=source_loader,
             aliases=tuple(str(alias).strip() for alias in aliases) if isinstance(aliases, list | tuple) else (),
         )

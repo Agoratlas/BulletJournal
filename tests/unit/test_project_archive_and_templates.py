@@ -92,6 +92,7 @@ def test_project_archive_export_reraises_missing_non_sidecar(monkeypatch: pytest
 def test_template_service_discovers_external_provider(monkeypatch, tmp_path: Path) -> None:
     notebook_source = 'import marimo\napp = marimo.App()\n'
     pipeline_source = '{"title": "External Pipeline", "nodes": [], "edges": [], "layout": []}\n'
+    notebook_documentation = 'External notebook docs.\n\n- First step\n- Second step'
 
     provider = SimpleNamespace(
         list_notebook_templates=lambda: [
@@ -99,7 +100,7 @@ def test_template_service_discovers_external_provider(monkeypatch, tmp_path: Pat
                 'name': 'external_notebook',
                 'ref': 'external/external_notebook',
                 'title': 'External Notebook',
-                'description': 'External provider notebook',
+                'documentation': notebook_documentation,
                 'path': 'notebooks/external_notebook.py',
                 'hidden': False,
             }
@@ -109,7 +110,7 @@ def test_template_service_discovers_external_provider(monkeypatch, tmp_path: Pat
                 'name': 'external_pipeline',
                 'ref': 'external/external_pipeline',
                 'title': 'External Pipeline',
-                'description': 'External provider pipeline',
+                'documentation': 'External pipeline docs.',
                 'path': 'pipelines/external_pipeline.json',
                 'hidden': False,
             }
@@ -127,7 +128,9 @@ def test_template_service_discovers_external_provider(monkeypatch, tmp_path: Pat
     assert [template['ref'] for template in templates] == ['external/external_notebook', 'external/external_pipeline']
     templates_by_ref = {template['ref']: template for template in templates}
     assert templates_by_ref['external/external_notebook']['title'] == 'External Notebook'
+    assert templates_by_ref['external/external_notebook']['documentation'] == notebook_documentation
     assert templates_by_ref['external/external_pipeline']['title'] == 'External Pipeline'
+    assert templates_by_ref['external/external_pipeline']['documentation'] == 'External pipeline docs.'
 
 
 def test_template_service_marks_hidden_notebooks_but_keeps_pipelines_visible(monkeypatch, tmp_path: Path) -> None:
@@ -210,7 +213,7 @@ def test_template_service_hides_examples_when_external_provider_is_active(monkey
                 'name': 'external_notebook',
                 'ref': 'external/external_notebook',
                 'title': 'External Notebook',
-                'description': 'External provider notebook',
+                'documentation': 'External notebook docs.',
                 'path': 'notebooks/external_notebook.py',
                 'hidden': False,
             }
@@ -237,6 +240,7 @@ def test_template_service_hides_examples_when_external_provider_is_active(monkey
 def test_template_service_supports_provider_loaders_without_files(monkeypatch) -> None:
     notebook_source = 'import marimo\napp = marimo.App()\n'
     pipeline_source = '{"title": "Hidden Pipeline", "nodes": [], "edges": [], "layout": []}\n'
+    notebook_documentation = 'Helper notebook docs.'
 
     provider = SimpleNamespace(
         provider_name='agoratlas',
@@ -246,7 +250,7 @@ def test_template_service_supports_provider_loaders_without_files(monkeypatch) -
                 'name': 'private/helper',
                 'ref': 'agoratlas/private/helper',
                 'title': 'Helper',
-                'description': '',
+                'documentation': notebook_documentation,
                 'path': 'notebooks/private/_helper.py',
                 'hidden': True,
             }
@@ -256,7 +260,7 @@ def test_template_service_supports_provider_loaders_without_files(monkeypatch) -
                 'name': 'iris_pipeline',
                 'ref': 'agoratlas/iris_pipeline',
                 'title': 'Iris Pipeline',
-                'description': '',
+                'documentation': 'Pipeline docs.',
                 'path': 'pipelines/iris_pipeline.json',
                 'hidden': False,
             }
@@ -274,10 +278,14 @@ def test_template_service_supports_provider_loaders_without_files(monkeypatch) -
     listed = {template['ref']: template for template in service.list_templates()}
 
     assert notebook.source_text == notebook_source
+    assert notebook.documentation == notebook_documentation
     assert notebook.origin_revision == '0.1.0+abc123'
     assert pipeline.source_text == pipeline_source
+    assert pipeline.documentation == 'Pipeline docs.'
     assert listed['agoratlas/private/helper']['hidden'] is True
+    assert listed['agoratlas/private/helper']['documentation'] == notebook_documentation
     assert listed['agoratlas/iris_pipeline']['title'] == 'Iris Pipeline'
+    assert listed['agoratlas/iris_pipeline']['documentation'] == 'Pipeline docs.'
 
 
 def test_template_service_renders_notebook_template_placeholders() -> None:

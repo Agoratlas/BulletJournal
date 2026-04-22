@@ -35,7 +35,9 @@ Template assets should include at least:
 - `path`
 - `hidden`
 
-Optional fields such as `title`, `description`, `provider`, `origin_revision`, and `file_name` are also supported.
+Optional fields such as `title`, `documentation`, `provider`, `origin_revision`, and `file_name` are also supported.
+
+For notebook and pipeline templates, `documentation` is an optional markdown-capable string used by the Blocks panel info dialog. It should usually contain a short end-user explanation of the template, similar to the first Markdown cell in a notebook.
 
 ## Template refs
 
@@ -57,6 +59,8 @@ Examples:
 - pipeline templates expand into graph operations when instantiated
 
 Template metadata exposed by the API includes `provider`, `kind`, `name`, `ref`, `origin_revision`, and `hidden`.
+
+Template metadata also includes optional `title` and `documentation` fields.
 
 Template providers can set `hidden=True` on notebook assets returned from
 `list_notebook_templates()`.
@@ -82,7 +86,7 @@ Minimal shape:
 ```json
 {
   "title": "Example pipeline",
-  "description": "Optional description",
+  "documentation": "Optional markdown documentation",
   "nodes": [],
   "edges": [],
   "layout": []

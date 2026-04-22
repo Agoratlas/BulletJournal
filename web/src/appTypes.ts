@@ -13,9 +13,12 @@ export type PalettePreviewBlock = {
 export type PaletteEntry = {
   key: string
   title: string
-  description: string
+  description?: string
+  documentation?: string
   kind: 'empty' | 'value_input' | 'file_input' | 'organizer' | 'area' | 'template' | 'pipeline'
   templateRef?: string
+  templateName?: string
+  templateProvider?: string
   previewSize?: {
     width: number
     height: number

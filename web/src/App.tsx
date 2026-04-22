@@ -18,6 +18,7 @@ import { Info, Palette, Play, Plus } from './components/Icons'
 import { NodeInspector } from './components/NodeInspector'
 import { NoticeOverlay } from './components/NoticeOverlay'
 import { SessionLoadingScreen } from './components/SessionLoadingScreen'
+import { SimpleMarkdown } from './components/SimpleMarkdown'
 
 type ThemeMode = 'system' | 'light' | 'dark'
 
@@ -154,7 +155,7 @@ function App() {
   const [artifactNodeId, setArtifactNodeId] = useState<string | null>(null)
   const [artifactExplorerOpen, setArtifactExplorerOpen] = useState(false)
   const [artifactFilter, setArtifactFilter] = useState('')
-  const [templateRefView, setTemplateRefView] = useState<string | null>(null)
+  const [paletteInfoEntry, setPaletteInfoEntry] = useState<PaletteEntry | null>(null)
   const [showProjectInfo, setShowProjectInfo] = useState(false)
   const [showSettings, setShowSettings] = useState(false)
   const [templatesCollapsed, setTemplatesCollapsed] = useState(true)
@@ -1355,9 +1356,11 @@ function App() {
         return {
           key: `template:${template.ref}`,
           title: template.title,
-          description: template.description ?? template.ref,
+          documentation: template.documentation,
           kind: 'template',
           templateRef: template.ref,
+          templateName: template.name,
+          templateProvider: template.provider,
           previewBlocks,
           previewSize: palettePreviewSize(previewBlocks),
         }
@@ -1369,9 +1372,11 @@ function App() {
         return {
           key: `pipeline:${template.ref}`,
           title: template.title,
-          description: template.description ?? template.ref,
+          documentation: template.documentation,
           kind: 'pipeline',
           templateRef: template.ref,
+          templateName: template.name,
+          templateProvider: template.provider,
           previewBlocks,
           previewSize: palettePreviewSize(previewBlocks),
         }
@@ -1381,8 +1386,53 @@ function App() {
     if (!needle) {
       return allEntries
     }
-    return allEntries.filter((entry) => `${entry.title} ${entry.description}`.toLowerCase().includes(needle))
+    return allEntries.filter((entry) => (
+      `${entry.title} ${entry.description ?? ''} ${entry.documentation ?? ''} ${entry.templateName ?? ''} ${entry.templateProvider ?? ''}`
+    ).toLowerCase().includes(needle))
   }, [liveSnapshot, paletteSearch, showHiddenTemplates])
+
+  const groupTemplatesByProvider = useMemo(() => {
+    const providers = new Set((liveSnapshot?.templates ?? []).map((template) => template.provider))
+    return providers.size > 1
+  }, [liveSnapshot])
+
+  const paletteInfoTemplate = useMemo(() => {
+    if (!liveSnapshot || !paletteInfoEntry?.templateRef) {
+      return null
+    }
+    return templateByRef(liveSnapshot, paletteInfoEntry.templateRef)
+  }, [liveSnapshot, paletteInfoEntry])
+
+  const paletteInfoPipelineReferences = useMemo(() => {
+    if (!liveSnapshot || paletteInfoTemplate?.kind !== 'pipeline') {
+      return []
+    }
+    const refs = Array.from(new Set(
+      (paletteInfoTemplate.definition?.nodes ?? [])
+        .map((node) => (typeof node.template_ref === 'string' && node.template_ref ? node.template_ref : null))
+        .filter((ref): ref is string => ref !== null),
+    ))
+    return refs.map((ref) => {
+      const template = templateByRef(liveSnapshot, ref)
+      return {
+        ref,
+        title: template?.title ?? ref,
+      }
+    })
+  }, [liveSnapshot, paletteInfoTemplate])
+
+  function openTemplateInfo(templateRef: string) {
+    const template = liveSnapshot ? templateByRef(liveSnapshot, templateRef) : null
+    setPaletteInfoEntry({
+      key: `info:${templateRef}`,
+      title: template?.title ?? templateRef,
+      documentation: template?.documentation,
+      kind: template?.kind === 'pipeline' ? 'pipeline' : 'template',
+      templateRef,
+      templateName: template?.name,
+      templateProvider: template?.provider,
+    })
+  }
 
   function notebookNeedsInlineSource(node: NodeRecord): boolean {
     return node.kind === 'notebook' && !(node.template?.ref && node.template_status === 'template')
@@ -3162,8 +3212,10 @@ function App() {
               </label>
               <BlockPalette
                 entries={paletteEntries}
+                groupTemplatesByProvider={groupTemplatesByProvider}
+                searchActive={paletteSearch.trim().length > 0}
                 onCreate={handleCreateFromPalette}
-                onInspectTemplate={setTemplateRefView}
+                onInspectEntry={(entry) => setPaletteInfoEntry(entry)}
                 onDragStart={handlePaletteDragStart}
                 onDragEnd={handlePaletteDragEnd}
                 previewScale={paletteViewport?.zoom ?? 1}
@@ -3264,7 +3316,7 @@ function App() {
                 completedRunNodeIds={completedNodeIds}
                 nodeActions={nodeActionsForNode(selectedNode)}
                 onUploadFile={handleUploadFile}
-                onOpenTemplate={setTemplateRefView}
+                onOpenTemplate={openTemplateInfo}
               />
             ) : null}
           </div>
@@ -3389,9 +3441,41 @@ function App() {
         </Modal>
       ) : null}
 
-      {templateRefView && liveSnapshot ? (
-        <Modal title={templateByRef(liveSnapshot, templateRefView)?.title ?? 'Template'} onClose={() => setTemplateRefView(null)}>
-          <pre className="code-block template-source">{templateByRef(liveSnapshot, templateRefView)?.source_text ?? 'Template source unavailable.'}</pre>
+      {paletteInfoEntry ? (
+        <Modal title={paletteInfoTemplate?.title ?? paletteInfoEntry.title} onClose={() => setPaletteInfoEntry(null)} contentClassName="template-info-dialog-card">
+          <div className="template-info-stack">
+            {paletteInfoEntry.kind === 'pipeline' ? (
+              <>
+                {paletteInfoTemplate?.documentation ? (
+                  <SimpleMarkdown text={paletteInfoTemplate.documentation} />
+                ) : (
+                  <p className="template-info-empty"><em>No documentation available.</em></p>
+                )}
+                <section className="template-reference-section">
+                  <h4>Referenced templates</h4>
+                  {paletteInfoPipelineReferences.length ? (
+                    <ul className="template-reference-bullets">
+                      {paletteInfoPipelineReferences.map((reference) => (
+                        <li key={reference.ref}>
+                          {reference.title} (<code>{reference.ref}</code>)
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p className="template-info-empty"><em>No referenced templates.</em></p>
+                  )}
+                </section>
+              </>
+            ) : paletteInfoEntry.kind === 'template' ? (
+              paletteInfoTemplate?.documentation ? (
+                <SimpleMarkdown text={paletteInfoTemplate.documentation} />
+              ) : (
+                <p className="template-info-empty"><em>No documentation available.</em></p>
+              )
+            ) : (
+              <p className="template-info-copy">{paletteInfoEntry.description}</p>
+            )}
+          </div>
         </Modal>
       ) : null}
 

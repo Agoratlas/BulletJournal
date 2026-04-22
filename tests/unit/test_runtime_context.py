@@ -358,6 +358,26 @@ def test_runtime_context_finalize_value_push_persists_dataframe_preview(tmp_path
     assert head['preview']['columns'] == 1
 
 
+def test_runtime_context_finalize_value_push_serializes_dataframe_datetime_preview(tmp_path) -> None:
+    project_root = init_project_root(tmp_path / 'project').root
+    context = RuntimeContext(
+        project_root=project_root,
+        node_id='producer',
+        run_id='run-frame-datetime',
+        source_hash='producer-source',
+        lineage_mode=LineageMode.MANAGED,
+        bindings={},
+        outputs={'sample_df': Port(name='sample_df', data_type='pandas.DataFrame', role=ArtifactRole.OUTPUT)},
+    )
+    frame = pd.DataFrame({'created_at': [pd.Timestamp('2024-01-02T03:04:05Z')]})
+
+    context.finalize_value_push(name='sample_df', value=frame, data_type='pandas.DataFrame', role=ArtifactRole.OUTPUT)
+    head = context.db.get_artifact_head('producer', 'sample_df')
+
+    assert head is not None
+    assert head['preview']['sample'] == [{'created_at': '2024-01-02T03:04:05+00:00'}]
+
+
 def test_runtime_context_rejects_output_not_declared_in_interface(tmp_path) -> None:
     project_root = init_project_root(tmp_path / 'project').root
     context = RuntimeContext(

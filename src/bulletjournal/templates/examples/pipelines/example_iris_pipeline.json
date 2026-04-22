@@ -1,6 +1,6 @@
 {
   "title": "Iris Example Pipeline",
-  "description": "A ready-made multi-step example that ingests an iris CSV, enriches it, computes summary metrics, and produces report artifacts.",
+  "documentation": "A ready-made multi-step example that ingests an iris CSV, enriches it, computes summary metrics, and produces report artifacts.",
   "nodes": [
     {
       "id": "file",

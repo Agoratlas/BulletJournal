@@ -174,12 +174,12 @@ export type TemplateRecord = {
   hidden?: boolean
   title: string
   source: string
-  description?: string
+  documentation?: string
   source_text?: string
   source_hash?: string
   definition?: {
       title?: string
-      description?: string
+      documentation?: string
       nodes?: Array<{
         id: string
         kind: 'notebook' | 'file_input' | 'organizer' | 'area'

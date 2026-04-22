@@ -17,7 +17,7 @@ class TemplateAsset:
     origin_revision: str
     hidden: bool = False
     title: str | None = None
-    description: str | None = None
+    documentation: str | None = None
     source_loader: Callable[[], str] | None = None
     aliases: tuple[str, ...] = ()
 
