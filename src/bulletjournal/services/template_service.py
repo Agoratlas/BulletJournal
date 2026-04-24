@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, cast
 
 from bulletjournal.domain.models import TemplateRef
+from bulletjournal.parser.docs_parser import extract_notebook_docs_from_source_text
 from bulletjournal.parser.interface_parser import parse_notebook_interface
 from bulletjournal.parser.source_hash import normalized_source_hash_text
 from bulletjournal.templates.builtin_provider import (
@@ -68,7 +69,7 @@ class TemplateService:
             ref=asset.ref,
             provider=asset.provider,
             name=asset.name,
-            documentation=asset.documentation,
+            documentation=self._notebook_documentation(asset, source_text),
             source_text=source_text,
             source_hash=normalized_source_hash_text(source_text),
             origin_revision=asset.origin_revision,
@@ -153,7 +154,7 @@ class TemplateService:
                     'origin_revision': asset.origin_revision,
                     'hidden': asset.hidden,
                     'title': asset.title or Path(asset.name).stem.replace('_', ' ').title(),
-                    'documentation': asset.documentation,
+                    'documentation': self._notebook_documentation(asset, source_text),
                     'source': asset.provider,
                     'source_text': source_text,
                     'source_hash': normalized_source_hash_text(source_text),
@@ -227,6 +228,15 @@ class TemplateService:
             for alias in asset.aliases:
                 aliases[alias] = ref
         return aliases
+
+    @staticmethod
+    def _notebook_documentation(asset: TemplateAsset, source_text: str) -> str | None:
+        if asset.documentation is not None:
+            return asset.documentation
+        documentation = extract_notebook_docs_from_source_text(source_text)
+        if not isinstance(documentation, str) or not documentation.strip():
+            return None
+        return documentation.strip()
 
     @staticmethod
     def _coerce_provider_asset(

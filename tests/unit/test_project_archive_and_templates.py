@@ -187,6 +187,20 @@ def test_template_service_lists_examples_but_not_builtin_templates(monkeypatch: 
     assert not any(ref.startswith('builtin/') for ref in refs)
 
 
+def test_example_templates_use_notebook_markdown_as_documentation(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        'bulletjournal.services.template_service.discover_template_providers',
+        lambda: [example_provider()],
+    )
+
+    templates = {template['ref']: template for template in TemplateService().list_templates()}
+
+    assert templates['examples/example_1']['documentation'].startswith('# Example 1')
+    assert 'Load the iris dataset from a CSV file input block' in templates['examples/example_1']['documentation']
+    assert templates['examples/example_4']['documentation'].startswith('# Example 4')
+    assert 'Build a markdown summary and a matplotlib visualization' in templates['examples/example_4']['documentation']
+
+
 def test_template_service_supports_legacy_example_aliases_when_examples_are_active(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

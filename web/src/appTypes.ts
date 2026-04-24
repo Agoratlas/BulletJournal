@@ -65,7 +65,7 @@ export type NodeActionItem = {
   key: string
   label: string
   href?: string
-  tone?: 'default' | 'danger'
+  tone?: 'default' | 'danger' | 'success'
   disabled?: boolean
   title?: string
   onClick?: () => void

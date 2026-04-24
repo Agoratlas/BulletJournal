@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 
 import pandas as pd
+import pytest
 
 from bulletjournal.domain.enums import NodeKind
 from bulletjournal.domain.models import Edge, LayoutEntry, Node
@@ -38,6 +39,34 @@ def test_object_store_persists_dataframe(tmp_path) -> None:
     loaded = store.load_value(persisted['artifact_hash'], 'pandas.DataFrame')
 
     assert loaded.equals(frame)
+
+
+def test_object_store_allows_empty_optional_artifacts(tmp_path) -> None:
+    paths = init_project_root(tmp_path / 'project')
+    store = ObjectStore(paths)
+
+    persisted = store.persist_value(None, 'int')
+    loaded = store.load_value(persisted['artifact_hash'], 'int')
+
+    assert loaded is None
+    assert persisted['preview'] == {'kind': 'empty'}
+
+
+def test_object_store_rejects_wrong_export_type(tmp_path) -> None:
+    paths = init_project_root(tmp_path / 'project')
+    store = ObjectStore(paths)
+
+    with pytest.raises(TypeError, match='Artifact export type mismatch: expected int, got str'):
+        store.persist_value('not-an-int', 'int')
+
+
+def test_object_store_rejects_wrong_import_type(tmp_path) -> None:
+    paths = init_project_root(tmp_path / 'project')
+    store = ObjectStore(paths)
+    persisted = store.persist_value('hello', 'str')
+
+    with pytest.raises(TypeError, match='Artifact import type mismatch: expected int, got str'):
+        store.load_value(persisted['artifact_hash'], 'int')
 
 
 def test_graph_store_write_sorts_nodes_edges_and_layout(tmp_path) -> None:

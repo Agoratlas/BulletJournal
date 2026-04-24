@@ -37,6 +37,29 @@ def test_runtime_context_uses_defaults_without_recording_stale_warning(tmp_path)
     assert metadata['warnings'] == []
 
 
+def test_runtime_context_validates_pull_contract_for_default_backed_input(tmp_path) -> None:
+    project_root = init_project_root(tmp_path / 'project').root
+    context = RuntimeContext(
+        project_root=project_root,
+        node_id='consumer',
+        run_id='run-default-contract',
+        source_hash='source-hash',
+        lineage_mode=LineageMode.MANAGED,
+        bindings={
+            'sample_count': Binding(
+                source_node='',
+                source_artifact='',
+                data_type='int',
+                default=None,
+                has_default=True,
+            )
+        },
+        outputs={},
+    )
+
+    context.validate_pull_contract(name='sample_count', data_type='int')
+
+
 def test_runtime_context_resolves_optional_missing_file_input(tmp_path) -> None:
     project_root = init_project_root(tmp_path / 'project').root
     context = RuntimeContext(

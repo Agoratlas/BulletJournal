@@ -1,4 +1,5 @@
 import type {
+  ExecutionLogSummary,
   GraphPatchResponse,
   GraphPatchOperation,
   ProjectSnapshot,
@@ -26,6 +27,27 @@ export function appUrl(path: string): string {
 
 export function executionLogDownloadUrl(nodeId: string, stream: 'stdout' | 'stderr'): string {
   return appUrl(`/api/v1/nodes/${encodeURIComponent(nodeId)}/execution-logs/${stream}/download`)
+}
+
+export async function getExecutionLog(nodeId: string, stream: 'stdout' | 'stderr'): Promise<ExecutionLogSummary> {
+  const response = await request<ExecutionLogSummary & { node_id: string; stream: string }>(
+    `/api/v1/nodes/${encodeURIComponent(nodeId)}/execution-logs/${stream}`,
+  )
+  return {
+    text: response.text,
+    truncated: response.truncated,
+    size_bytes: response.size_bytes,
+  }
+}
+
+export async function getExecutionLogs(nodeId: string): Promise<{ stdout: ExecutionLogSummary | null; stderr: ExecutionLogSummary | null }> {
+  const response = await request<{ node_id: string; stdout: ExecutionLogSummary | null; stderr: ExecutionLogSummary | null }>(
+    `/api/v1/nodes/${encodeURIComponent(nodeId)}/execution-logs`,
+  )
+  return {
+    stdout: response.stdout,
+    stderr: response.stderr,
+  }
 }
 
 export function notebookDownloadUrl(nodeId: string): string {
@@ -166,10 +188,10 @@ export async function dismissNotice(issueId: string) {
   })
 }
 
-export async function runNode(nodeId: string, mode: string, action: string | null = null) {
+export async function runNode(nodeId: string, mode: string, action: string | null = null, scope: string = 'node') {
   return request<Record<string, unknown>>(`/api/v1/nodes/${nodeId}/run`, {
     method: 'POST',
-    body: JSON.stringify({ mode, action }),
+    body: JSON.stringify({ mode, action, scope }),
   })
 }
 
@@ -177,6 +199,13 @@ export async function runAll() {
   return request<Record<string, unknown>>('/api/v1/runs/run-all', {
     method: 'POST',
     body: JSON.stringify({ mode: 'run_stale' }),
+  })
+}
+
+export async function runSelection(nodeIds: string[], action: string | null = null) {
+  return request<Record<string, unknown>>('/api/v1/runs/run-selection', {
+    method: 'POST',
+    body: JSON.stringify({ mode: 'run_stale', node_ids: nodeIds, action }),
   })
 }
 

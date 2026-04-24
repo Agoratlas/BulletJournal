@@ -13,8 +13,8 @@ from bulletjournal.domain.models import CheckpointRecord, ValidationIssue
 from bulletjournal.storage.migrations import MIGRATIONS
 from bulletjournal.utils import json_dumps, utc_now_iso
 
-LOG_PREVIEW_MAX_LINES = 50
 LOG_PREVIEW_MAX_CHARS = 10_000
+LOG_PREVIEW_TAIL_READ_BYTES = LOG_PREVIEW_MAX_CHARS * 4
 SUPPORTED_DB_JOURNAL_MODES = frozenset({'DELETE', 'TRUNCATE', 'PERSIST', 'MEMORY', 'WAL', 'OFF'})
 
 
@@ -721,15 +721,22 @@ def _read_optional_text_file(path_value: object) -> str | None:
 
 
 def _read_optional_text_file_summary(path_value: object) -> dict[str, Any] | None:
-    content = _read_optional_text_file(path_value)
-    if content is None:
+    if not isinstance(path_value, str) or not path_value:
         return None
-    lines = content.splitlines()
-    preview = '\n'.join(lines[:LOG_PREVIEW_MAX_LINES])
-    truncated = len(lines) > LOG_PREVIEW_MAX_LINES
+    path = Path(path_value)
+    if not path.exists() or not path.is_file():
+        return None
+    try:
+        size_bytes = path.stat().st_size
+        with path.open('rb') as handle:
+            if size_bytes > LOG_PREVIEW_TAIL_READ_BYTES:
+                handle.seek(-LOG_PREVIEW_TAIL_READ_BYTES, os.SEEK_END)
+            payload = handle.read()
+    except OSError:
+        return None
+    preview = payload.decode('utf-8', errors='replace')
+    truncated = size_bytes > len(payload)
     if len(preview) > LOG_PREVIEW_MAX_CHARS:
-        preview = preview[:LOG_PREVIEW_MAX_CHARS]
+        preview = preview[-LOG_PREVIEW_MAX_CHARS:]
         truncated = True
-    if content.endswith('\n') and preview and not preview.endswith('\n') and not truncated:
-        preview = f'{preview}\n'
-    return {'text': preview, 'truncated': truncated}
+    return {'text': preview, 'truncated': truncated, 'size_bytes': size_bytes}

@@ -10,6 +10,10 @@ def extract_notebook_docs(path: Path) -> str | None:
     return extract_notebook_docs_from_module(load_module_ast(path))
 
 
+def extract_notebook_docs_from_source_text(source_text: str) -> str | None:
+    return extract_notebook_docs_from_module(ast.parse(source_text))
+
+
 def extract_notebook_docs_from_module(module: ast.Module) -> str | None:
     for cell in iter_app_cells(module):
         docs = _extract_docs_from_cell(cell)

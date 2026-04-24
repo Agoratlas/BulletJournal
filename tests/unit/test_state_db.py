@@ -279,15 +279,15 @@ def test_state_db_persists_execution_logs(tmp_path) -> None:
 
     records = db.list_orchestrator_execution_meta()
 
-    assert records['node_a']['stdout'] == {'text': 'hello stdout\n', 'truncated': False}
-    assert records['node_a']['stderr'] == {'text': 'warning on stderr\n', 'truncated': False}
+    assert records['node_a']['stdout'] == {'text': 'hello stdout\n', 'truncated': False, 'size_bytes': 13}
+    assert records['node_a']['stderr'] == {'text': 'warning on stderr\n', 'truncated': False, 'size_bytes': 18}
 
 
 def test_state_db_truncates_execution_log_previews(tmp_path) -> None:
     paths = init_project_root(tmp_path / 'project')
     db = StateDB(paths.state_db_path)
     stdout_log = paths.execution_logs_dir / 'run-1_node_a.stdout.log'
-    long_log = ''.join(f'line {index}\n' for index in range(80))
+    long_log = ''.join(f'line {index}: ' + ('x' * 120) + '\n' for index in range(120))
     stdout_log.write_text(long_log, encoding='utf-8')
 
     db.upsert_orchestrator_execution_meta(
@@ -302,7 +302,9 @@ def test_state_db_truncates_execution_log_previews(tmp_path) -> None:
 
     assert records['node_a']['stdout'] is not None
     assert records['node_a']['stdout']['truncated'] is True
-    assert records['node_a']['stdout']['text'].count('\n') <= 49
+    assert 'line 79' in records['node_a']['stdout']['text']
+    assert 'line 0' not in records['node_a']['stdout']['text']
+    assert records['node_a']['stdout']['size_bytes'] == len(long_log.encode('utf-8'))
 
 
 def test_database_journal_mode_defaults_to_delete_for_project_mounts_in_container() -> None:

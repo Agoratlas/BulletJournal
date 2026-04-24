@@ -26,7 +26,7 @@ import ReactFlow, {
 } from 'reactflow'
 
 import { areaSettings } from '../lib/area'
-import { artifactCounts, artifactFor, assetsForNode, badgeForNode, formatDurationSeconds, inputState, inputsForNode, outputsForNode } from '../lib/helpers'
+import { artifactCounts, artifactFor, artifactIsEmpty, assetsForNode, badgeForNode, formatDurationSeconds, inputBindingSource, inputState, inputsForNode, outputsForNode } from '../lib/helpers'
 import type { ArtifactState, NodeRecord, Port, ProjectSnapshot } from '../lib/types'
 import { ArtifactCounts } from './ArtifactCounts'
 import { Pencil, Play } from './Icons'
@@ -55,7 +55,7 @@ type GraphCanvasProps = {
   onEditAreaNode: (nodeId: string) => void
   onOpenEditor: (nodeId: string) => void
   onKillEditor: (nodeId: string) => void
-  onRunNode: (nodeId: string, mode: 'run_stale' | 'run_all' | 'edit_run') => void
+  onRunNode: (nodeId: string, mode: 'run_stale' | 'run_all' | 'edit_run', scope?: 'node' | 'ancestors' | 'descendants') => void
   onOpenArtifacts: (nodeId: string) => void
   onCanvasInteract: () => void
   onCanvasClear: () => void
@@ -93,7 +93,7 @@ type BulletJournalNodeData = {
   onEditAreaNode: (nodeId: string) => void
   onOpenEditor: (nodeId: string) => void
   onKillEditor: (nodeId: string) => void
-  onRunNode: (nodeId: string, mode: 'run_stale' | 'run_all' | 'edit_run') => void
+  onRunNode: (nodeId: string, mode: 'run_stale' | 'run_all' | 'edit_run', scope?: 'node' | 'ancestors' | 'descendants') => void
   onOpenArtifacts: (nodeId: string) => void
   activeEditorNodeIds: string[]
   organizerGhostInsertIndex: number | null
@@ -149,6 +149,8 @@ const STATE_COLORS: Record<ArtifactState | 'mixed', string> = {
   pending: '#98a2a3',
   mixed: '#2563eb',
 }
+const EMPTY_OR_DEFAULT_COLOR = '#ffffff'
+const MISSING_REQUIRED_INPUT_COLOR = '#d64545'
 
 function pointInRect(x: number, y: number, rect: { left: number; top: number; right: number; bottom: number }) {
   return x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom
@@ -218,12 +220,26 @@ function PortRow({
   index: number
   onPortContextMenu: (nodeId: string, portName: string, side: 'input' | 'output', position: { x: number; y: number }) => void
 }) {
+  const source = side === 'input' ? inputBindingSource(snapshot, node.id, port.name) : null
+  const upstreamArtifact = source ? artifactFor(snapshot, source.source_node, source.source_port) : null
+  const ownArtifact = side === 'output' ? artifactFor(snapshot, node.id, port.name) : null
+  const inputIsDisconnected = side === 'input' && !source
+  const inputIsExplicitlyEmpty = side === 'input' && artifactIsEmpty(upstreamArtifact)
+  const outputIsExplicitlyEmpty = side === 'output' && artifactIsEmpty(ownArtifact)
+  const isEmptyOrDefault = side === 'input'
+    ? Boolean(port.has_default && (inputIsDisconnected || inputIsExplicitlyEmpty))
+    : outputIsExplicitlyEmpty
+  const isMissingRequiredInput = side === 'input' && !port.has_default && (inputIsDisconnected || inputIsExplicitlyEmpty)
   const state =
     side === 'input'
       ? inputState(snapshot, node.id, port)
       : artifactFor(snapshot, node.id, port.name)?.state ?? 'pending'
   const typeColor = TYPE_COLORS[port.data_type] ?? TYPE_COLORS.object
-  const stateColor = STATE_COLORS[state]
+  const stateColor = isMissingRequiredInput
+    ? MISSING_REQUIRED_INPUT_COLOR
+    : isEmptyOrDefault
+      ? EMPTY_OR_DEFAULT_COLOR
+      : STATE_COLORS[state]
   const isConnectionStart = connectionIntent?.nodeId === node.id
     && connectionIntent?.handleId === `${side === 'input' ? 'in' : 'out'}:${port.name}`
     && connectionIntent?.handleType === (side === 'input' ? 'target' : 'source')
@@ -240,7 +256,7 @@ function PortRow({
 
   return (
     <div
-      className={`rf-port-row ${side} ${isConnecting ? 'connecting' : ''} ${isCompatible ? '' : 'incompatible'}`}
+      className={`rf-port-row ${side} ${isConnecting ? 'connecting' : ''} ${isCompatible ? '' : 'incompatible'} ${isEmptyOrDefault ? 'empty-or-default' : ''} ${isMissingRequiredInput ? 'missing-required' : ''}`}
       title={`${port.name} (${port.data_type})`}
     >
       {side === 'input' ? (
@@ -311,6 +327,14 @@ function OrganizerLaneRow({
 }) {
   const inputArtifactState = inputState(snapshot, node.id, port)
   const outputArtifactState = artifactFor(snapshot, node.id, port.name)?.state ?? inputArtifactState
+  const source = inputBindingSource(snapshot, node.id, port.name)
+  const upstreamArtifact = source ? artifactFor(snapshot, source.source_node, source.source_port) : null
+  const ownArtifact = artifactFor(snapshot, node.id, port.name)
+  const inputIsDisconnected = !source
+  const inputIsExplicitlyEmpty = artifactIsEmpty(upstreamArtifact)
+  const outputIsEmpty = artifactIsEmpty(ownArtifact)
+  const inputIsEmptyOrDefault = Boolean(port.has_default && (inputIsDisconnected || inputIsExplicitlyEmpty))
+  const inputIsMissingRequired = !port.has_default && (inputIsDisconnected || inputIsExplicitlyEmpty)
   const typeColor = TYPE_COLORS[port.data_type] ?? TYPE_COLORS.object
   const sourceHandleId = `out:${port.name}`
   const targetHandleId = `in:${port.name}`
@@ -337,13 +361,13 @@ function OrganizerLaneRow({
   }
 
   return (
-    <div className={`rf-organizer-row ${connecting ? 'connecting' : ''} ${rowCompatible ? '' : 'incompatible'}`} title={`${displayPortName(port)} (${port.data_type})`}>
+    <div className={`rf-organizer-row ${connecting ? 'connecting' : ''} ${rowCompatible ? '' : 'incompatible'} ${inputIsEmptyOrDefault || outputIsEmpty ? 'empty-or-default' : ''} ${inputIsMissingRequired ? 'missing-required' : ''}`} title={`${displayPortName(port)} (${port.data_type})`}>
       <Handle
         type="target"
         id={targetHandleId}
         position={Position.Left}
         className={`rf-handle ${targetStart ? 'connection-start' : ''} ${connecting ? 'connecting' : ''} ${highlightInput ? 'connection-highlight' : ''}`}
-        style={{ color: typeColor, borderColor: STATE_COLORS[inputArtifactState], background: STATE_COLORS[inputArtifactState], top: 20 }}
+        style={{ color: typeColor, borderColor: inputIsMissingRequired ? MISSING_REQUIRED_INPUT_COLOR : inputIsEmptyOrDefault ? EMPTY_OR_DEFAULT_COLOR : STATE_COLORS[inputArtifactState], background: inputIsMissingRequired ? MISSING_REQUIRED_INPUT_COLOR : inputIsEmptyOrDefault ? EMPTY_OR_DEFAULT_COLOR : STATE_COLORS[inputArtifactState], top: 20 }}
         onContextMenu={handleInputContextMenu}
       />
       <PortLabel name={port.name} label={port.label} dataType={port.data_type} className="rf-organizer-copy" showTypeDot />
@@ -352,7 +376,7 @@ function OrganizerLaneRow({
         id={sourceHandleId}
         position={Position.Right}
         className={`rf-handle ${sourceStart ? 'connection-start' : ''} ${connecting ? 'connecting' : ''} ${highlightOutput ? 'connection-highlight' : ''}`}
-        style={{ color: typeColor, borderColor: STATE_COLORS[outputArtifactState], background: STATE_COLORS[outputArtifactState], top: 20 }}
+        style={{ color: typeColor, borderColor: outputIsEmpty ? EMPTY_OR_DEFAULT_COLOR : STATE_COLORS[outputArtifactState], background: outputIsEmpty ? EMPTY_OR_DEFAULT_COLOR : STATE_COLORS[outputArtifactState], top: 20 }}
         onContextMenu={handleOutputContextMenu}
       />
     </div>
@@ -431,7 +455,8 @@ const BulletJournalNodeCard = memo(({ data, selected }: NodeProps<BulletJournalN
   const executionMeta = node.execution_meta
   const serverNowMs = data.serverNowMs
   const [now, setNow] = useState(() => Date.now())
-  const [menuOpen, setMenuOpen] = useState(false)
+  const [editorMenuOpen, setEditorMenuOpen] = useState(false)
+  const [runMenuOpen, setRunMenuOpen] = useState(false)
   const menuRef = useRef<HTMLDivElement | null>(null)
   const connectionIntent = useConnectionIntent()
 
@@ -444,20 +469,22 @@ const BulletJournalNodeCard = memo(({ data, selected }: NodeProps<BulletJournalN
   }, [isExecutionActive])
 
   useEffect(() => {
-    if (!menuOpen) {
+    if (!editorMenuOpen && !runMenuOpen) {
       return
     }
     function handlePointerDown(event: PointerEvent) {
       if (menuRef.current && !menuRef.current.contains(event.target as globalThis.Node)) {
-        setMenuOpen(false)
+        setEditorMenuOpen(false)
+        setRunMenuOpen(false)
       }
     }
     window.addEventListener('pointerdown', handlePointerDown)
     return () => window.removeEventListener('pointerdown', handlePointerDown)
-  }, [menuOpen])
+  }, [editorMenuOpen, runMenuOpen])
 
   const shouldShowExecutionTimer = Boolean(executionMeta) && (isExecutionActive || executionMeta?.status === 'succeeded')
   const shouldShowExecutionProgress = !hasActiveEditor && Boolean(executionMeta)
+  const playButtonNeedsAttention = node.kind === 'notebook' && (counts.stale > 0 || counts.pending > 0)
   const approxServerNowMs = serverNowMs + (now - data.serverNowClientAnchorMs)
   const totalCells = executionMeta?.total_cells ?? null
   const runningCellNumber = executionMeta?.current_cell?.cell_number ?? null
@@ -631,28 +658,51 @@ const BulletJournalNodeCard = memo(({ data, selected }: NodeProps<BulletJournalN
         <div className="rf-actions">
           {!NON_RUNNABLE_NODE_KINDS.has(node.kind) ? (
             <div className="round-action-group" ref={menuRef}>
-              <button className="round-node-action play" onClick={(event) => {
+              <button className={`round-node-action play ${playButtonNeedsAttention ? 'needs-run' : 'is-ready'}`} onClick={(event) => {
                 event.stopPropagation()
-                onRunNode(node.id, 'run_stale')
+                setRunMenuOpen(false)
+                onRunNode(node.id, 'run_stale', 'node')
+              }} onContextMenu={(event) => {
+                event.preventDefault()
+                event.stopPropagation()
+                setEditorMenuOpen(false)
+                setRunMenuOpen((current) => !current)
               }} aria-label="Run notebook"><Play width={20} height={20} /></button>
+              {runMenuOpen ? (
+                <div className="split-menu run-menu" onClick={(event) => event.stopPropagation()}>
+                  <button className="secondary menu-item success-text" onClick={() => {
+                    setRunMenuOpen(false)
+                    onRunNode(node.id, 'run_stale', 'node')
+                  }}>Run</button>
+                  <button className="secondary menu-item" onClick={() => {
+                    setRunMenuOpen(false)
+                    onRunNode(node.id, 'run_all', 'ancestors')
+                  }}>← with ancestors</button>
+                  <button className="secondary menu-item" onClick={() => {
+                    setRunMenuOpen(false)
+                    onRunNode(node.id, 'run_all', 'descendants')
+                  }}>with descendants →</button>
+                </div>
+              ) : null}
               {node.kind === 'notebook' ? (
                 <>
                   <button className={`round-node-action editor ${hasActiveEditor ? 'active-editor' : ''}`} onClick={(event) => {
                     event.stopPropagation()
                     if (hasActiveEditor) {
-                      setMenuOpen((current) => !current)
+                      setRunMenuOpen(false)
+                      setEditorMenuOpen((current) => !current)
                       return
                     }
                     onOpenEditor(node.id)
                   }} aria-label={hasActiveEditor ? 'Editor actions' : 'Open editor'} disabled={isEditorBlockedByExecution} title={editorBlockedReason}><Pencil width={20} height={20} style={{ transform: 'translate(0.5px, 0.5px)' }} /></button>
-                  {menuOpen ? (
+                  {editorMenuOpen ? (
                     <div className="split-menu editor-menu" onClick={(event) => event.stopPropagation()}>
                       <button className="secondary menu-item" disabled={Boolean(editorBlockedReason)} title={editorBlockedReason} onClick={() => {
-                        setMenuOpen(false)
+                        setEditorMenuOpen(false)
                         onOpenEditor(node.id)
                       }}>Open editor</button>
                       <button className="secondary menu-item" onClick={() => {
-                        setMenuOpen(false)
+                        setEditorMenuOpen(false)
                         onKillEditor(node.id)
                       }}>Kill editor</button>
                     </div>
@@ -795,6 +845,7 @@ export function GraphCanvas({ snapshot, serverNowMs = Date.now(), serverNowClien
         width: nodeDimensions[node.id]?.width,
         height: nodeDimensions[node.id]?.height,
         selected: selectedNodeIds.includes(node.id),
+        draggable: node.kind !== 'area' || selectedNodeIds.includes(node.id),
         connectable: node.kind !== 'area',
         zIndex: node.kind === 'area' ? -1 : 0,
       }

@@ -11,6 +11,10 @@ export function ArtifactPreviewPanel({ preview, imageSrc = null }: ArtifactPrevi
     return <div className="artifact-preview empty">No preview available.</div>
   }
 
+  if (preview.kind === 'empty') {
+    return <div className="artifact-preview empty">Empty artifact.</div>
+  }
+
   if (preview.kind === 'simple') {
     return <pre className="artifact-preview code-block">{formatSimplePreview(preview.repr)}</pre>
   }

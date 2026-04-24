@@ -190,6 +190,65 @@ def test_create_app_downloads_execution_logs(monkeypatch, tmp_path: Path) -> Non
     assert 'run-1_node_a.stdout.log' in response.headers['content-disposition']
 
 
+def test_create_app_returns_execution_log_tail_summary(monkeypatch, tmp_path: Path) -> None:
+    web_root = tmp_path / 'web'
+    web_root.mkdir()
+    project_root = init_project_root(tmp_path / 'project').root
+    app, _ = _make_app(monkeypatch, web_root, project_path=project_root)
+
+    with TestClient(app) as client:
+        project_paths = require_project_root(project_root)
+        stdout_log = project_paths.execution_logs_dir / 'run-1_node_a.stdout.log'
+        stdout_log.write_text(''.join(f'line {index}\n' for index in range(1200)), encoding='utf-8')
+        state_db = StateDB(project_paths.state_db_path)
+        state_db.upsert_orchestrator_execution_meta(
+            node_id='node_a',
+            run_id='run-1',
+            status='running',
+            started_at='2026-03-26T00:00:00Z',
+            stdout_path=str(stdout_log),
+        )
+        response = client.get('/api/v1/nodes/node_a/execution-logs/stdout')
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload['stream'] == 'stdout'
+    assert payload['truncated'] is True
+    assert 'line 1199' in payload['text']
+    assert 'line 0' not in payload['text']
+    assert payload['size_bytes'] == stdout_log.stat().st_size
+
+
+def test_create_app_returns_combined_execution_log_summaries(monkeypatch, tmp_path: Path) -> None:
+    web_root = tmp_path / 'web'
+    web_root.mkdir()
+    project_root = init_project_root(tmp_path / 'project').root
+    app, _ = _make_app(monkeypatch, web_root, project_path=project_root)
+
+    with TestClient(app) as client:
+        project_paths = require_project_root(project_root)
+        stdout_log = project_paths.execution_logs_dir / 'run-1_node_a.stdout.log'
+        stderr_log = project_paths.execution_logs_dir / 'run-1_node_a.stderr.log'
+        stdout_log.write_text('hello stdout\n', encoding='utf-8')
+        stderr_log.write_text('hello stderr\n', encoding='utf-8')
+        state_db = StateDB(project_paths.state_db_path)
+        state_db.upsert_orchestrator_execution_meta(
+            node_id='node_a',
+            run_id='run-1',
+            status='running',
+            started_at='2026-03-26T00:00:00Z',
+            stdout_path=str(stdout_log),
+            stderr_path=str(stderr_log),
+        )
+        response = client.get('/api/v1/nodes/node_a/execution-logs')
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload['node_id'] == 'node_a'
+    assert payload['stdout'] == {'text': 'hello stdout\n', 'truncated': False, 'size_bytes': 13}
+    assert payload['stderr'] == {'text': 'hello stderr\n', 'truncated': False, 'size_bytes': 13}
+
+
 def test_create_app_reports_verbose_execution_log_errors(monkeypatch, tmp_path: Path) -> None:
     web_root = tmp_path / 'web'
     web_root.mkdir()

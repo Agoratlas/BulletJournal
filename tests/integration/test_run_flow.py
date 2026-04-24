@@ -163,10 +163,406 @@ if __name__ == '__main__':
     assert artifact.status_code == 200
     assert artifact.json()['state'] == 'ready'
 
+    noop = client.post(
+        '/api/v1/nodes/consumer/run',
+        json={'mode': 'run_stale', 'action': 'run_upstream'},
+    )
+    assert noop.status_code == 200
+    assert noop.json()['status'] == 'noop'
+
     producer_path.write_text(producer_source.replace('4', '5', 1), encoding='utf-8')
     container.project_service.reparse_notebook_by_path(producer_path)
     stale = client.get('/api/v1/artifacts/consumer/doubled')
     assert stale.json()['state'] == 'stale'
+
+
+def test_run_descendants_executes_dependency_chain(tmp_path) -> None:
+    project_root = init_project_root(tmp_path / 'project').root
+    app = create_app(project_path=project_root)
+    client = TestClient(app)
+    container = app.state.container
+
+    opened = client.get('/api/v1/project/snapshot')
+    graph_version = opened.json()['graph']['meta']['graph_version']
+
+    patch = client.patch(
+        '/api/v1/graph',
+        json={
+            'graph_version': graph_version,
+            'operations': [
+                {'type': 'add_notebook_node', 'node_id': 'producer', 'title': 'Producer'},
+                {'type': 'add_notebook_node', 'node_id': 'consumer', 'title': 'Consumer', 'x': 480, 'y': 80},
+            ],
+        },
+    )
+    assert patch.status_code == 200
+
+    producer_source = (
+        """
+import marimo
+
+app = marimo.App()
+
+with app.setup:
+    from bulletjournal.runtime import artifacts
+
+@app.cell
+def _():
+    artifacts.push(4, name='number', data_type=int)
+    return
+
+if __name__ == '__main__':
+    from bulletjournal.runtime.standalone import run_notebook_app
+
+    run_notebook_app(app, __file__)
+""".strip()
+        + '\n'
+    )
+    consumer_source = (
+        """
+import marimo
+
+app = marimo.App()
+
+with app.setup:
+    from bulletjournal.runtime import artifacts
+
+@app.cell
+def _():
+    value = artifacts.pull(name='number', data_type=int)
+    return value
+
+@app.cell
+def _(value):
+    artifacts.push(value * 2, name='doubled', data_type=int)
+    return
+
+if __name__ == '__main__':
+    from bulletjournal.runtime.standalone import run_notebook_app
+
+    run_notebook_app(app, __file__)
+""".strip()
+        + '\n'
+    )
+
+    producer_path = project_root / 'notebooks' / 'producer.py'
+    consumer_path = project_root / 'notebooks' / 'consumer.py'
+    producer_path.write_text(producer_source, encoding='utf-8')
+    consumer_path.write_text(consumer_source, encoding='utf-8')
+    container.project_service.reparse_notebook_by_path(producer_path)
+    container.project_service.reparse_notebook_by_path(consumer_path)
+
+    connect = client.patch(
+        '/api/v1/graph',
+        json={
+            'graph_version': patch.json()['meta']['graph_version'],
+            'operations': [
+                {
+                    'type': 'add_edge',
+                    'source_node': 'producer',
+                    'source_port': 'number',
+                    'target_node': 'consumer',
+                    'target_port': 'number',
+                }
+            ],
+        },
+    )
+    assert connect.status_code == 200
+
+    run = client.post(
+        '/api/v1/nodes/producer/run',
+        json={'mode': 'run_all', 'scope': 'descendants'},
+    )
+    assert run.status_code == 200
+    assert run.json()['status'] == 'succeeded'
+
+    artifact = client.get('/api/v1/artifacts/consumer/doubled')
+    assert artifact.status_code == 200
+    assert artifact.json()['preview']['repr'] == '8'
+
+    producer_path.write_text(producer_source.replace('4', '7', 1), encoding='utf-8')
+    container.project_service.reparse_notebook_by_path(producer_path)
+    stale = client.get('/api/v1/artifacts/consumer/doubled')
+    assert stale.json()['state'] == 'stale'
+
+    rerun = client.post(
+        '/api/v1/nodes/producer/run',
+        json={'mode': 'run_all', 'scope': 'descendants'},
+    )
+    assert rerun.status_code == 200
+    assert rerun.json()['status'] == 'succeeded'
+
+    refreshed = client.get('/api/v1/artifacts/consumer/doubled')
+    assert refreshed.status_code == 200
+    assert refreshed.json()['preview']['repr'] == '14'
+
+    noop = client.post(
+        '/api/v1/nodes/producer/run',
+        json={'mode': 'run_all', 'scope': 'descendants'},
+    )
+    assert noop.status_code == 200
+    assert noop.json()['status'] == 'noop'
+
+
+def test_run_descendants_requires_confirmation_before_refreshing_upstream_inputs(tmp_path) -> None:
+    project_root = init_project_root(tmp_path / 'project').root
+    app = create_app(project_path=project_root)
+    client = TestClient(app)
+    container = app.state.container
+
+    opened = client.get('/api/v1/project/snapshot')
+    graph_version = opened.json()['graph']['meta']['graph_version']
+
+    patch = client.patch(
+        '/api/v1/graph',
+        json={
+            'graph_version': graph_version,
+            'operations': [
+                {'type': 'add_notebook_node', 'node_id': 'left_source', 'title': 'Left Source'},
+                {'type': 'add_notebook_node', 'node_id': 'right_source', 'title': 'Right Source', 'x': 240, 'y': 80},
+                {'type': 'add_notebook_node', 'node_id': 'consumer', 'title': 'Consumer', 'x': 520, 'y': 80},
+            ],
+        },
+    )
+    assert patch.status_code == 200
+
+    left_source = (
+        """
+import marimo
+
+app = marimo.App()
+
+with app.setup:
+    from bulletjournal.runtime import artifacts
+
+@app.cell
+def _():
+    artifacts.push(1, name='left', data_type=int)
+    return
+
+if __name__ == '__main__':
+    from bulletjournal.runtime.standalone import run_notebook_app
+
+    run_notebook_app(app, __file__)
+""".strip()
+        + '\n'
+    )
+    right_source = (
+        """
+import marimo
+
+app = marimo.App()
+
+with app.setup:
+    from bulletjournal.runtime import artifacts
+
+@app.cell
+def _():
+    artifacts.push(5, name='right', data_type=int)
+    return
+
+if __name__ == '__main__':
+    from bulletjournal.runtime.standalone import run_notebook_app
+
+    run_notebook_app(app, __file__)
+""".strip()
+        + '\n'
+    )
+    consumer_source = (
+        """
+import marimo
+
+app = marimo.App()
+
+with app.setup:
+    from bulletjournal.runtime import artifacts
+
+@app.cell
+def _():
+    left = artifacts.pull(name='left', data_type=int)
+    right = artifacts.pull(name='right', data_type=int)
+    return left, right
+
+@app.cell
+def _(left, right):
+    artifacts.push(left + right, name='total', data_type=int)
+    return
+
+if __name__ == '__main__':
+    from bulletjournal.runtime.standalone import run_notebook_app
+
+    run_notebook_app(app, __file__)
+""".strip()
+        + '\n'
+    )
+
+    left_path = project_root / 'notebooks' / 'left_source.py'
+    right_path = project_root / 'notebooks' / 'right_source.py'
+    consumer_path = project_root / 'notebooks' / 'consumer.py'
+    left_path.write_text(left_source, encoding='utf-8')
+    right_path.write_text(right_source, encoding='utf-8')
+    consumer_path.write_text(consumer_source, encoding='utf-8')
+    container.project_service.reparse_notebook_by_path(left_path)
+    container.project_service.reparse_notebook_by_path(right_path)
+    container.project_service.reparse_notebook_by_path(consumer_path)
+
+    connect = client.patch(
+        '/api/v1/graph',
+        json={
+            'graph_version': patch.json()['meta']['graph_version'],
+            'operations': [
+                {
+                    'type': 'add_edge',
+                    'source_node': 'left_source',
+                    'source_port': 'left',
+                    'target_node': 'consumer',
+                    'target_port': 'left',
+                },
+                {
+                    'type': 'add_edge',
+                    'source_node': 'right_source',
+                    'source_port': 'right',
+                    'target_node': 'consumer',
+                    'target_port': 'right',
+                },
+            ],
+        },
+    )
+    assert connect.status_code == 200
+
+    prime_right = client.post(
+        '/api/v1/nodes/right_source/run',
+        json={'mode': 'run_stale', 'action': 'use_stale'},
+    )
+    assert prime_right.status_code == 200
+    assert prime_right.json()['status'] == 'succeeded'
+
+    right_path.write_text(right_source.replace('5', '9', 1), encoding='utf-8')
+    container.project_service.reparse_notebook_by_path(right_path)
+
+    confirmation = client.post(
+        '/api/v1/nodes/left_source/run',
+        json={'mode': 'run_all', 'scope': 'descendants'},
+    )
+    assert confirmation.status_code == 200
+    assert confirmation.json()['requires_confirmation'] is True
+    assert {blocked['node_id'] for blocked in confirmation.json()['blocked_nodes']} == {'consumer'}
+
+    run = client.post(
+        '/api/v1/nodes/left_source/run',
+        json={'mode': 'run_all', 'action': 'run_upstream', 'scope': 'descendants'},
+    )
+    assert run.status_code == 200
+    assert run.json()['status'] == 'succeeded'
+
+    artifact = client.get('/api/v1/artifacts/consumer/total')
+    assert artifact.status_code == 200
+    assert artifact.json()['preview']['repr'] == '10'
+
+
+def test_run_selection_executes_selected_notebooks_in_dependency_order(tmp_path) -> None:
+    project_root = init_project_root(tmp_path / 'project').root
+    app = create_app(project_path=project_root)
+    client = TestClient(app)
+    container = app.state.container
+
+    opened = client.get('/api/v1/project/snapshot')
+    graph_version = opened.json()['graph']['meta']['graph_version']
+
+    patch = client.patch(
+        '/api/v1/graph',
+        json={
+            'graph_version': graph_version,
+            'operations': [
+                {'type': 'add_notebook_node', 'node_id': 'producer', 'title': 'Producer'},
+                {'type': 'add_notebook_node', 'node_id': 'consumer', 'title': 'Consumer', 'x': 480, 'y': 80},
+            ],
+        },
+    )
+    assert patch.status_code == 200
+
+    producer_source = (
+        """
+import marimo
+
+app = marimo.App()
+
+with app.setup:
+    from bulletjournal.runtime import artifacts
+
+@app.cell
+def _():
+    artifacts.push(6, name='number', data_type=int)
+    return
+
+if __name__ == '__main__':
+    from bulletjournal.runtime.standalone import run_notebook_app
+
+    run_notebook_app(app, __file__)
+""".strip()
+        + '\n'
+    )
+    consumer_source = (
+        """
+import marimo
+
+app = marimo.App()
+
+with app.setup:
+    from bulletjournal.runtime import artifacts
+
+@app.cell
+def _():
+    value = artifacts.pull(name='number', data_type=int)
+    return value
+
+@app.cell
+def _(value):
+    artifacts.push(value * 3, name='tripled', data_type=int)
+    return
+
+if __name__ == '__main__':
+    from bulletjournal.runtime.standalone import run_notebook_app
+
+    run_notebook_app(app, __file__)
+""".strip()
+        + '\n'
+    )
+
+    producer_path = project_root / 'notebooks' / 'producer.py'
+    consumer_path = project_root / 'notebooks' / 'consumer.py'
+    producer_path.write_text(producer_source, encoding='utf-8')
+    consumer_path.write_text(consumer_source, encoding='utf-8')
+    container.project_service.reparse_notebook_by_path(producer_path)
+    container.project_service.reparse_notebook_by_path(consumer_path)
+
+    connect = client.patch(
+        '/api/v1/graph',
+        json={
+            'graph_version': patch.json()['meta']['graph_version'],
+            'operations': [
+                {
+                    'type': 'add_edge',
+                    'source_node': 'producer',
+                    'source_port': 'number',
+                    'target_node': 'consumer',
+                    'target_port': 'number',
+                }
+            ],
+        },
+    )
+    assert connect.status_code == 200
+
+    run = client.post(
+        '/api/v1/runs/run-selection',
+        json={'mode': 'run_stale', 'node_ids': ['producer', 'consumer']},
+    )
+    assert run.status_code == 200
+    assert run.json()['status'] == 'succeeded'
+
+    artifact = client.get('/api/v1/artifacts/consumer/tripled')
+    assert artifact.status_code == 200
+    assert artifact.json()['preview']['repr'] == '18'
 
 
 def test_run_upstream_executes_through_organizer(tmp_path) -> None:
@@ -1110,7 +1506,7 @@ if __name__ == '__main__':
     snapshot = client.get('/api/v1/project/snapshot').json()
     notice = next(notice for notice in snapshot['notices'] if notice['code'] == 'run_failed')
     assert notice['node_id'] == 'broken_node'
-    assert 'Broken Node (broken_node)' in notice['message']
+    assert 'Run failed in `Broken Node` (`broken_node`).' in notice['message']
     assert notice['details']['node_id'] == 'broken_node'
     assert 'Traceback' in notice['details']['traceback']
 

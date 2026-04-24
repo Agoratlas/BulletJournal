@@ -18,6 +18,7 @@ from bulletjournal.execution.planner import (
     downstream_closure,
     run_plan_for_node,
     stale_or_pending_nodes,
+    topological_nodes,
     upstream_closure,
 )
 from bulletjournal.execution.runner import WorkerRunner
@@ -48,6 +49,17 @@ class OrchestratorNodeState:
     completed_at: str | None = None
 
 
+def _format_markdown_code(value: str) -> str:
+    sanitized = value.replace('`', "'")
+    return f'`{sanitized}`'
+
+
+def _describe_node_label(title: str, node_id: str) -> str:
+    if title == node_id:
+        return _format_markdown_code(node_id)
+    return f'{_format_markdown_code(title)} ({_format_markdown_code(node_id)})'
+
+
 class RunService:
     def __init__(self, project_service) -> None:
         self.project_service = project_service
@@ -68,6 +80,7 @@ class RunService:
         *,
         mode: str,
         action: str | None = None,
+        scope: str = 'node',
     ) -> dict[str, Any]:
         self.project_service.require_project()
         run_mode = RunMode(mode)
@@ -76,32 +89,38 @@ class RunService:
             return {'status': 'noop', 'node_id': node_id}
         if run_mode == RunMode.EDIT_RUN:
             return self._start_edit_session(node_id)
-        pending = self.preflight(node_id)
-        blocked_inputs = cast(list[dict[str, Any]], pending['blocked_inputs'])
-        if blocked_inputs and action is None:
+        plan = self._effective_run_plan(self._plan_for_scope(node_id, scope=scope))
+        pending = self._preflight_plan(plan)
+        blocked_nodes = cast(list[dict[str, Any]], pending['blocked_nodes'])
+        if blocked_nodes and action is None:
             return {'requires_confirmation': True, **pending}
         if action == 'use_stale':
-            unresolved = [item for item in blocked_inputs if item['state'] != ArtifactState.STALE.value]
+            unresolved = self._blocked_nodes_with_unresolved_inputs(blocked_nodes, allow_stale_only=True)
             if unresolved:
-                return {'status': 'blocked', 'blocked_inputs': unresolved, 'upstream_nodes': pending['upstream_nodes']}
+                return {
+                    'status': 'blocked',
+                    'blocked_nodes': unresolved,
+                    'blocked_inputs': self._flatten_blocked_inputs(unresolved),
+                    'upstream_nodes': pending['upstream_nodes'],
+                }
         if action == 'run_upstream':
-            unresolved = self._unrunnable_inputs(blocked_inputs)
+            plan = self._effective_run_plan(self._plan_for_scope(node_id, scope=scope, include_upstream=True))
+            pending = self._preflight_plan(plan)
+            blocked_nodes = cast(list[dict[str, Any]], pending['blocked_nodes'])
+            unresolved = self._blocked_nodes_with_unresolved_inputs(blocked_nodes, allow_stale_only=False)
             if unresolved:
-                return {'status': 'blocked', 'blocked_inputs': unresolved, 'upstream_nodes': pending['upstream_nodes']}
-        if run_mode == RunMode.RUN_STALE and action != 'run_upstream' and not self._node_has_nonready_outputs(node_id):
-            return {'status': 'noop', 'node_id': node_id}
-        plan = [node_id]
-        if action == 'run_upstream':
-            graph = self.project_service.graph()
-            plan = [
-                candidate
-                for candidate in run_plan_for_node(graph, node_id, upstream_node_ids=upstream_closure(graph, node_id))
-                if self.project_service.get_node(candidate).kind == NodeKind.NOTEBOOK
-            ]
+                return {
+                    'status': 'blocked',
+                    'blocked_nodes': unresolved,
+                    'blocked_inputs': self._flatten_blocked_inputs(unresolved),
+                    'upstream_nodes': pending['upstream_nodes'],
+                }
+        if not plan:
+            return {'status': 'noop', 'node_id': node_id, 'node_ids': []}
         return self._execute_managed_run(
             plan=plan,
             mode=run_mode,
-            target_json={'node_id': node_id, 'plan': plan},
+            target_json={'node_id': node_id, 'plan': plan, 'scope': scope},
         )
 
     def cancel_run(self, run_id: str) -> dict[str, Any]:
@@ -111,6 +130,42 @@ class RunService:
             self._active_run.cancel_reason = 'manual'
             self._active_run.cancel_event.set()
         return {'run_id': run_id, 'status': 'cancelling'}
+
+    def start_selection_run(self, node_ids: list[str], *, action: str | None = None) -> dict[str, Any]:
+        self.project_service.require_project()
+        plan = self._effective_run_plan(self._plan_for_selection(node_ids))
+        pending = self._preflight_plan(plan)
+        blocked_nodes = cast(list[dict[str, Any]], pending['blocked_nodes'])
+        if blocked_nodes and action is None:
+            return {'requires_confirmation': True, **pending}
+        if action == 'run_upstream':
+            plan = self._effective_run_plan(self._plan_for_selection(node_ids, include_upstream=True))
+            pending = self._preflight_plan(plan)
+            blocked_nodes = cast(list[dict[str, Any]], pending['blocked_nodes'])
+            unresolved = self._blocked_nodes_with_unresolved_inputs(blocked_nodes, allow_stale_only=False)
+            if unresolved:
+                return {
+                    'status': 'blocked',
+                    'blocked_nodes': unresolved,
+                    'blocked_inputs': self._flatten_blocked_inputs(unresolved),
+                    'upstream_nodes': pending['upstream_nodes'],
+                }
+        elif action == 'use_stale':
+            unresolved = self._blocked_nodes_with_unresolved_inputs(blocked_nodes, allow_stale_only=True)
+            if unresolved:
+                return {
+                    'status': 'blocked',
+                    'blocked_nodes': unresolved,
+                    'blocked_inputs': self._flatten_blocked_inputs(unresolved),
+                    'upstream_nodes': pending['upstream_nodes'],
+                }
+        if not plan:
+            return {'status': 'noop', 'node_ids': []}
+        return self._execute_managed_run(
+            plan=plan,
+            mode=RunMode.RUN_STALE,
+            target_json={'scope': 'selection', 'node_ids': node_ids, 'plan': plan},
+        )
 
     def interrupt_active_run_if_nodes_affected(
         self, changed_node_ids: list[str], graph: GraphData
@@ -134,14 +189,93 @@ class RunService:
         node = self.project_service.get_node(node_id)
         if node.kind in {NodeKind.FILE_INPUT, NodeKind.ORGANIZER, NodeKind.AREA}:
             return {'blocked_inputs': [], 'upstream_nodes': [], 'total_nodes': 0}
+        blocked_inputs = self._blocked_inputs_for_node(node_id)
+        upstream_nodes = upstream_closure(self.project_service.graph(), node_id)
+        return {'blocked_inputs': blocked_inputs, 'upstream_nodes': upstream_nodes, 'total_nodes': len(upstream_nodes)}
+
+    def _plan_for_scope(self, node_id: str, *, scope: str, include_upstream: bool = False) -> list[str]:
+        graph = self.project_service.graph()
+        requested: set[str] = {node_id}
+        if scope == 'ancestors':
+            requested.update(upstream_closure(graph, node_id))
+        elif scope == 'descendants':
+            requested.update(downstream_closure(graph, node_id))
+        elif scope != 'node':
+            raise InvalidRequestError(f'Unknown run scope `{scope}`.')
+        if include_upstream:
+            for candidate in requested:
+                requested.update(upstream_closure(graph, candidate))
+        ordered = run_plan_for_node(graph, node_id, upstream_node_ids=list(requested - {node_id}))
+        return [
+            candidate for candidate in ordered if self.project_service.get_node(candidate).kind == NodeKind.NOTEBOOK
+        ]
+
+    def _plan_for_selection(self, node_ids: list[str], *, include_upstream: bool = False) -> list[str]:
+        graph = self.project_service.graph()
+        graph_node_ids = {node.id for node in graph.nodes}
+        requested = {node_id for node_id in node_ids if node_id in graph_node_ids}
+        if include_upstream:
+            for candidate in list(requested):
+                requested.update(upstream_closure(graph, candidate))
+        ordered = topological_nodes(graph)
+        return [
+            candidate
+            for candidate in ordered
+            if candidate in requested and self.project_service.get_node(candidate).kind == NodeKind.NOTEBOOK
+        ]
+
+    def _preflight_plan(self, plan: list[str]) -> dict[str, Any]:
+        blocked_nodes: list[dict[str, Any]] = []
+        upstream_nodes: set[str] = set()
+        satisfied_inputs_from: set[str] = set()
+        for node_id in plan:
+            blocked_inputs = self._blocked_inputs_for_node(node_id, satisfied_inputs_from=satisfied_inputs_from)
+            if blocked_inputs:
+                blocked_nodes.append({'node_id': node_id, 'blocked_inputs': blocked_inputs})
+            upstream_nodes.update(upstream_closure(self.project_service.graph(), node_id))
+            satisfied_inputs_from.add(node_id)
+        return {
+            'blocked_nodes': blocked_nodes,
+            'blocked_inputs': self._flatten_blocked_inputs(blocked_nodes),
+            'upstream_nodes': sorted(upstream_nodes),
+            'total_nodes': len(plan),
+        }
+
+    def _effective_run_plan(self, plan: list[str]) -> list[str]:
+        effective: list[str] = []
+        scheduled: set[str] = set()
+        for node_id in plan:
+            if self._node_requires_run(node_id, scheduled):
+                effective.append(node_id)
+                scheduled.add(node_id)
+        return effective
+
+    def _node_requires_run(self, node_id: str, scheduled_inputs_from: set[str]) -> bool:
+        if self._node_has_nonready_outputs(node_id):
+            return True
         interface = self.project_service.latest_interface(node_id)
-        blocked_inputs = []
+        for port in interface.get('inputs', []):
+            binding = self._binding_for_input(node_id, port['name'])
+            if binding is not None and binding['source_node'] in scheduled_inputs_from:
+                return True
+        return False
+
+    def _blocked_inputs_for_node(
+        self,
+        node_id: str,
+        *,
+        satisfied_inputs_from: set[str] | None = None,
+    ) -> list[dict[str, Any]]:
+        interface = self.project_service.latest_interface(node_id)
+        blocked_inputs: list[dict[str, Any]] = []
         for port in interface.get('inputs', []):
             binding = self._binding_for_input(node_id, port['name'])
             if binding is None:
                 if port.get('has_default'):
                     continue
                 blocked_inputs.append({'name': port['name'], 'state': ArtifactState.PENDING.value, 'source': None})
+                continue
+            if satisfied_inputs_from is not None and binding['source_node'] in satisfied_inputs_from:
                 continue
             head = self.project_service.require_project().state_db.get_artifact_head(
                 binding['source_node'], binding['source_port']
@@ -155,8 +289,30 @@ class RunService:
                         'source': f'{binding["source_node"]}/{binding["source_port"]}',
                     }
                 )
-        upstream_nodes = upstream_closure(self.project_service.graph(), node_id)
-        return {'blocked_inputs': blocked_inputs, 'upstream_nodes': upstream_nodes, 'total_nodes': len(upstream_nodes)}
+        return blocked_inputs
+
+    def _flatten_blocked_inputs(self, blocked_nodes: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        flattened: list[dict[str, Any]] = []
+        for blocked_node in blocked_nodes:
+            flattened.extend(cast(list[dict[str, Any]], blocked_node.get('blocked_inputs', [])))
+        return flattened
+
+    def _blocked_nodes_with_unresolved_inputs(
+        self,
+        blocked_nodes: list[dict[str, Any]],
+        *,
+        allow_stale_only: bool,
+    ) -> list[dict[str, Any]]:
+        unresolved: list[dict[str, Any]] = []
+        for blocked_node in blocked_nodes:
+            blocked_inputs = cast(list[dict[str, Any]], blocked_node.get('blocked_inputs', []))
+            if allow_stale_only:
+                remaining = [item for item in blocked_inputs if item['state'] != ArtifactState.STALE.value]
+            else:
+                remaining = self._unrunnable_inputs(blocked_inputs)
+            if remaining:
+                unresolved.append({**blocked_node, 'blocked_inputs': remaining})
+        return unresolved
 
     def run_all_stale(self) -> dict[str, Any]:
         graph = self.project_service.graph()
@@ -522,7 +678,7 @@ class RunService:
             graph = self.project_service.graph()
             failed_node = next((node for node in graph.nodes if node.id == node_id), None)
             if failed_node is not None:
-                message = f'Run failed in {failed_node.title} ({failed_node.id}). {error}'
+                message = f'Run failed in {_describe_node_label(failed_node.title, failed_node.id)}. {error}'
         details = {
             'run_id': run_id,
             **result,

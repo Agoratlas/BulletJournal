@@ -240,16 +240,105 @@ def test_artifacts_pull_file_returns_none_for_optional_missing_binding(monkeypat
     ]
 
 
+def test_artifacts_push_rejects_none_without_optional_flag(monkeypatch: pytest.MonkeyPatch) -> None:
+    class FakeContext:
+        def finalize_value_push(self, *, name: str, value, data_type: str, role: ArtifactRole) -> None:
+            raise AssertionError('finalize_value_push should not be called')
+
+    monkeypatch.setattr(runtime_artifacts, 'current_runtime_context', lambda: FakeContext())
+
+    with pytest.raises(TypeError, match=r'artifact.push\(\.\.\., value=None\) requires optional=True'):
+        runtime_artifacts.push(None, name='result', data_type=int)
+
+
+def test_artifacts_push_allows_none_for_optional_output(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[tuple[str, object]] = []
+
+    class FakeContext:
+        def finalize_value_push(self, *, name: str, value, data_type: str, role: ArtifactRole) -> None:
+            calls.append(('push', (name, value, data_type, role)))
+
+    monkeypatch.setattr(runtime_artifacts, 'current_runtime_context', lambda: FakeContext())
+
+    runtime_artifacts.push(None, name='result', data_type=int, optional=True)
+
+    assert calls == [('push', ('result', None, 'int', ArtifactRole.OUTPUT))]
+
+
 def test_normalize_runtime_type_covers_known_and_fallback_types() -> None:
     GraphType = type('Graph', (), {'__module__': 'networkx.classes.graph'})
-    UnknownType = type('CustomThing', (), {'__module__': 'myapp.models'})
 
     assert runtime_artifacts._normalize_runtime_type('int') == 'int'
     assert runtime_artifacts._normalize_runtime_type(int) == 'int'
     assert runtime_artifacts._normalize_runtime_type(pd.DataFrame) == 'pandas.DataFrame'
     assert runtime_artifacts._normalize_runtime_type(pd.Series) == 'pandas.Series'
     assert runtime_artifacts._normalize_runtime_type(GraphType) == 'networkx.Graph'
-    assert runtime_artifacts._normalize_runtime_type(UnknownType) == 'object'
+    assert runtime_artifacts._normalize_runtime_type(object) == 'object'
+
+
+def test_normalize_runtime_type_rejects_unsupported_runtime_values() -> None:
+    fake_array = type('array', (), {'__module__': 'numpy'})
+
+    assert runtime_artifacts._normalize_runtime_type(fake_array) == 'object'
+    assert runtime_artifacts._normalize_runtime_type('mystery') == 'object'
+
+
+def test_artifacts_pull_rejects_default_for_numpy_style_runtime_data_type(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeContext:
+        def validate_pull_contract(self, *, name: str, data_type: str) -> None:
+            raise AssertionError('validate_pull_contract should not be called when default type is invalid')
+
+    fake_array = type('array', (), {'__module__': 'numpy'})
+
+    monkeypatch.setattr(runtime_artifacts, 'current_runtime_context', lambda: FakeContext())
+
+    with pytest.raises(TypeError, match=r'Artifact default type mismatch: expected numpy\.array, got int\.'):
+        runtime_artifacts.pull(name='test', data_type=fake_array, default=10)
+
+
+def test_artifacts_pull_rejects_loaded_value_for_numpy_style_runtime_data_type(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    metadata = {'value': 10, 'artifact_hash': 'abc', 'state': 'ready', 'warnings': [], 'upstream_code_hash': 'upstream'}
+    calls: list[tuple[str, object]] = []
+
+    class FakeContext:
+        def validate_pull_contract(self, *, name: str, data_type: str) -> None:
+            calls.append(('validate', (name, data_type)))
+
+        def resolve_pull(self, name: str) -> dict[str, object]:
+            calls.append(('resolve_pull', name))
+            return metadata
+
+        def record_pull(self, name: str, payload: dict[str, object]) -> None:
+            calls.append(('record_pull', (name, payload)))
+
+    fake_array = type('array', (), {'__module__': 'numpy'})
+
+    monkeypatch.setattr(runtime_artifacts, 'current_runtime_context', lambda: FakeContext())
+
+    with pytest.raises(TypeError, match=r'Artifact import type mismatch: expected numpy\.array, got int\.'):
+        runtime_artifacts.pull(name='test', data_type=fake_array)
+
+    assert calls == [
+        ('validate', ('test', 'object')),
+        ('resolve_pull', 'test'),
+    ]
+
+
+def test_artifacts_push_rejects_numpy_style_runtime_data_type_value(monkeypatch: pytest.MonkeyPatch) -> None:
+    class FakeContext:
+        def finalize_value_push(self, *, name: str, value, data_type: str, role: ArtifactRole) -> None:
+            raise AssertionError('finalize_value_push should not be called when export type is invalid')
+
+    fake_array = type('array', (), {'__module__': 'numpy'})
+
+    monkeypatch.setattr(runtime_artifacts, 'current_runtime_context', lambda: FakeContext())
+
+    with pytest.raises(TypeError, match=r'Artifact export type mismatch: expected numpy\.array, got int\.'):
+        runtime_artifacts.push(10, name='result', data_type=fake_array)
 
 
 def test_file_push_handle_finalizes_and_cleans_up_temp_file(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

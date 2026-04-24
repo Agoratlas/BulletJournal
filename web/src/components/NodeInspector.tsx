@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 
-import { executionLogDownloadUrl } from '../lib/api'
-import { artifactCounts, artifactFor, assetsForNode, badgeForNode, formatDurationSeconds, formatTimestamp, inputBindingSource, inputState, templateByRef } from '../lib/helpers'
+import { executionLogDownloadUrl, getExecutionLogs } from '../lib/api'
+import { artifactCounts, artifactFor, artifactIsEmpty, assetsForNode, badgeForNode, formatBytes, formatDurationSeconds, formatTimestamp, inputBindingSource, inputState, templateByRef } from '../lib/helpers'
 import { formatIssueDetails, frozenFileBlockMessage, nodeRunFailures, validationIssuesForNode } from '../lib/appHelpers'
 import type { NodeActionItem } from '../appTypes'
-import type { NodeRecord, ProjectSnapshot } from '../lib/types'
+import type { ExecutionLogSummary, NodeRecord, ProjectSnapshot } from '../lib/types'
 import { ArtifactCounts } from './ArtifactCounts'
 import { ActionButtons } from './ActionButtons'
 import { Download } from './Icons'
@@ -16,23 +16,67 @@ function ExecutionLogPanel({
   log,
   nodeId,
   filenameSuffix,
+  running,
 }: {
   title: string
-  log: { text: string; truncated: boolean }
+  log: ExecutionLogSummary | null
   nodeId: string
   filenameSuffix: 'stdout' | 'stderr'
+  running: boolean
 }) {
+  const baseBody = log?.text || (running ? 'Waiting for log output...' : 'No log output.')
+  const body = log?.truncated ? `[log truncated]\n${baseBody}` : baseBody
+  const sizeLabel = formatBytes(log?.size_bytes ?? 0)
+  const disabled = (log?.size_bytes ?? 0) <= 0
+  const logRef = useRef<HTMLPreElement | null>(null)
+  const shouldFollowRef = useRef(true)
+
+  useEffect(() => {
+    shouldFollowRef.current = true
+  }, [nodeId, filenameSuffix])
+
+  useEffect(() => {
+    const element = logRef.current
+    if (!element || !shouldFollowRef.current) {
+      return
+    }
+    element.scrollTop = element.scrollHeight
+  }, [body])
+
+  function handleScroll() {
+    const element = logRef.current
+    if (!element) {
+      return
+    }
+    const distanceFromBottom = element.scrollHeight - element.scrollTop - element.clientHeight
+    shouldFollowRef.current = distanceFromBottom <= 24
+  }
+
   return (
-    <div className="inspector-subblock">
+    <div className="inspector-block">
       <div className="panel-header-row execution-log-header">
-        <strong>{title}</strong>
-        <a className="secondary small link-button" href={executionLogDownloadUrl(nodeId, filenameSuffix)}>
-          <Download width={14} height={14} />
-          Download
+        <h3>{title}</h3>
+        <a
+          className={`secondary small link-button execution-log-download-button${disabled ? ' disabled' : ''}`}
+          href={disabled ? undefined : executionLogDownloadUrl(nodeId, filenameSuffix)}
+          aria-disabled={disabled}
+          onClick={(event) => {
+            if (disabled) {
+              event.preventDefault()
+            }
+          }}
+        >
+          <Download className="execution-log-download-icon" width={16} height={16} />
+          <span className="execution-log-download-label">{sizeLabel}</span>
         </a>
       </div>
-      <pre className="code-block docs-block execution-log-block">{log.text}</pre>
-      {log.truncated ? <p className="muted-copy">Preview truncated by the server to 50 lines or 10k characters.</p> : null}
+      <pre
+        ref={logRef}
+        className="code-block docs-block execution-log-block execution-log-terminal"
+        onScroll={handleScroll}
+      >
+        {body}
+      </pre>
     </div>
   )
 }
@@ -67,15 +111,50 @@ export function NodeInspector({
   const blockingValidationIssues = validationIssues.filter((issue) => issue.severity === 'error')
   const runFailures = nodeRunFailures(snapshot, node.id)
   const [now, setNow] = useState(() => Date.now())
+  const [stdoutLog, setStdoutLog] = useState<ExecutionLogSummary | null>(() => node.execution_meta?.stdout ?? null)
+  const [stderrLog, setStderrLog] = useState<ExecutionLogSummary | null>(() => node.execution_meta?.stderr ?? null)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
+  const isExecutionRunning = node.execution_meta?.status === 'running'
 
   useEffect(() => {
-    if (node.execution_meta?.status !== 'running') {
+    if (!isExecutionRunning) {
       return
     }
     const interval = window.setInterval(() => setNow(Date.now()), 100)
     return () => window.clearInterval(interval)
-  }, [node.execution_meta?.status])
+  }, [isExecutionRunning])
+
+  useEffect(() => {
+    setStdoutLog(node.execution_meta?.stdout ?? null)
+    setStderrLog(node.execution_meta?.stderr ?? null)
+  }, [node.execution_meta?.stderr, node.execution_meta?.stdout, node.id])
+
+  useEffect(() => {
+    if (!isExecutionRunning) {
+      return
+    }
+    let cancelled = false
+
+    async function refreshLogs() {
+      const result = await getExecutionLogs(node.id).catch(() => null)
+      if (cancelled) {
+        return
+      }
+      if (result) {
+        setStdoutLog(result.stdout)
+        setStderrLog(result.stderr)
+      }
+    }
+
+    void refreshLogs()
+    const interval = window.setInterval(() => {
+      void refreshLogs()
+    }, 3000)
+    return () => {
+      cancelled = true
+      window.clearInterval(interval)
+    }
+  }, [isExecutionRunning, node.id])
 
   const runningDurationLabel = useMemo(() => {
     if (node.execution_meta?.status !== 'running') {
@@ -149,28 +228,24 @@ export function NodeInspector({
         </div>
       ) : null}
 
-      {node.execution_meta?.stdout ? (
-        <div className="inspector-block">
-          <h3>Stdout</h3>
-          <ExecutionLogPanel
-            title="Notebook stdout"
-            log={node.execution_meta.stdout}
-            nodeId={node.id}
-            filenameSuffix="stdout"
-          />
-        </div>
+      {isExecutionRunning || stdoutLog ? (
+        <ExecutionLogPanel
+          title="Stdout"
+          log={stdoutLog}
+          nodeId={node.id}
+          filenameSuffix="stdout"
+          running={isExecutionRunning}
+        />
       ) : null}
 
-      {node.execution_meta?.stderr ? (
-        <div className="inspector-block">
-          <h3>Stderr</h3>
-          <ExecutionLogPanel
-            title="Notebook stderr"
-            log={node.execution_meta.stderr}
-            nodeId={node.id}
-            filenameSuffix="stderr"
-          />
-        </div>
+      {isExecutionRunning || stderrLog ? (
+        <ExecutionLogPanel
+          title="Stderr"
+          log={stderrLog}
+          nodeId={node.id}
+          filenameSuffix="stderr"
+          running={isExecutionRunning}
+        />
       ) : null}
 
       {node.template?.ref ? (
@@ -194,8 +269,10 @@ export function NodeInspector({
           {(node.interface?.inputs ?? []).map((port) => {
             const state = inputState(snapshot, node.id, port)
             const source = inputBindingSource(snapshot, node.id, port.name)
+            const upstreamArtifact = source ? artifactFor(snapshot, source.source_node, source.source_port) : null
+            const isMissingRequired = !port.has_default && (!source || artifactIsEmpty(upstreamArtifact))
             return (
-              <div key={port.name} className={`inspector-port state-${state}`}>
+              <div key={port.name} className={`inspector-port state-${state} ${isMissingRequired ? 'missing-required' : ''}`}>
                 <PortPill name={port.name} label={port.label} dataType={port.data_type} side="input" compact />
                 <div className="inspector-port-meta">
                   <span>{source ? `${source.source_node}/${source.source_port}` : port.has_default ? 'default value' : 'not connected'}</span>
@@ -212,7 +289,8 @@ export function NodeInspector({
         <h3>Outputs</h3>
         <div className="stack-list">
           {[...(node.interface?.outputs ?? []), ...assetsForNode(node)].map((port) => {
-            const state = artifactFor(snapshot, node.id, port.name)?.state ?? 'pending'
+            const artifact = artifactFor(snapshot, node.id, port.name)
+            const state = artifact?.state ?? 'pending'
             return (
               <div key={port.name} className={`inspector-port state-${state}`}>
                 <PortPill

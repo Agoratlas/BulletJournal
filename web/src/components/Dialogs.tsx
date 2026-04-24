@@ -56,6 +56,8 @@ type ConfirmDialogProps = {
   tone?: 'default' | 'danger'
   confirmTone?: 'default' | 'danger' | 'success' | 'warning'
   alternateTone?: 'default' | 'danger' | 'success' | 'warning'
+  alternateDisabled?: boolean
+  alternateHelpText?: string
   cancelTone?: 'default' | 'danger' | 'success' | 'warning'
   onConfirm: () => void
   onAlternate?: () => void
@@ -71,6 +73,8 @@ export function ConfirmDialog({
   tone = 'default',
   confirmTone,
   alternateTone = 'default',
+  alternateDisabled = false,
+  alternateHelpText,
   cancelTone = 'default',
   onConfirm,
   onAlternate,
@@ -109,7 +113,21 @@ export function ConfirmDialog({
         <div className="confirm-dialog-copy">{message}</div>
         <div className="dialog-actions">
           <button type="button" className={neutralButtonClassName(cancelTone)} onClick={onClose}>{cancelLabel}</button>
-          {alternateLabel && onAlternate ? <button type="button" className={neutralButtonClassName(alternateTone)} onClick={onAlternate}>{alternateLabel}</button> : null}
+          {alternateLabel && onAlternate ? (
+            <span className="confirm-dialog-action-shell">
+              <button
+                type="button"
+                className={`${neutralButtonClassName(alternateTone)}${alternateDisabled ? ' disabled' : ''}`}
+                onClick={onAlternate}
+                disabled={alternateDisabled}
+              >
+                {alternateLabel}
+              </button>
+              {alternateDisabled && alternateHelpText ? (
+                <span className="artifact-tooltip confirm-dialog-tooltip" role="tooltip">{alternateHelpText}</span>
+              ) : null}
+            </span>
+          ) : null}
           <button type="button" className={actionButtonClassName(resolvedConfirmTone)} onClick={onConfirm}>{confirmLabel}</button>
         </div>
       </div>

@@ -5,14 +5,18 @@ from typing import Any
 from bulletjournal.domain.enums import ArtifactRole
 from bulletjournal.runtime.context import current_runtime_context
 from bulletjournal.runtime.file_artifacts import FilePushHandle
+from bulletjournal.runtime.serializers import validate_runtime_value_type
 
 
 def pull(*, name: str, data_type: Any, default: Any = None, description: str | None = None) -> Any:
     del description
-    del default
     context = current_runtime_context()
+    if default is not None:
+        validate_runtime_value_type(default, data_type, operation='default')
     context.validate_pull_contract(name=name, data_type=_normalize_runtime_type(data_type))
     metadata = context.resolve_pull(name)
+    if metadata['value'] is not None:
+        validate_runtime_value_type(metadata['value'], data_type, operation='import')
     context.record_pull(name, metadata)
     return metadata['value']
 
@@ -31,6 +35,7 @@ def push(
     *,
     name: str,
     data_type: Any,
+    optional: bool = False,
     description: str | None = None,
     **kwargs: Any,
 ) -> None:
@@ -38,6 +43,10 @@ def push(
     if kwargs:
         unexpected = ', '.join(sorted(kwargs))
         raise TypeError(f'Unexpected artifact push kwargs: {unexpected}')
+    if value is None and not optional:
+        raise TypeError('artifact.push(..., value=None) requires optional=True.')
+    if value is not None:
+        validate_runtime_value_type(value, data_type, operation='export')
     context = current_runtime_context()
     normalized = _normalize_runtime_type(data_type)
     context.finalize_value_push(
@@ -64,7 +73,7 @@ def push_file(
 
 def _normalize_runtime_type(data_type: Any) -> str:
     if isinstance(data_type, str):
-        return data_type
+        return data_type if data_type in {'int', 'float', 'bool', 'str', 'list', 'dict', 'object'} else 'object'
     module = getattr(data_type, '__module__', '')
     name = getattr(data_type, '__name__', None)
     if data_type in {int, float, bool, str, list, dict, object}:

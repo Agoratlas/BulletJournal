@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
@@ -23,6 +24,36 @@ from bulletjournal.storage.object_store import ObjectStore
 from bulletjournal.storage.project_fs import ProjectPaths, init_project_root, load_project_json, require_project_root
 from bulletjournal.storage.state_db import StateDB
 from bulletjournal.utils import utc_now_iso
+
+_MARKDOWN_CODE_SPAN_PATTERN = re.compile(r'(`[^`]*`)')
+_MARKDOWN_VALUE_PATTERN = re.compile(r'(^|[^A-Za-z0-9`])([A-Za-z0-9]+(?:[._/-][A-Za-z0-9]+)+)(?=$|[^A-Za-z0-9`])')
+
+
+def _format_markdown_code(value: str) -> str:
+    sanitized = value.replace('`', "'")
+    return f'`{sanitized}`'
+
+
+def _auto_format_markdown_values(text: str) -> str:
+    parts = _MARKDOWN_CODE_SPAN_PATTERN.split(text)
+    formatted: list[str] = []
+    for part in parts:
+        if len(part) >= 2 and part.startswith('`') and part.endswith('`'):
+            formatted.append(part)
+            continue
+        formatted.append(
+            _MARKDOWN_VALUE_PATTERN.sub(
+                lambda match: f'{match.group(1)}{_format_markdown_code(match.group(2))}',
+                part,
+            )
+        )
+    return ''.join(formatted)
+
+
+def _describe_node_label(node: Node) -> str:
+    if node.title == node.id:
+        return _format_markdown_code(node.id)
+    return f'{_format_markdown_code(node.title)} ({_format_markdown_code(node.id)})'
 
 
 @dataclass(slots=True)
@@ -201,12 +232,13 @@ class ProjectService:
     ) -> dict[str, Any]:
         project = self.require_project()
         resolved_details = details or {}
+        formatted_message = _auto_format_markdown_values(message)
         project.state_db.save_persistent_notice(
             issue_id=issue_id,
             node_id=node_id,
             severity=severity,
             code=code,
-            message=message,
+            message=formatted_message,
             details=resolved_details,
         )
         notice = project.state_db.get_persistent_notice(issue_id)
@@ -220,7 +252,7 @@ class ProjectService:
                 'node_id': node_id,
                 'severity': severity.value,
                 'code': code,
-                'message': message,
+                'message': formatted_message,
                 'details': resolved_details,
             },
         )
@@ -253,7 +285,7 @@ class ProjectService:
 
     @staticmethod
     def freeze_block_message(blockers: list[Node]) -> str:
-        labels = ', '.join(f'`{node.title}` ({node.id})' for node in blockers)
+        labels = ', '.join(_describe_node_label(node) for node in blockers)
         if len(blockers) == 1:
             return f'This change is blocked because it would affect the frozen block {labels}. Unfreeze it first.'
         return f'This change is blocked because it would affect frozen blocks {labels}. Unfreeze them first.'
@@ -293,7 +325,7 @@ class ProjectService:
 
     @staticmethod
     def freeze_upstream_editor_block_message(blockers: list[Node]) -> str:
-        labels = ', '.join(f'`{node.title}` ({node.id})' for node in blockers)
+        labels = ', '.join(_describe_node_label(node) for node in blockers)
         if len(blockers) == 1:
             return f'Freeze is blocked because an upstream editor is open for {labels}. Close it first.'
         return f'Freeze is blocked because upstream editors are open for {labels}. Close them first.'

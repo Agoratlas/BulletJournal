@@ -10,7 +10,12 @@ export function ActionButtons({
   return (
     <>
       {actions.map((action) => {
-        const className = `${itemClassName}${action.tone === 'danger' ? ' danger-text' : ''}`
+        const toneClassName = action.tone === 'danger'
+          ? ' danger-text'
+          : action.tone === 'success'
+            ? ' success-text'
+            : ''
+        const className = `${itemClassName}${toneClassName}`
         if (action.href) {
           if (action.disabled) {
             return (

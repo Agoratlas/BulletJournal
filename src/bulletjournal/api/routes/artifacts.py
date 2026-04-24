@@ -62,23 +62,39 @@ async def upload_file(node_id: str, request: Request):
 
 @router.get('/nodes/{node_id}/execution-logs/{stream}/download')
 def download_execution_log(node_id: str, stream: str, request: Request):
-    if stream not in {'stdout', 'stderr'}:
-        raise HTTPException(
-            status_code=404,
-            detail=f'Unknown execution log stream `{stream}`. Expected `stdout` or `stderr`.',
-        )
+    log_path = _resolve_execution_log_path(node_id=node_id, stream=stream, request=request)
+    return FileResponse(Path(log_path), media_type='text/plain; charset=utf-8', filename=log_path.name)
+
+
+@router.get('/nodes/{node_id}/execution-logs/{stream}')
+def get_execution_log(node_id: str, stream: str, request: Request):
+    log_path = _resolve_execution_log_path(node_id=node_id, stream=stream, request=request)
+    summary = request.app.state.container.project_service.require_project().state_db.list_orchestrator_execution_meta()[
+        node_id
+    ][stream]
+    if summary is None:
+        raise HTTPException(status_code=404, detail=f'No `{stream}` execution log found for node `{node_id}`.')
+    return {
+        'node_id': node_id,
+        'stream': stream,
+        **summary,
+        'download_url': f'/api/v1/nodes/{node_id}/execution-logs/{stream}/download',
+        'filename': log_path.name,
+    }
+
+
+@router.get('/nodes/{node_id}/execution-logs')
+def get_execution_logs(node_id: str, request: Request):
     container = request.app.state.container
     project = container.project_service.require_project()
     execution_meta = project.state_db.list_orchestrator_execution_meta().get(node_id)
     if execution_meta is None:
         raise HTTPException(status_code=404, detail=f'No execution metadata found for node `{node_id}`.')
-    run_id = execution_meta.get('run_id')
-    if not isinstance(run_id, str) or not run_id:
-        raise HTTPException(status_code=404, detail=f'No `{stream}` execution log found for node `{node_id}`.')
-    log_path = project.paths.execution_logs_dir / f'{run_id}_{node_id}.{stream}.log'
-    if not log_path.exists() or not log_path.is_file():
-        raise HTTPException(status_code=404, detail=f'No `{stream}` execution log found for node `{node_id}`.')
-    return FileResponse(Path(log_path), media_type='text/plain; charset=utf-8', filename=log_path.name)
+    return {
+        'node_id': node_id,
+        'stdout': execution_meta.get('stdout'),
+        'stderr': execution_meta.get('stderr'),
+    }
 
 
 @router.post('/artifacts/{node_id}/{artifact_name}/state')
@@ -108,3 +124,23 @@ def set_node_output_states(
         state=payload.state,
         only_current_state=payload.only_current_state,
     )
+
+
+def _resolve_execution_log_path(*, node_id: str, stream: str, request: Request) -> Path:
+    if stream not in {'stdout', 'stderr'}:
+        raise HTTPException(
+            status_code=404,
+            detail=f'Unknown execution log stream `{stream}`. Expected `stdout` or `stderr`.',
+        )
+    container = request.app.state.container
+    project = container.project_service.require_project()
+    execution_meta = project.state_db.list_orchestrator_execution_meta().get(node_id)
+    if execution_meta is None:
+        raise HTTPException(status_code=404, detail=f'No execution metadata found for node `{node_id}`.')
+    run_id = execution_meta.get('run_id')
+    if not isinstance(run_id, str) or not run_id:
+        raise HTTPException(status_code=404, detail=f'No `{stream}` execution log found for node `{node_id}`.')
+    log_path = project.paths.execution_logs_dir / f'{run_id}_{node_id}.{stream}.log'
+    if not log_path.exists() or not log_path.is_file():
+        raise HTTPException(status_code=404, detail=f'No `{stream}` execution log found for node `{node_id}`.')
+    return log_path

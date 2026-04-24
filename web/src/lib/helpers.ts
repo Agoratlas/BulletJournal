@@ -75,6 +75,10 @@ export function artifactFor(snapshot: ProjectSnapshot, nodeId: string, artifactN
   )
 }
 
+export function artifactIsEmpty(artifact: ArtifactRecord | null | undefined): boolean {
+  return artifact?.preview?.kind === 'empty'
+}
+
 export function inputBindingSource(snapshot: ProjectSnapshot, nodeId: string, inputName: string) {
   const direct = snapshot.graph.edges.find(
     (edge) => edge.target_node === nodeId && edge.target_port === inputName,

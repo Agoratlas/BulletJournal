@@ -79,14 +79,8 @@ export type NodeRecord = {
       total_cells: number | null
       cell_code: string | null
     } | null
-    stdout: {
-      text: string
-      truncated: boolean
-    } | null
-    stderr: {
-      text: string
-      truncated: boolean
-    } | null
+    stdout: ExecutionLogSummary | null
+    stderr: ExecutionLogSummary | null
     updated_at: string
   } | null
   orchestrator_state?: {
@@ -116,11 +110,18 @@ export type LayoutRecord = {
 }
 
 export type ArtifactPreview =
+  | { kind: 'empty' }
   | { kind: 'simple'; repr: string; truncated?: boolean }
   | { kind: 'dataframe'; rows: number; columns: number; column_names: string[]; sample: Array<Record<string, unknown>> }
   | { kind: 'series'; rows: number; sample: unknown[] }
   | { kind: 'file'; filename?: string; size_bytes?: number; extension?: string | null; mime_type?: string | null; image_inline?: boolean; original_filename?: string }
   | { kind: 'object'; repr: string }
+
+export type ExecutionLogSummary = {
+  text: string
+  truncated: boolean
+  size_bytes: number
+}
 
 export type ArtifactRecord = {
   node_id: string

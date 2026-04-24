@@ -2,12 +2,12 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import type { Connection, EdgeChange, Node } from 'reactflow'
 
-import { appUrl, cancelRun, createCheckpoint, currentProject, dismissNotice, downloadNotebookSource, getSnapshot, listSessions, notebookDownloadUrl, patchGraph, restoreCheckpoint, runAll, runNode, setArtifactState, setNodeOutputsState, stopSession, uploadFile } from './lib/api'
+import { appUrl, cancelRun, createCheckpoint, currentProject, dismissNotice, downloadNotebookSource, getSnapshot, listSessions, notebookDownloadUrl, patchGraph, restoreCheckpoint, runAll, runNode, runSelection, setArtifactState, setNodeOutputsState, stopSession, uploadFile } from './lib/api'
 import { GRID_SIZE, activeRunNodeId, artifactFor, artifactsForDisplay, currentRun, formatTimestamp, globalArtifactCounts, inputState, inputsForNode, outputsForNode, queuedRunNodeIds, templateByRef } from './lib/helpers'
 import { areaSettings, type AreaColorKey, type AreaTitlePosition } from './lib/area'
 import type { ArtifactRecord, GraphPatchOperation, LayoutRecord, NodeRecord, ProjectSnapshot, SessionRecord, TemplateRecord } from './lib/types'
 import type { AppNotice, ClipboardGraph, ClipboardNodeRecord, ConstantValueType, GraphHistoryEntry, GraphMutationPlan, NodeActionItem, OptimisticGraphState, PaletteEntry, PalettePreviewBlock, PortActionMenuState } from './appTypes'
-import { applyOptimisticGraphOperations, areaAddOperationForNode, artifactTargetForPort, blockCreateMode, buildConstantValueNotebookSource, clampContextMenuPosition, cloneSnapshot, copiedTitle, createClientNotice, edgeIdForPorts, edgeIdsForPort, editorSessionDetails, expandMutationPlan, fileInputAddOperationForNode, formatRunBlockedMessage, formatRunFailureMessage, freezeBlockMessage, frozenBlockBlockersForDelete, frozenBlockBlockersForRemovedEdges, frozenBlockBlockersForStaleRoots, isEditableTarget, isEditorOpenConflict, isFreezeConflict, isManagedRunFailure, mergeGraphIntoSnapshot, normalizeNodeId, notebookAddOperationForNode, organizerAddOperationForNode, pipelineDefinitionNodeIds, pipelineTemplateNodeRecords, pipelineTopLeftForCenter, SNAPSHOT_REFRESH_EVENTS, SNAPSHOT_REFRESH_THROTTLE_MS, snapToGrid, uniqueCopiedNodeId } from './lib/appHelpers'
+import { applyOptimisticGraphOperations, areaAddOperationForNode, artifactTargetForPort, blockCreateMode, buildConstantValueNotebookSource, clampContextMenuPosition, cloneSnapshot, copiedTitle, createClientNotice, edgeIdForPorts, edgeIdsForPort, editorSessionDetails, expandMutationPlan, fileInputAddOperationForNode, formatMarkdownCode, formatRunBlockedMessage, formatRunFailureMessage, freezeBlockMessage, frozenBlockBlockersForDelete, frozenBlockBlockersForRemovedEdges, frozenBlockBlockersForStaleRoots, isEditableTarget, isEditorOpenConflict, isFreezeConflict, isManagedRunFailure, mergeGraphIntoSnapshot, normalizeNodeId, notebookAddOperationForNode, organizerAddOperationForNode, pipelineDefinitionNodeIds, pipelineTemplateNodeRecords, pipelineTopLeftForCenter, SNAPSHOT_REFRESH_EVENTS, SNAPSHOT_REFRESH_THROTTLE_MS, snapToGrid, uniqueCopiedNodeId } from './lib/appHelpers'
 import { ArtifactCard } from './components/ArtifactCard'
 import { ArtifactCounts } from './components/ArtifactCounts'
 import { BlockPalette } from './components/BlockPalette'
@@ -102,13 +102,18 @@ type PlacementRect = {
 }
 
 type ArtifactMutationState = 'ready' | 'stale'
+type NotebookRunScope = 'node' | 'ancestors' | 'descendants'
 
 type ConfirmationState =
   | {
       kind: 'run-upstream'
-      nodeId: string
+      nodeId: string | null
+      nodeIds?: string[]
       mode: 'run_stale' | 'run_all'
+      scope: NotebookRunScope
       message: string
+      useStaleDisabled: boolean
+      useStaleDisabledReason?: string
     }
   | {
       kind: 'run-all'
@@ -133,6 +138,14 @@ type ConfirmationState =
       kind: 'node-frozen'
       nodeIds: string[]
       frozen: boolean
+      title: string
+      message: string
+    }
+  | {
+      kind: 'delete-nodes'
+      nodeIds: string[]
+      edgeIds: string[]
+      createCheckpoint: boolean
       title: string
       message: string
     }
@@ -609,7 +622,7 @@ function App() {
 
   function nodeLabel(nodeId: string): string {
     const title = nodeTitle(nodeId)
-    return title === nodeId ? `\`${nodeId}\`` : `${title} (\`${nodeId}\`)`
+    return title === nodeId ? formatMarkdownCode(nodeId) : `${formatMarkdownCode(title)} (${formatMarkdownCode(nodeId)})`
   }
 
   function isOrganizerGhostHandle(handleId: string | null | undefined): boolean {
@@ -653,20 +666,20 @@ function App() {
     return node?.orchestrator_state?.status === 'queued' || node?.orchestrator_state?.status === 'running'
   }
 
-  function plannedNotebookIdsForRunUpstream(nodeId: string): string[] {
-    if (!liveSnapshot) {
+  function notebookDependencyClosure(nodeIds: string[], direction: 'upstream' | 'downstream'): string[] {
+    if (!liveSnapshot || !nodeIds.length) {
       return []
     }
     const nodeById = new Map(liveSnapshot.graph.nodes.map((node) => [node.id, node]))
-    const upstreamByNodeId = new Map<string, string[]>()
+    const adjacency = new Map<string, string[]>()
     for (const edge of liveSnapshot.graph.edges) {
-      const sources = upstreamByNodeId.get(edge.target_node) ?? []
-      sources.push(edge.source_node)
-      upstreamByNodeId.set(edge.target_node, sources)
+      const key = direction === 'upstream' ? edge.target_node : edge.source_node
+      const connected = adjacency.get(key) ?? []
+      connected.push(direction === 'upstream' ? edge.source_node : edge.target_node)
+      adjacency.set(key, connected)
     }
-
     const planned = new Set<string>()
-    const queue = [nodeId]
+    const queue = [...nodeIds]
     const visited = new Set<string>()
     while (queue.length) {
       const currentNodeId = queue.shift() as string
@@ -681,18 +694,44 @@ function App() {
       if (node.kind === 'notebook') {
         planned.add(currentNodeId)
       }
-      const shouldTraverseUpstream = currentNodeId === nodeId
-        || node.state !== 'ready'
-        || node.orchestrator_state?.status === 'queued'
-        || node.orchestrator_state?.status === 'running'
-      if (!shouldTraverseUpstream) {
-        continue
-      }
-      for (const upstreamNodeId of upstreamByNodeId.get(currentNodeId) ?? []) {
-        queue.push(upstreamNodeId)
+      for (const relatedNodeId of adjacency.get(currentNodeId) ?? []) {
+        queue.push(relatedNodeId)
       }
     }
     return Array.from(planned)
+  }
+
+  function plannedNotebookIdsForRun(nodeId: string, scope: NotebookRunScope, action: 'use_stale' | 'run_upstream' | null = null): string[] {
+    if (scope === 'node') {
+      return action === 'run_upstream' ? notebookDependencyClosure([nodeId], 'upstream') : [nodeId]
+    }
+    if (scope === 'ancestors') {
+      return notebookDependencyClosure([nodeId], 'upstream')
+    }
+    const descendants = notebookDependencyClosure([nodeId], 'downstream')
+    if (action !== 'run_upstream') {
+      return descendants
+    }
+    return notebookDependencyClosure(descendants, 'upstream')
+  }
+
+  function plannedNotebookIdsForSelectionRun(nodeIds: string[], action: 'use_stale' | 'run_upstream' | null = null): string[] {
+    const notebookNodeIds = (liveSnapshot?.graph.nodes ?? [])
+      .filter((node) => node.kind === 'notebook' && nodeIds.includes(node.id))
+      .map((node) => node.id)
+    if (action !== 'run_upstream') {
+      return notebookNodeIds
+    }
+    return notebookDependencyClosure(notebookNodeIds, 'upstream')
+  }
+
+  function runResponseHasPendingInputs(response: Record<string, unknown>): boolean {
+    if (!Array.isArray(response.blocked_inputs)) {
+      return false
+    }
+    return response.blocked_inputs.some((blockedInput) => {
+      return Boolean(blockedInput && typeof blockedInput === 'object' && (blockedInput as { state?: unknown }).state === 'pending')
+    })
   }
 
   function plannedNotebookIdsForRunAll(): string[] {
@@ -811,8 +850,12 @@ function App() {
     })
   }
 
-  async function handleDeleteNodesAction(nodeIds: string[]) {
-    if (!projectId || !liveSnapshot || !nodeIds.length) {
+  function requestDeleteSelection(nodeIds: string[], edgeIds: string[], options: { createCheckpoint?: boolean } = {}) {
+    if (!projectId || !liveSnapshot || (!nodeIds.length && !edgeIds.length)) {
+      return
+    }
+    if (!nodeIds.length) {
+      void handleDeleteSelection(nodeIds, edgeIds)
       return
     }
     const nodes = nodeIds
@@ -821,16 +864,19 @@ function App() {
     if (!nodes.length) {
       return
     }
-    const label = nodes.length === 1
-      ? `block "${nodes[0].title}"`
-      : `${nodes.length} selected blocks`
-    if (!window.confirm(`Create a checkpoint and delete ${label}?`)) {
-      return
-    }
-    await createCheckpoint()
-    await handleNodesDelete(nodes.map((node) => ({ id: node.id } as Node)))
-    await refreshSnapshot()
-    setNodeActionMenu(null)
+    const createCheckpointBeforeDelete = options.createCheckpoint ?? true
+    const title = nodes.length === 1 ? 'Delete block?' : 'Delete selected blocks?'
+    const message = nodes.length === 1
+      ? `Delete block "${nodes[0].title}"?`
+      : `Delete ${nodes.length} selected blocks?`
+    setConfirmationState({
+      kind: 'delete-nodes',
+      nodeIds: nodes.map((node) => node.id),
+      edgeIds,
+      createCheckpoint: createCheckpointBeforeDelete,
+      title,
+      message,
+    })
   }
 
   function nodeActionsForNode(node: NodeRecord, options: { dismissMenu?: () => void } = {}): NodeActionItem[] {
@@ -847,6 +893,18 @@ function App() {
     const canMarkOutputsStale = artifactHeads.some((artifact) => artifact.state !== 'stale')
     const canMarkOutputsReady = artifactHeads.some((artifact) => artifact.state === 'stale') && nodeInputsAreReady(node)
     const actions: NodeActionItem[] = []
+
+    if (node.kind === 'notebook') {
+      actions.push({
+        key: 'run-node',
+        label: 'Run',
+        tone: 'success',
+        onClick: () => {
+          dismissMenu()
+          void handleRunNode(node.id, 'run_stale')
+        },
+      })
+    }
 
     if (node.kind === 'file_input') {
       actions.push({
@@ -941,7 +999,7 @@ function App() {
       title: deleteBlockedReason,
       onClick: () => {
         dismissMenu()
-        void handleDeleteNodeAction(node.id)
+        handleDeleteNodeAction(node.id)
       },
     })
 
@@ -961,6 +1019,7 @@ function App() {
     }
 
     const freezableNodes = menuNodes.filter((node) => node.kind !== 'area')
+    const runnableNotebookNodeIds = menuNodes.filter((node) => node.kind === 'notebook').map((node) => node.id)
     const affectedOutputNodeIds = menuNodes.filter((node) => {
       if (!liveSnapshot) {
         return false
@@ -1007,6 +1066,16 @@ function App() {
     const deleteBlockedReason = deleteFrozenBlockers.length ? freezeBlockMessage(deleteFrozenBlockers) : undefined
 
     return [
+      {
+        key: 'run-selected-nodes',
+        label: 'Run',
+        tone: 'success',
+        disabled: runnableNotebookNodeIds.length === 0,
+        onClick: () => {
+          dismissMenu()
+          void handleRunSelection(runnableNotebookNodeIds)
+        },
+      },
       {
         key: 'mark-selected-outputs-stale',
         label: 'Mark outputs stale',
@@ -1060,7 +1129,7 @@ function App() {
         title: deleteBlockedReason,
         onClick: () => {
           dismissMenu()
-          void handleDeleteNodesAction(menuNodes.map((node) => node.id))
+          requestDeleteSelection(menuNodes.map((node) => node.id), [], { createCheckpoint: true })
         },
       },
     ]
@@ -2451,21 +2520,24 @@ function App() {
     })
   }
 
-  async function handleRunNode(nodeId: string, mode: 'run_stale' | 'run_all' | 'edit_run') {
+  async function handleRunNode(nodeId: string, mode: 'run_stale' | 'run_all' | 'edit_run', scope: NotebookRunScope = 'node') {
     if (!projectId) {
       return
     }
+    const initialAction = mode === 'edit_run'
+      ? null
+      : scope === 'ancestors'
+        ? 'run_upstream'
+        : null
     if (mode !== 'edit_run') {
-      const plannedNodeIds = mode === 'run_all'
-        ? plannedNotebookIdsForRunUpstream(nodeId)
-        : [nodeId]
+      const plannedNodeIds = plannedNotebookIdsForRun(nodeId, scope, initialAction)
       const canStartRun = await ensureNoOpenEditorsForRun(plannedNodeIds)
       if (!canStartRun) {
         return
       }
     }
     try {
-      const initialResponse = await runNode(nodeId, mode, mode === 'edit_run' ? null : 'use_stale')
+      const initialResponse = await runNode(nodeId, mode, initialAction, scope)
       let response = initialResponse
       if (initialResponse.requires_confirmation) {
         if (mode === 'edit_run') {
@@ -2481,7 +2553,12 @@ function App() {
           kind: 'run-upstream',
           nodeId,
           mode,
-          message: 'Some input artifacts are stale or pending. Do you want to run upstream blocks to refresh them?',
+          scope,
+          message: 'One or more notebooks in this run have stale or pending inputs. Refresh ancestor blocks first, or run on stale inputs?',
+          useStaleDisabled: runResponseHasPendingInputs(initialResponse),
+          useStaleDisabledReason: runResponseHasPendingInputs(initialResponse)
+            ? 'One or more input artifacts are pending and must be refreshed.'
+            : undefined,
         })
         return
       }
@@ -2528,6 +2605,49 @@ function App() {
     }
   }
 
+  async function handleRunSelection(nodeIds: string[]) {
+    if (!projectId || !nodeIds.length) {
+      return
+    }
+    const plannedNodeIds = plannedNotebookIdsForSelectionRun(nodeIds)
+    if (!plannedNodeIds.length) {
+      return
+    }
+    const canStartRun = await ensureNoOpenEditorsForRun(plannedNodeIds)
+    if (!canStartRun) {
+      return
+    }
+    try {
+      const initialResponse = await runSelection(nodeIds)
+      if (initialResponse.requires_confirmation) {
+        setConfirmationState({
+          kind: 'run-upstream',
+          nodeId: null,
+          nodeIds,
+          mode: 'run_stale',
+          scope: 'node',
+          message: 'One or more notebooks in this run have stale or pending inputs. Refresh ancestor blocks first, or run on stale inputs?',
+          useStaleDisabled: runResponseHasPendingInputs(initialResponse),
+          useStaleDisabledReason: runResponseHasPendingInputs(initialResponse)
+            ? 'One or more input artifacts are pending and must be refreshed.'
+            : undefined,
+        })
+        return
+      }
+      if (initialResponse.status === 'failed') {
+        if (!isManagedRunFailure(initialResponse)) {
+          reportClientError('run-selection', 'run_failed', formatRunFailureMessage(liveSnapshot, initialResponse, 'Run failed.'), { details: initialResponse })
+        }
+      } else if (initialResponse.status === 'blocked') {
+        reportClientWarning('run-selection-blocked', 'run_blocked', formatRunBlockedMessage(liveSnapshot, null, initialResponse), { details: initialResponse })
+      }
+      await refreshSnapshot()
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Run failed.'
+      reportClientError('run-selection', 'run_failed', message)
+    }
+  }
+
   async function handleRunAll() {
     if (!projectId) {
       return
@@ -2535,19 +2655,22 @@ function App() {
     setConfirmationState({ kind: 'run-all' })
   }
 
-  async function confirmRunNodeWithAction(nodeId: string, mode: 'run_stale' | 'run_all', action: 'run_upstream' | 'use_stale') {
+  async function confirmRunNodeWithAction(
+    nodeId: string,
+    mode: 'run_stale' | 'run_all',
+    scope: NotebookRunScope,
+    action: 'run_upstream' | 'use_stale',
+  ) {
     if (!projectId) {
       return
     }
-    const plannedNodeIds = action === 'run_upstream'
-      ? plannedNotebookIdsForRunUpstream(nodeId)
-      : [nodeId]
+    const plannedNodeIds = plannedNotebookIdsForRun(nodeId, scope, action)
     const canStartRun = await ensureNoOpenEditorsForRun(plannedNodeIds)
     if (!canStartRun) {
       return
     }
     try {
-      const response = await runNode(nodeId, mode, action)
+      const response = await runNode(nodeId, mode, action, scope)
       if (response.status === 'failed') {
         if (!isManagedRunFailure(response)) {
           reportClientError(`run:${nodeId}:${mode}`, 'run_failed', formatRunFailureMessage(liveSnapshot, response, 'Run failed.'), { nodeId, details: response })
@@ -2564,6 +2687,31 @@ function App() {
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Run failed.'
       reportClientError(`run:${nodeId}:${mode}`, 'run_failed', message, { nodeId })
+    }
+  }
+
+  async function confirmRunSelectionWithAction(nodeIds: string[], action: 'run_upstream' | 'use_stale') {
+    if (!projectId || !nodeIds.length) {
+      return
+    }
+    const plannedNodeIds = plannedNotebookIdsForSelectionRun(nodeIds, action)
+    const canStartRun = await ensureNoOpenEditorsForRun(plannedNodeIds)
+    if (!canStartRun) {
+      return
+    }
+    try {
+      const response = await runSelection(nodeIds, action)
+      if (response.status === 'failed') {
+        if (!isManagedRunFailure(response)) {
+          reportClientError('run-selection', 'run_failed', formatRunFailureMessage(liveSnapshot, response, 'Run failed.'), { details: response })
+        }
+      } else if (response.status === 'blocked') {
+        reportClientWarning('run-selection-blocked', 'run_blocked', formatRunBlockedMessage(liveSnapshot, null, response), { details: response })
+      }
+      await refreshSnapshot()
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Run failed.'
+      reportClientError('run-selection', 'run_failed', message)
     }
   }
 
@@ -2805,6 +2953,7 @@ function App() {
     setOptimisticGraph(null)
     applySelection([], [], { openInspector: false })
     setArtifactNodeId(null)
+    setShowProjectInfo(false)
     setGraphHistoryPast([])
     setGraphHistoryFuture([])
     await refreshSnapshot()
@@ -2840,22 +2989,8 @@ function App() {
     await mutateGraph(redo.operations, { history: liveSnapshot ? simpleHistoryEntryForPlan(liveSnapshot, redo) : null })
   }
 
-  async function handleNodesDelete(nodes: Node[]) {
-    if (!nodes.length) {
-      return
-    }
-    const nodeIds = nodes.map((node) => node.id)
-    const history = await deleteHistoryEntry(nodeIds)
-    await stopEditorsForNodes(nodes.map((node) => node.id))
-    const success = await mutateGraph(nodeIds.map((nodeId) => ({ type: 'delete_node', node_id: nodeId })), { history })
-    if (!success) {
-      return
-    }
-    setSelectedNodeId((current) => (current && nodes.some((node) => node.id === current) ? null : current))
-    setSelectedNodeIds((current) => current.filter((nodeId) => !nodeIds.includes(nodeId)))
-    setSelectedEdgeIds([])
-    setInspectorOpen(false)
-    setArtifactNodeId((current) => (current && nodes.some((node) => node.id === current) ? null : current))
+  function handleNodesDelete(nodes: Node[]) {
+    requestDeleteSelection(nodes.map((node) => node.id), [])
   }
 
   function openFileNodeEdit(nodeId: string) {
@@ -2902,21 +3037,8 @@ function App() {
     })
   }
 
-  async function handleDeleteNodeAction(nodeId: string) {
-    if (!projectId) {
-      return
-    }
-    const node = liveSnapshot?.graph.nodes.find((entry) => entry.id === nodeId)
-    if (!node) {
-      return
-    }
-    if (!window.confirm(`Create a checkpoint and delete block "${node.title}"?`)) {
-      return
-    }
-    await createCheckpoint()
-    await handleNodesDelete([{ id: nodeId } as Node])
-    await refreshSnapshot()
-    setNodeActionMenu(null)
+  function handleDeleteNodeAction(nodeId: string) {
+    requestDeleteSelection([nodeId], [], { createCheckpoint: true })
   }
 
   async function handleDismissNotice(notice: AppNotice) {
@@ -3096,7 +3218,7 @@ function App() {
       const key = event.key.toLowerCase()
       if ((key === 'backspace' || key === 'delete') && (selectedNodeIds.length > 0 || selectedEdgeIds.length > 0)) {
         event.preventDefault()
-        void handleDeleteSelection(selectedNodeIds, selectedEdgeIds)
+        requestDeleteSelection(selectedNodeIds, selectedEdgeIds)
         return
       }
       const primaryModifier = event.metaKey || event.ctrlKey
@@ -3650,24 +3772,58 @@ function App() {
 
       {confirmationState?.kind === 'run-upstream' ? (
         <ConfirmDialog
-          title="Refresh upstream blocks?"
+          title="Refresh ancestor blocks?"
           message={confirmationState.message}
-          confirmLabel="Yes"
+          confirmLabel="Refresh ancestors"
           confirmTone="success"
-          alternateLabel="Use stale inputs"
-          alternateTone="warning"
+          alternateLabel="Run on stale inputs"
+          alternateTone={confirmationState.useStaleDisabled ? 'default' : 'warning'}
+          alternateDisabled={confirmationState.useStaleDisabled}
+          alternateHelpText={confirmationState.useStaleDisabledReason}
           cancelLabel="Cancel"
           cancelTone="default"
           onClose={() => setConfirmationState(null)}
           onAlternate={() => {
             const pending = confirmationState
             setConfirmationState(null)
-            void confirmRunNodeWithAction(pending.nodeId, pending.mode, 'use_stale')
+            if (pending.nodeIds?.length) {
+              void confirmRunSelectionWithAction(pending.nodeIds, 'use_stale')
+              return
+            }
+            if (pending.nodeId) {
+              void confirmRunNodeWithAction(pending.nodeId, pending.mode, pending.scope, 'use_stale')
+            }
           }}
           onConfirm={() => {
             const pending = confirmationState
             setConfirmationState(null)
-            void confirmRunNodeWithAction(pending.nodeId, pending.mode, 'run_upstream')
+            if (pending.nodeIds?.length) {
+              void confirmRunSelectionWithAction(pending.nodeIds, 'run_upstream')
+              return
+            }
+            if (pending.nodeId) {
+              void confirmRunNodeWithAction(pending.nodeId, pending.mode, pending.scope, 'run_upstream')
+            }
+          }}
+        />
+      ) : null}
+
+      {confirmationState?.kind === 'delete-nodes' ? (
+        <ConfirmDialog
+          title={confirmationState.title}
+          message={confirmationState.message}
+          confirmLabel="Delete"
+          tone="danger"
+          onClose={() => setConfirmationState(null)}
+          onConfirm={() => {
+            const pending = confirmationState
+            setConfirmationState(null)
+            void (async () => {
+              if (pending.createCheckpoint) {
+                await createCheckpoint()
+              }
+              await handleDeleteSelection(pending.nodeIds, pending.edgeIds)
+            })()
           }}
         />
       ) : null}

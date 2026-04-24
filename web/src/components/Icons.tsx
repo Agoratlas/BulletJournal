@@ -27,10 +27,10 @@ export function Info(props: SVGProps<SVGSVGElement>) {
 
 export function Download(props: SVGProps<SVGSVGElement>) {
   return (
-    <IconBase {...props}>
-      <path d="M12 4v10" />
-      <path d="m8 10 4 4 4-4" />
-      <path d="M5 19h14" />
+    <IconBase {...props} strokeWidth="2.5">
+      <path d="M12 3.5v11" />
+      <path d="m7.5 10.5 4.5 4.5 4.5-4.5" />
+      <path d="M4.5 19.5h15" />
     </IconBase>
   )
 }

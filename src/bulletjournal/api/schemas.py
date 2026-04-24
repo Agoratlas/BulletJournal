@@ -148,9 +148,16 @@ class RunAction(StrEnum):
     RUN_UPSTREAM = 'run_upstream'
 
 
+class RunScope(StrEnum):
+    NODE = 'node'
+    ANCESTORS = 'ancestors'
+    DESCENDANTS = 'descendants'
+
+
 class RunNodeRequest(StrictModel):
     mode: RunMode
     action: RunAction | None = None
+    scope: RunScope = Field(default=RunScope.NODE)
 
 
 class FileUploadResponse(StrictModel):
@@ -178,6 +185,12 @@ class NoticeDismissResponse(StrictModel):
 
 class RunAllRequest(StrictModel):
     mode: Literal[RunMode.RUN_STALE] = Field(default=RunMode.RUN_STALE)
+
+
+class RunSelectionRequest(StrictModel):
+    mode: Literal[RunMode.RUN_STALE] = Field(default=RunMode.RUN_STALE)
+    node_ids: list[str]
+    action: RunAction | None = None
 
 
 class ControllerEnvironmentChangeRequest(StrictModel):

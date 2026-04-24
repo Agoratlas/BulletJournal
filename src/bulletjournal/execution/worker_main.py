@@ -28,6 +28,9 @@ class _TeeWriter:
         written = 0
         for target in self._targets:
             written = target.write(value)
+            flush = getattr(target, 'flush', None)
+            if callable(flush):
+                flush()
         return written
 
     def flush(self) -> None:
@@ -149,10 +152,10 @@ def main(argv: list[str] | None = None) -> int:
         stderr_log_path = Path(manifest.stderr_path) if manifest.stderr_path else None
         if stdout_log_path is not None:
             stdout_log_path.parent.mkdir(parents=True, exist_ok=True)
-            stdout_log_handle = stdout_log_path.open('w', encoding='utf-8')
+            stdout_log_handle = stdout_log_path.open('w', encoding='utf-8', buffering=1)
         if stderr_log_path is not None:
             stderr_log_path.parent.mkdir(parents=True, exist_ok=True)
-            stderr_log_handle = stderr_log_path.open('w', encoding='utf-8')
+            stderr_log_handle = stderr_log_path.open('w', encoding='utf-8', buffering=1)
         stdout_target = captured_stdout if stdout_log_handle is None else _TeeWriter(captured_stdout, stdout_log_handle)
         stderr_target = captured_stderr if stderr_log_handle is None else _TeeWriter(captured_stderr, stderr_log_handle)
         with contextlib.redirect_stdout(stdout_target), contextlib.redirect_stderr(stderr_target):

@@ -13,9 +13,21 @@ import pandas as pd
 
 from bulletjournal.config import IMAGE_PREVIEW_MAX_BYTES, MAX_PREVIEW_COLS, MAX_PREVIEW_ROWS, MAX_SIMPLE_PREVIEW_CHARS
 from bulletjournal.domain.enums import StorageKind
+from bulletjournal.domain.type_system import CANONICAL_TYPES
 
 
 def serialize_value(value: Any, data_type: str) -> dict[str, Any]:
+    if value is None:
+        payload = b'null'
+        return {
+            'bytes': payload,
+            'storage_kind': StorageKind.JSON.value,
+            'data_type': data_type,
+            'extension': '.json',
+            'mime_type': 'application/json',
+            'preview': {'kind': 'empty'},
+        }
+    validate_runtime_value_type(value, data_type, operation='export')
     if data_type in {'int', 'float', 'bool', 'str', 'list', 'dict'}:
         payload = json.dumps(value, ensure_ascii=True, sort_keys=True).encode('utf-8')
         return {
@@ -57,14 +69,20 @@ def serialize_value(value: Any, data_type: str) -> dict[str, Any]:
 
 
 def deserialize_value(payload: bytes, data_type: str) -> Any:
+    value: Any
     if data_type in {'int', 'float', 'bool', 'str', 'list', 'dict'}:
-        return json.loads(payload.decode('utf-8'))
-    if data_type == 'pandas.DataFrame':
-        return pd.read_parquet(io.BytesIO(payload))
-    if data_type == 'pandas.Series':
+        value = json.loads(payload.decode('utf-8'))
+    elif data_type == 'pandas.DataFrame':
+        value = pd.read_parquet(io.BytesIO(payload))
+    elif data_type == 'pandas.Series':
         frame = pd.read_parquet(io.BytesIO(payload))
-        return frame.iloc[:, 0]
-    return pickle.loads(gzip.decompress(payload))  # noqa: S301
+        value = frame.iloc[:, 0]
+    else:
+        value = pickle.loads(gzip.decompress(payload))  # noqa: S301
+    if value is None:
+        return None
+    validate_runtime_value_type(value, data_type, operation='import')
+    return value
 
 
 def serialize_file(path: Path, *, extension: str | None = None) -> dict[str, Any]:
@@ -129,3 +147,86 @@ def _json_safe_preview_value(value: Any) -> Any:
         if normalized is not value:
             return _json_safe_preview_value(normalized)
     return repr(value)
+
+
+def validate_runtime_value_type(value: Any, data_type: Any, *, operation: str) -> None:
+    if _value_matches_declared_type(value, data_type):
+        return
+    raise TypeError(
+        f'Artifact {operation} type mismatch: '
+        f'expected {_declared_type_name(data_type)}, '
+        f'got {_runtime_type_name(value)}.'
+    )
+
+
+def _value_matches_declared_type(value: Any, data_type: Any) -> bool:
+    if isinstance(data_type, str):
+        if data_type in CANONICAL_TYPES:
+            return _value_matches_canonical_data_type(value, data_type)
+        runtime_name = _runtime_type_name(value)
+        return runtime_name == data_type or type(value).__name__ == data_type
+    if data_type in {int, float, bool, str, list, dict, object}:
+        return _value_matches_canonical_data_type(value, data_type.__name__)
+    if isinstance(data_type, type):
+        return isinstance(value, data_type)
+    declared = _declared_type_name(data_type)
+    if declared == 'object':
+        return True
+    runtime_name = _runtime_type_name(value)
+    return runtime_name == declared or type(value).__name__ == declared
+
+
+def _value_matches_canonical_data_type(value: Any, data_type: str) -> bool:
+    if data_type == 'int':
+        return isinstance(value, int) and not isinstance(value, bool)
+    if data_type == 'float':
+        return isinstance(value, float) and not isinstance(value, bool)
+    if data_type == 'bool':
+        return isinstance(value, bool)
+    if data_type == 'str':
+        return isinstance(value, str)
+    if data_type == 'list':
+        return isinstance(value, list)
+    if data_type == 'dict':
+        return isinstance(value, dict)
+    if data_type == 'pandas.DataFrame':
+        return isinstance(value, pd.DataFrame)
+    if data_type == 'pandas.Series':
+        return isinstance(value, pd.Series)
+    if data_type == 'object':
+        return True
+    if data_type == 'networkx.Graph':
+        return _matches_networkx_type(value, 'Graph')
+    if data_type == 'networkx.DiGraph':
+        return _matches_networkx_type(value, 'DiGraph')
+    return True
+
+
+def _declared_type_name(data_type: Any) -> str:
+    if isinstance(data_type, str):
+        return data_type
+    if data_type in {int, float, bool, str, list, dict, object}:
+        return data_type.__name__
+    module = getattr(data_type, '__module__', '')
+    name = getattr(data_type, '__name__', None)
+    if isinstance(name, str) and name:
+        if module in {'', 'builtins'}:
+            return name
+        return f'{module}.{name}'
+    return 'object'
+
+
+def _matches_networkx_type(value: Any, expected_name: str) -> bool:
+    value_type = type(value)
+    module = getattr(value_type, '__module__', '')
+    name = getattr(value_type, '__name__', '')
+    return module.startswith('networkx') and name == expected_name
+
+
+def _runtime_type_name(value: Any) -> str:
+    value_type = type(value)
+    module = getattr(value_type, '__module__', '')
+    name = getattr(value_type, '__name__', value_type.__class__.__name__)
+    if module in {'', 'builtins'}:
+        return str(name)
+    return f'{module}.{name}'

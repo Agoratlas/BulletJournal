@@ -9,6 +9,9 @@ type EditorSessionNoticeDetails = {
   ready?: boolean
 }
 
+const MARKDOWN_CODE_SPAN_PATTERN = /(`[^`]*`)/g
+const MARKDOWN_VALUE_PATTERN = /(^|[^A-Za-z0-9`])([A-Za-z0-9]+(?:[._/-][A-Za-z0-9]+)+)(?=$|[^A-Za-z0-9`])/g
+
 export const DATAFRAME_CSV_DOWNLOAD_MAX_BYTES = 100_000_000
 
 export function blockCreateMode(entry: PaletteEntry): 'notebook' | 'constant_value' | 'file' | 'pipeline' | null {
@@ -85,11 +88,34 @@ export function createClientNotice(
     node_id: options.nodeId ?? null,
     severity,
     code,
-    message,
+    message: autoFormatMarkdownValues(message),
     details: options.details ?? {},
     created_at: new Date().toISOString(),
     origin: 'client',
   }
+}
+
+export function formatMarkdownCode(value: string): string {
+  return `\`${value.replace(/`/g, "'")}\``
+}
+
+export function autoFormatMarkdownValues(text: string): string {
+  return text
+    .split(MARKDOWN_CODE_SPAN_PATTERN)
+    .map((segment) => {
+      if (segment.startsWith('`') && segment.endsWith('`')) {
+        return segment
+      }
+      return segment.replace(MARKDOWN_VALUE_PATTERN, (_match, prefix: string, value: string) => `${prefix}${formatMarkdownCode(value)}`)
+    })
+    .join('')
+}
+
+function describeNodeLabel(title: string, nodeId: string): string {
+  if (title === nodeId) {
+    return formatMarkdownCode(nodeId)
+  }
+  return `${formatMarkdownCode(title)} (${formatMarkdownCode(nodeId)})`
 }
 
 export function runFailureMessage(response: Record<string, unknown>, fallback: string): string {
@@ -122,24 +148,24 @@ export function runFailureNodeId(response: Record<string, unknown>): string | nu
 }
 
 export function formatRunFailureMessage(snapshot: ProjectSnapshot | null | undefined, response: Record<string, unknown>, fallback: string): string {
-  const message = runFailureMessage(response, fallback)
+  const message = autoFormatMarkdownValues(runFailureMessage(response, fallback))
   const nodeId = runFailureNodeId(response)
   if (!nodeId) {
     return message
   }
   const failedNode = snapshot?.graph.nodes.find((node) => node.id === nodeId)
   if (!failedNode) {
-    return `Run failed in \`${nodeId}\`. ${message}`
+    return `Run failed in ${formatMarkdownCode(nodeId)}. ${message}`
   }
-  return `Run failed in ${failedNode.title} (\`${failedNode.id}\`). ${message}`
+  return `Run failed in ${describeNodeLabel(failedNode.title, failedNode.id)}. ${message}`
 }
 
 function describeNode(snapshot: ProjectSnapshot | null | undefined, nodeId: string): string {
   const node = snapshot?.graph.nodes.find((entry) => entry.id === nodeId)
   if (!node) {
-    return `\`${nodeId}\``
+    return formatMarkdownCode(nodeId)
   }
-  return `${node.title} (\`${node.id}\`)`
+  return describeNodeLabel(node.title, node.id)
 }
 
 export function formatRunBlockedMessage(
@@ -275,7 +301,7 @@ export function frozenBlockBlockersForRemovedEdges(snapshot: ProjectSnapshot, ed
 }
 
 export function freezeBlockMessage(blockers: NodeRecord[]): string {
-  const labels = blockers.map((node) => `\`${node.title}\` (${node.id})`).join(', ')
+  const labels = blockers.map((node) => describeNodeLabel(node.title, node.id)).join(', ')
   if (blockers.length === 1) {
     return `This change is blocked because it would affect the frozen block ${labels}. Unfreeze it first.`
   }
@@ -283,7 +309,7 @@ export function freezeBlockMessage(blockers: NodeRecord[]): string {
 }
 
 export function frozenFileBlockMessage(node: NodeRecord): string {
-  return `This block is frozen. Unfreeze ${node.title} (${node.id}) before replacing the file.`
+  return `This block is frozen. Unfreeze ${describeNodeLabel(node.title, node.id)} before replacing the file.`
 }
 
 export function cloneSnapshot(snapshot: ProjectSnapshot): ProjectSnapshot {
