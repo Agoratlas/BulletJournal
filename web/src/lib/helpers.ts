@@ -1,6 +1,13 @@
 import type { ArtifactRecord, ArtifactState, NodeRecord, Port, ProjectSnapshot, TemplateRecord } from './types'
 
 export const GRID_SIZE = 20
+export const PORT_ROW_HEIGHT = GRID_SIZE * 2
+export const STANDARD_NODE_HEADER_HEIGHT = GRID_SIZE * 3
+export const STANDARD_NODE_PORT_CENTER_OFFSET = GRID_SIZE * 4
+export const ORGANIZER_NODE_PORT_CENTER_OFFSET = GRID_SIZE
+export const CONSTANT_NODE_WIDTH = GRID_SIZE * 5
+export const CONSTANT_NODE_HEIGHT = GRID_SIZE * 2
+export const CONSTANT_NODE_PORT_CENTER_OFFSET = GRID_SIZE
 
 export function slugify(value: string): string {
   return value
@@ -124,6 +131,9 @@ export function inputState(snapshot: ProjectSnapshot, nodeId: string, port: Port
 }
 
 export function badgeForNode(snapshot: ProjectSnapshot, node: NodeRecord): { label: string; title: string; tone: 'input' | 'template' | 'template-modified' | 'custom' } {
+  if (node.kind === 'constant') {
+    return { label: 'K', title: 'Constant block', tone: 'input' }
+  }
   if (node.kind === 'file_input') {
     return { label: 'F', title: 'File input node', tone: 'input' }
   }
@@ -132,9 +142,6 @@ export function badgeForNode(snapshot: ProjectSnapshot, node: NodeRecord): { lab
   }
   if (node.kind === 'area') {
     return { label: 'A', title: 'Area block', tone: 'custom' }
-  }
-  if (node.ui?.origin === 'constant_value') {
-    return { label: 'V', title: 'Constant value node', tone: 'input' }
   }
   if (node.template?.ref) {
     const unchanged = node.template_status === 'template'

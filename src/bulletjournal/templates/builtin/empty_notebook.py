@@ -22,18 +22,18 @@ def _():
 
 @app.cell
 def _():
-    # Create an input:
-    # sample_count = artifacts.pull(name='sample_count', data_type=int, default=10)
-    return
+    sample_count = artifacts.pull(name='sample_count', data_type=int, default=10)
+    return sample_count
 
 
 @app.cell
-def _():
-    # Create an output:
-    # frame = pd.DataFrame({'value': list(range(sample_count))})
-    # artifacts.push(frame, name='sample_df', data_type=pd.DataFrame, description='Sample output frame')
-    return
+def _(pd, sample_count):
+    frame = pd.DataFrame({'value': list(range(sample_count))})
+    artifacts.push(frame, name='sample_df', data_type=pd.DataFrame, description='Sample output frame')
+    return frame
 
 
 if __name__ == '__main__':
-    app.run()
+    from bulletjournal.runtime.standalone import run_notebook_app
+
+    run_notebook_app(app, __file__)

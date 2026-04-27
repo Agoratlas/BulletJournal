@@ -2,17 +2,17 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import type { Connection, EdgeChange, Node } from 'reactflow'
 
-import { appUrl, cancelRun, createCheckpoint, currentProject, dismissNotice, downloadNotebookSource, getSnapshot, listSessions, notebookDownloadUrl, patchGraph, restoreCheckpoint, runAll, runNode, runSelection, setArtifactState, setNodeOutputsState, stopSession, uploadFile } from './lib/api'
-import { GRID_SIZE, activeRunNodeId, artifactFor, artifactsForDisplay, currentRun, formatTimestamp, globalArtifactCounts, inputState, inputsForNode, outputsForNode, queuedRunNodeIds, templateByRef } from './lib/helpers'
+import { appUrl, cancelRun, createCheckpoint, currentProject, dismissNotice, downloadNotebookSource, getSnapshot, listSessions, notebookDownloadUrl, patchGraph, restoreCheckpoint, runAll, runNode, runSelection, setArtifactState, setConstantValue, setNodeOutputsState, stopSession, uploadConstantFile, uploadFile } from './lib/api'
+import { CONSTANT_NODE_HEIGHT, CONSTANT_NODE_PORT_CENTER_OFFSET, CONSTANT_NODE_WIDTH, GRID_SIZE, PORT_ROW_HEIGHT, STANDARD_NODE_PORT_CENTER_OFFSET, activeRunNodeId, artifactFor, artifactsForDisplay, currentRun, formatTimestamp, globalArtifactCounts, inputState, inputsForNode, outputsForNode, queuedRunNodeIds, templateByRef } from './lib/helpers'
 import { areaSettings, type AreaColorKey, type AreaTitlePosition } from './lib/area'
 import type { ArtifactRecord, GraphPatchOperation, LayoutRecord, NodeRecord, ProjectSnapshot, SessionRecord, TemplateRecord } from './lib/types'
 import type { AppNotice, ClipboardGraph, ClipboardNodeRecord, ConstantValueType, GraphHistoryEntry, GraphMutationPlan, NodeActionItem, OptimisticGraphState, PaletteEntry, PalettePreviewBlock, PortActionMenuState } from './appTypes'
-import { applyOptimisticGraphOperations, areaAddOperationForNode, artifactTargetForPort, blockCreateMode, buildConstantValueNotebookSource, clampContextMenuPosition, cloneSnapshot, copiedTitle, createClientNotice, edgeIdForPorts, edgeIdsForPort, editorSessionDetails, expandMutationPlan, fileInputAddOperationForNode, formatMarkdownCode, formatRunBlockedMessage, formatRunFailureMessage, freezeBlockMessage, frozenBlockBlockersForDelete, frozenBlockBlockersForRemovedEdges, frozenBlockBlockersForStaleRoots, isEditableTarget, isEditorOpenConflict, isFreezeConflict, isManagedRunFailure, mergeGraphIntoSnapshot, normalizeNodeId, notebookAddOperationForNode, organizerAddOperationForNode, pipelineDefinitionNodeIds, pipelineTemplateNodeRecords, pipelineTopLeftForCenter, SNAPSHOT_REFRESH_EVENTS, SNAPSHOT_REFRESH_THROTTLE_MS, snapToGrid, uniqueCopiedNodeId } from './lib/appHelpers'
+import { applyOptimisticGraphOperations, areaAddOperationForNode, artifactTargetForPort, blockCreateMode, clampContextMenuPosition, cloneSnapshot, constantAddOperationForNode, copiedTitle, createClientNotice, edgeIdForPorts, edgeIdsForPort, editorSessionDetails, expandMutationPlan, fileInputAddOperationForNode, formatMarkdownCode, formatRunBlockedMessage, formatRunFailureMessage, freezeBlockMessage, frozenBlockBlockersForDelete, frozenBlockBlockersForRemovedEdges, frozenBlockBlockersForStaleRoots, isEditableTarget, isEditorOpenConflict, isFreezeConflict, isManagedRunFailure, mergeGraphIntoSnapshot, normalizeNodeId, notebookAddOperationForNode, organizerAddOperationForNode, pipelineTemplateNodeRecords, pipelineTopLeftForCenter, SNAPSHOT_REFRESH_EVENTS, SNAPSHOT_REFRESH_THROTTLE_MS, snapToGrid, uniqueCopiedNodeId } from './lib/appHelpers'
 import { ArtifactCard } from './components/ArtifactCard'
 import { ArtifactCounts } from './components/ArtifactCounts'
 import { BlockPalette } from './components/BlockPalette'
 import { ActionButtons } from './components/ActionButtons'
-import { ConfirmDialog, CreateConstantValueDialog, CreateFileDialog, CreateNotebookDialog, CreateOrganizerPortDialog, CreatePipelineDialog, EditAreaDialog, EditOrganizerDialog, Modal } from './components/Dialogs'
+import { ConfirmDialog, CreateFileDialog, CreateNotebookDialog, CreateOrganizerPortDialog, CreatePipelineDialog, EditAreaDialog, EditConstantDialog, EditOrganizerDialog, Modal } from './components/Dialogs'
 import { GraphCanvas } from './components/GraphCanvas'
 import { Info, Palette, Play, Plus } from './components/Icons'
 import { NodeInspector } from './components/NodeInspector'
@@ -26,6 +26,16 @@ type PendingBlockCreation = {
   entry: PaletteEntry
   x: number
   y: number
+  presetConstantType?: ConstantValueType
+  connectToInput?: { nodeId: string; portName: string } | null
+}
+
+type ConstantNodeEditState = {
+  nodeId: string
+  dataType: ConstantValueType
+  initialJsonValue: string
+  initialJsonTooLarge: boolean
+  frozen: boolean
 }
 
 type FileNodeEditState = {
@@ -93,6 +103,7 @@ const AREA_NODE_HEIGHT = 280
 const PLACEMENT_PADDING = 40
 const PLACEMENT_SEARCH_STEP = GRID_SIZE * 2
 const MAX_PLACEMENT_RINGS = 24
+const SUPPORTED_CONSTANT_DATA_TYPES = new Set<ConstantValueType>(['int', 'float', 'bool', 'str', 'list', 'dict', 'file', 'pandas.DataFrame'])
 
 type PlacementRect = {
   left: number
@@ -180,6 +191,7 @@ function App() {
   const [pendingPipelineCreation, setPendingPipelineCreation] = useState<PendingPipelineCreation | null>(null)
   const [pendingOrganizerConnection, setPendingOrganizerConnection] = useState<PendingOrganizerConnection | null>(null)
   const [pendingAreaCreation, setPendingAreaCreation] = useState<PendingAreaCreation | null>(null)
+  const [constantNodeEdit, setConstantNodeEdit] = useState<ConstantNodeEditState | null>(null)
   const [fileNodeEdit, setFileNodeEdit] = useState<FileNodeEditState | null>(null)
   const [organizerNodeEdit, setOrganizerNodeEdit] = useState<OrganizerNodeEditState | null>(null)
   const [areaNodeEdit, setAreaNodeEdit] = useState<AreaNodeEditState | null>(null)
@@ -646,6 +658,45 @@ function App() {
     return `${normalizedBase}_${index}`
   }
 
+  function supportedConstantDataType(value: string | null | undefined): ConstantValueType | null {
+    if (!value || !SUPPORTED_CONSTANT_DATA_TYPES.has(value as ConstantValueType)) {
+      return null
+    }
+    return value as ConstantValueType
+  }
+
+  function constantArtifactPreview(nodeId: string) {
+    return liveSnapshot?.artifacts.find((artifact) => artifact.node_id === nodeId && artifact.artifact_name === 'value')?.preview ?? null
+  }
+
+  function constantInspectorText(nodeId: string): { text: string; truncated: boolean; editorText: string | null } {
+    const preview = constantArtifactPreview(nodeId) as { inspector_text?: unknown; inspector_truncated?: unknown; editor_text?: unknown } | null
+    return {
+      text: typeof preview?.inspector_text === 'string' ? preview.inspector_text : '',
+      truncated: Boolean(preview?.inspector_truncated),
+      editorText: typeof preview?.editor_text === 'string' ? preview.editor_text : null,
+    }
+  }
+
+  function constantPlacementForInput(nodeId: string, portName: string): { x: number; y: number } | null {
+    if (!liveSnapshot) {
+      return null
+    }
+    const node = liveSnapshot.graph.nodes.find((entry) => entry.id === nodeId)
+    const layout = liveSnapshot.graph.layout.find((entry) => entry.node_id === nodeId)
+    if (!node || !layout) {
+      return null
+    }
+    const inputIndex = inputsForNode(node).findIndex((port) => port.name === portName)
+    if (inputIndex === -1) {
+      return null
+    }
+    return {
+      x: layout.x - CONSTANT_NODE_WIDTH - GRID_SIZE * 2,
+      y: layout.y + STANDARD_NODE_PORT_CENTER_OFFSET + inputIndex * PORT_ROW_HEIGHT - CONSTANT_NODE_PORT_CENTER_OFFSET,
+    }
+  }
+
   function nextOrganizerPortKey(existingKeys: Set<string>, suggestedName: string): string {
     const normalizedBase = normalizeNodeId(suggestedName) || 'port'
     if (!existingKeys.has(normalizedBase)) {
@@ -890,8 +941,8 @@ function App() {
           .map((port) => artifactFor(liveSnapshot, node.id, port.name))
           .filter((artifact): artifact is ArtifactRecord => artifact !== undefined && artifact.current_version_id !== null)
       : []
-    const canMarkOutputsStale = artifactHeads.some((artifact) => artifact.state !== 'stale')
-    const canMarkOutputsReady = artifactHeads.some((artifact) => artifact.state === 'stale') && nodeInputsAreReady(node)
+    const canMarkOutputsStale = node.kind !== 'constant' && artifactHeads.some((artifact) => artifact.state !== 'stale')
+    const canMarkOutputsReady = node.kind !== 'constant' && artifactHeads.some((artifact) => artifact.state === 'stale') && nodeInputsAreReady(node)
     const actions: NodeActionItem[] = []
 
     if (node.kind === 'notebook') {
@@ -902,6 +953,17 @@ function App() {
         onClick: () => {
           dismissMenu()
           void handleRunNode(node.id, 'run_stale')
+        },
+      })
+    }
+
+    if (node.kind === 'constant') {
+      actions.push({
+        key: 'edit-constant',
+        label: 'Edit block',
+        onClick: () => {
+          dismissMenu()
+          openConstantNodeEdit(node.id)
         },
       })
     }
@@ -948,7 +1010,7 @@ function App() {
       })
     }
 
-    if (node.kind !== 'organizer' && node.kind !== 'area') {
+    if (node.kind !== 'organizer' && node.kind !== 'area' && node.kind !== 'constant') {
       actions.push(
         {
           key: 'mark-outputs-stale',
@@ -1031,11 +1093,17 @@ function App() {
       if (!liveSnapshot) {
         return false
       }
+      if (node.kind === 'constant') {
+        return false
+      }
       return [...(node.interface?.outputs ?? []), ...(node.interface?.assets ?? [])]
         .some((port) => artifactFor(liveSnapshot, node.id, port.name)?.state !== 'stale')
     })
     const readyMutationNodes = menuNodes.filter((node) => {
       if (!liveSnapshot) {
+        return false
+      }
+      if (node.kind === 'constant') {
         return false
       }
       const hasStaleOutputs = [...(node.interface?.outputs ?? []), ...(node.interface?.assets ?? [])]
@@ -1275,7 +1343,7 @@ function App() {
 
   function palettePreviewBlocks(
     title: string,
-    kind: 'empty' | 'value_input' | 'file_input' | 'organizer' | 'area' | 'template' | 'pipeline',
+    kind: 'empty' | 'constant' | 'organizer' | 'area' | 'template' | 'pipeline',
     template: TemplateRecord | null = null,
   ): PalettePreviewBlock[] {
     if (kind === 'organizer') {
@@ -1304,11 +1372,11 @@ function App() {
       return [{
         key: `${kind}:${title}`,
         title,
-        kind: kind === 'file_input' ? 'file_input' : 'notebook',
+        kind: kind === 'constant' ? 'constant' : 'notebook',
         x: 0,
         y: 0,
-        width: NEW_NODE_WIDTH,
-        height: NEW_NODE_HEIGHT,
+        width: kind === 'constant' ? CONSTANT_NODE_WIDTH : NEW_NODE_WIDTH,
+        height: kind === 'constant' ? CONSTANT_NODE_HEIGHT : NEW_NODE_HEIGHT,
       }]
     }
     const definitionNodes = template.definition?.nodes ?? []
@@ -1337,8 +1405,8 @@ function App() {
           kind: node.kind,
           x: nodeLayout.x,
           y: nodeLayout.y,
-          width: nodeLayout.w,
-          height: nodeLayout.h,
+          width: node.kind === 'constant' ? CONSTANT_NODE_WIDTH : nodeLayout.w,
+          height: node.kind === 'constant' ? CONSTANT_NODE_HEIGHT : nodeLayout.h,
         } satisfies PalettePreviewBlock
       })
       .filter((node): node is PalettePreviewBlock => node !== null)
@@ -1382,18 +1450,11 @@ function App() {
         previewBlocks: palettePreviewBlocks('New notebook', 'empty'),
       },
       {
-        key: 'value_input',
-        title: 'Constant value',
-        description: 'Create one or more ready-to-use constant outputs.',
-        kind: 'value_input',
-        previewBlocks: palettePreviewBlocks('Constant value', 'value_input'),
-      },
-      {
-        key: 'file_input',
-        title: 'File',
-        description: 'Upload a file and expose it as a file artifact.',
-        kind: 'file_input',
-        previewBlocks: palettePreviewBlocks('File', 'file_input'),
+        key: 'constant',
+        title: 'Constant',
+        description: 'Create a single constant artifact, including files and JSON-backed values.',
+        kind: 'constant',
+        previewBlocks: palettePreviewBlocks('Constant', 'constant'),
       },
       {
         key: 'organizer',
@@ -1417,7 +1478,6 @@ function App() {
     const templateEntries = (liveSnapshot?.templates ?? [])
       .filter(
         (template) => template.kind === 'notebook'
-          && template.ref !== 'builtin/value_input'
           && (showHiddenTemplates || !template.hidden),
       )
       .map<PaletteEntry>((template) => {
@@ -1526,6 +1586,7 @@ function App() {
     for (const operation of [...expandMutationPlan(redo)].reverse()) {
       switch (operation.type) {
         case 'add_notebook_node':
+        case 'add_constant_node':
         case 'add_file_input_node':
         case 'add_organizer_node':
         case 'add_area_node':
@@ -2012,19 +2073,19 @@ function App() {
   }
 
   async function handleCreateNode(
-    payload: { type: 'empty' | 'template' | 'file_input' | 'organizer' | 'area'; nodeId: string; title: string; templateRef?: string; sourceText?: string; origin?: 'constant_value' | null; area?: { titlePosition: AreaTitlePosition; color: AreaColorKey; filled: boolean } },
+    payload: { type: 'empty' | 'template' | 'constant' | 'organizer' | 'area'; nodeId: string; title: string; dataType?: ConstantValueType; templateRef?: string; sourceText?: string; area?: { titlePosition: AreaTitlePosition; color: AreaColorKey; filled: boolean } },
     placement?: { x: number; y: number },
   ) {
     const baseX = 120 + ((liveSnapshot?.graph.nodes.length ?? 0) % 4) * 420
     const baseY = 120 + Math.floor((liveSnapshot?.graph.nodes.length ?? 0) / 4) * 280
-    const width = payload.type === 'organizer' ? ORGANIZER_NODE_WIDTH : payload.type === 'area' ? AREA_NODE_WIDTH : NEW_NODE_WIDTH
-    const height = payload.type === 'organizer' ? ORGANIZER_NODE_HEIGHT : payload.type === 'area' ? AREA_NODE_HEIGHT : NEW_NODE_HEIGHT
+    const width = payload.type === 'constant' ? CONSTANT_NODE_WIDTH : payload.type === 'organizer' ? ORGANIZER_NODE_WIDTH : payload.type === 'area' ? AREA_NODE_WIDTH : NEW_NODE_WIDTH
+    const height = payload.type === 'constant' ? CONSTANT_NODE_HEIGHT : payload.type === 'organizer' ? ORGANIZER_NODE_HEIGHT : payload.type === 'area' ? AREA_NODE_HEIGHT : NEW_NODE_HEIGHT
     const x = snapToGrid((placement?.x ?? baseX) - width / 2)
     const y = snapToGrid((placement?.y ?? baseY) - height / 2)
-    if (payload.type === 'file_input') {
+    if (payload.type === 'constant') {
       const redo = {
         operations: [
-          { type: 'add_file_input_node', node_id: payload.nodeId, title: payload.title, x, y, w: NEW_NODE_WIDTH, h: NEW_NODE_HEIGHT } satisfies GraphPatchOperation,
+          { type: 'add_constant_node', node_id: payload.nodeId, title: 'Constant', data_type: payload.dataType ?? 'int', x, y, w: width, h: height } satisfies GraphPatchOperation,
         ],
       }
       await mutateGraph(redo.operations, {
@@ -2079,7 +2140,6 @@ function App() {
             title: payload.title,
             template_ref: payload.templateRef,
             source_text: payload.sourceText,
-            ui: payload.origin ? { origin: payload.origin } : undefined,
             x,
             y,
             w: NEW_NODE_WIDTH,
@@ -2160,6 +2220,9 @@ function App() {
   }
 
   function placementSizeForEntry(entry: PaletteEntry): { width: number; height: number } {
+    if (entry.kind === 'constant') {
+      return { width: CONSTANT_NODE_WIDTH, height: CONSTANT_NODE_HEIGHT }
+    }
     if (entry.kind === 'organizer') {
       return { width: ORGANIZER_NODE_WIDTH, height: ORGANIZER_NODE_HEIGHT }
     }
@@ -2256,7 +2319,9 @@ function App() {
   }
 
   function pipelineTemplateNodeIds(template: TemplateRecord): string[] {
-    return pipelineDefinitionNodeIds(template)
+    return (template.definition?.nodes ?? [])
+      .filter((node) => node.kind !== 'constant')
+      .map((node) => node.id)
   }
 
   function pipelinePrefixRequirements(template: TemplateRecord) {
@@ -2343,6 +2408,10 @@ function App() {
       setPendingAreaCreation({ x, y })
       return
     }
+    if (entry.kind === 'constant') {
+      setPendingBlockCreation({ entry, x, y, presetConstantType: 'int', connectToInput: null })
+      return
+    }
     if (entry.kind === 'template') {
       const suggestedNodeId = normalizeNodeId(entry.title)
       if (suggestedNodeId && !existingNodeIdSet.has(suggestedNodeId)) {
@@ -2385,11 +2454,7 @@ function App() {
     }
     const { entry, x, y } = pendingBlockCreation
     setPendingBlockCreation(null)
-    if (entry.kind === 'file_input') {
-      await handleCreateNode({ type: 'file_input', nodeId: payload.nodeId, title: payload.title }, { x, y })
-      return
-    }
-    if (entry.kind === 'template' || entry.kind === 'value_input') {
+    if (entry.kind === 'template') {
       await handleCreateNode({
         type: 'template',
         nodeId: payload.nodeId,
@@ -2430,64 +2495,125 @@ function App() {
     )
   }
 
-  async function handleCreateConstantValueBlock(payload: {
-    nodeId: string
-    title: string
-    outputs: Array<{ name: string; dataType: ConstantValueType; value: string }>
-  }) {
-    if (!pendingBlockCreation || !projectId) {
-      return
+  async function readOptionalJsonUpload(file: File | null): Promise<string | null> {
+    if (!file) {
+      return null
     }
-    const { x, y } = pendingBlockCreation
-    setPendingBlockCreation(null)
-    const sourceText = buildConstantValueNotebookSource(payload.title, payload.outputs)
-    await handleCreateNode(
-      {
-        type: 'template',
-        nodeId: payload.nodeId,
-        title: payload.title,
-        sourceText,
-        origin: 'constant_value',
-      },
-      { x, y },
-    )
-    const response = await runNode(payload.nodeId, 'run_stale', 'use_stale')
-    if (response.status === 'failed') {
-      reportClientError(`run:${payload.nodeId}:run_stale`, 'run_failed', formatRunFailureMessage(liveSnapshot, response, 'Run failed.'), { nodeId: payload.nodeId, details: response })
-    }
-    await refreshSnapshot()
+    return file.text()
   }
 
-  async function handleCreateFileBlock(payload: { nodeId: string; title: string; file: File | null; artifactName: string }) {
+  function parseConstantJsonValue(dataType: ConstantValueType, jsonText: string): unknown {
+    const parsed = JSON.parse(jsonText)
+    if (dataType === 'int') {
+      if (typeof parsed !== 'number' || !Number.isInteger(parsed)) {
+        throw new Error('Constant value must be a JSON integer.')
+      }
+      return parsed
+    }
+    if (dataType === 'float') {
+      if (typeof parsed !== 'number') {
+        throw new Error('Constant value must be a JSON number.')
+      }
+      return parsed
+    }
+    if (dataType === 'bool') {
+      if (typeof parsed !== 'boolean') {
+        throw new Error('Constant value must be `true` or `false`.')
+      }
+      return parsed
+    }
+    if (dataType === 'str') {
+      if (typeof parsed !== 'string') {
+        throw new Error('Constant value must be a JSON string.')
+      }
+      return parsed
+    }
+    if (dataType === 'list') {
+      if (!Array.isArray(parsed)) {
+        throw new Error('Constant value must be a JSON array.')
+      }
+      return parsed
+    }
+    if (dataType === 'dict') {
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        throw new Error('Constant value must be a JSON object.')
+      }
+      return parsed
+    }
+    return parsed
+  }
+
+  async function saveConstantBlockValue(nodeId: string, payload: { dataType: ConstantValueType; jsonText: string; uploadFile: File | null; jsonUploadFile: File | null }) {
+    if (payload.dataType === 'file' || payload.dataType === 'pandas.DataFrame') {
+      if (payload.uploadFile) {
+        await uploadConstantFile(nodeId, payload.uploadFile)
+      }
+      return
+    }
+    const resolvedValue = await resolveConstantEditorValue(payload)
+    if (resolvedValue === undefined) {
+      return
+    }
+    await setConstantValue(nodeId, resolvedValue)
+  }
+
+  async function resolveConstantEditorValue(payload: { dataType: ConstantValueType; jsonText: string; uploadFile: File | null; jsonUploadFile: File | null }): Promise<unknown | undefined> {
+    if (payload.dataType === 'file' || payload.dataType === 'pandas.DataFrame') {
+      return undefined
+    }
+    const uploadedJsonText = await readOptionalJsonUpload(payload.jsonUploadFile)
+    const resolvedJsonText = (uploadedJsonText ?? payload.jsonText).trim()
+    if (!resolvedJsonText) {
+      return undefined
+    }
+    return parseConstantJsonValue(payload.dataType, resolvedJsonText)
+  }
+
+  async function attachConstantToInput(sourceNodeId: string, targetNodeId: string, targetPort: string) {
+    if (!liveSnapshot) {
+      return
+    }
+    const removeOperations = liveSnapshot.graph.edges
+      .filter((edge) => edge.target_node === targetNodeId && edge.target_port === targetPort)
+      .map((edge) => ({ type: 'remove_edge', edge_id: edge.id } satisfies GraphPatchOperation))
+    const addOperation = { type: 'add_edge', source_node: sourceNodeId, source_port: 'value', target_node: targetNodeId, target_port: targetPort } satisfies GraphPatchOperation
+    await mutateGraph([...removeOperations, addOperation])
+  }
+
+  async function handleCreateConstantBlock(payload: { dataType: ConstantValueType; jsonText: string; uploadFile: File | null; jsonUploadFile: File | null }) {
     if (!pendingBlockCreation || !projectId) {
       return
     }
-    const { x, y } = pendingBlockCreation
+    const { x, y, presetConstantType, connectToInput } = pendingBlockCreation
     setPendingBlockCreation(null)
-    const redo = {
-      operations: [
-        {
-          type: 'add_file_input_node',
-          node_id: payload.nodeId,
-          title: payload.title,
-          artifact_name: payload.artifactName.trim() || 'file',
-          x: snapToGrid(x - NEW_NODE_WIDTH / 2),
-          y: snapToGrid(y - NEW_NODE_HEIGHT / 2),
-          w: NEW_NODE_WIDTH,
-          h: NEW_NODE_HEIGHT,
-        } satisfies GraphPatchOperation,
-      ],
+    const nodeId = nextAvailableNodeId('constant')
+    const initialValue = await resolveConstantEditorValue(payload)
+    const layoutX = connectToInput ? x : snapToGrid(x - CONSTANT_NODE_WIDTH / 2)
+    const layoutY = connectToInput ? y : snapToGrid(y - CONSTANT_NODE_HEIGHT / 2)
+    const addOperation: GraphPatchOperation = {
+      type: 'add_constant_node',
+      node_id: nodeId,
+      title: 'Constant',
+      data_type: payload.dataType ?? presetConstantType ?? 'int',
+      ...(initialValue === undefined ? {} : { value: initialValue }),
+      x: layoutX,
+      y: layoutY,
+      w: CONSTANT_NODE_WIDTH,
+      h: CONSTANT_NODE_HEIGHT,
     }
-    const success = await mutateGraph(redo.operations, {
-      history: liveSnapshot ? simpleHistoryEntryForPlan(liveSnapshot, redo) : null,
-      onSuccess: () => selectCreatedNodes([payload.nodeId]),
+    const success = await mutateGraph([addOperation], {
+      onSuccess: () => selectCreatedNodes([nodeId]),
     })
     if (!success) {
       return
     }
-    if (payload.file) {
-      await handleUploadFile(payload.nodeId, payload.file)
+    if (payload.dataType === 'file' || payload.dataType === 'pandas.DataFrame') {
+      await saveConstantBlockValue(nodeId, payload)
     }
+    if (connectToInput) {
+      await attachConstantToInput(nodeId, connectToInput.nodeId, connectToInput.portName)
+    }
+    await refreshSnapshot()
   }
 
   function handlePaletteDragStart(entry: PaletteEntry, position?: { x: number; y: number }) {
@@ -3007,6 +3133,32 @@ function App() {
     })
   }
 
+  function openConstantNodeEdit(nodeId: string) {
+    const node = liveSnapshot?.graph.nodes.find((entry) => entry.id === nodeId)
+    const dataType = supportedConstantDataType(node?.ui?.data_type)
+    if (!node || node.kind !== 'constant' || dataType === null) {
+      return
+    }
+    if (node.ui?.frozen) {
+      reportClientWarning(
+        `edit-frozen:${nodeId}`,
+        'frozen_block',
+        freezeBlockMessage([node]),
+        { nodeId },
+      )
+      return
+    }
+    const inspector = constantInspectorText(nodeId)
+    selectSingleNode(nodeId)
+    setConstantNodeEdit({
+      nodeId,
+      dataType,
+      initialJsonValue: inspector.editorText ?? '',
+      initialJsonTooLarge: !inspector.editorText && inspector.text.length > 0,
+      frozen: Boolean(node.ui?.frozen),
+    })
+  }
+
   function openOrganizerNodeEdit(nodeId: string) {
     const node = liveSnapshot?.graph.nodes.find((entry) => entry.id === nodeId)
     if (!node || node.kind !== 'organizer') {
@@ -3129,6 +3281,8 @@ function App() {
       const nextTitle = copiedTitle(item.node.title)
       if (item.node.kind === 'notebook') {
         nodeOperations.push(notebookAddOperationForNode(item.node, nextLayout, item.sourceText, nextNodeId, nextTitle))
+      } else if (item.node.kind === 'constant') {
+        nodeOperations.push(constantAddOperationForNode(item.node, nextLayout, nextNodeId, nextTitle))
       } else if (item.node.kind === 'organizer') {
         nodeOperations.push(organizerAddOperationForNode(item.node, nextLayout, nextNodeId, nextTitle))
       } else if (item.node.kind === 'area') {
@@ -3387,6 +3541,7 @@ function App() {
                   setNodeActionMenu(null)
                   setPortActionMenu({ nodeId, portName, side, x: clamped.x, y: clamped.y })
                 }}
+              onEditConstantNode={openConstantNodeEdit}
               onEditFileNode={openFileNodeEdit}
               onEditOrganizerNode={openOrganizerNodeEdit}
               onEditAreaNode={openAreaNodeEdit}
@@ -3483,46 +3638,71 @@ function App() {
           </div>
           <button
             className="secondary menu-item"
-            disabled={!portActionArtifact || !portActionHead || portActionHead.current_version_id === null || portActionHead.state === 'stale' || Boolean(portActionMutationBlockedReason)}
-            title={portActionMutationBlockedReason}
+            disabled={portActionMenu.side !== 'input' || supportedConstantDataType(inputsForNode(portActionMenuNode).find((port) => port.name === portActionMenu.portName)?.data_type) === null}
             onClick={() => {
-              if (!portActionArtifact) {
+              const dataType = supportedConstantDataType(inputsForNode(portActionMenuNode).find((port) => port.name === portActionMenu.portName)?.data_type)
+              const placement = constantPlacementForInput(portActionMenuNode.id, portActionMenu.portName)
+              if (!dataType || !placement) {
                 return
               }
               setPortActionMenu(null)
-              void handleSetArtifactStateAction(portActionArtifact.nodeId, portActionArtifact.artifactName, 'stale')
-            }}
-          >
-            Mark stale
-          </button>
-          <button
-            className="secondary menu-item"
-            disabled={
-              !portActionArtifact
-              || !portActionHead
-              || portActionHead.current_version_id === null
-              || portActionHead.state === 'ready'
-              || !nodeInputsAreReady(portActionMenuNode)
-              || Boolean(portActionMutationBlockedReason)
-            }
-            title={portActionMutationBlockedReason}
-            onClick={() => {
-              if (!portActionArtifact) {
-                return
-              }
-              setPortActionMenu(null)
-              setConfirmationState({
-                kind: 'artifact-state',
-                nodeId: portActionArtifact.nodeId,
-                artifactName: portActionArtifact.artifactName,
-                state: 'ready',
-                title: 'Mark output ready?',
-                message: `This bypasses consistency checks for ${portActionArtifact.nodeId}/${portActionArtifact.artifactName}.`,
+              setPendingBlockCreation({
+                entry: { key: 'constant', title: 'Constant', kind: 'constant' },
+                x: placement.x,
+                y: placement.y,
+                presetConstantType: dataType,
+                connectToInput: { nodeId: portActionMenuNode.id, portName: portActionMenu.portName },
               })
             }}
           >
-            Mark ready
+            Set constant
           </button>
+          {portActionMenuNode.kind !== 'constant' ? (
+            <>
+              <button
+                className="secondary menu-item"
+                disabled={!portActionArtifact || !portActionHead || portActionHead.current_version_id === null || portActionHead.state === 'stale' || Boolean(portActionMutationBlockedReason)}
+                title={portActionMutationBlockedReason}
+                onClick={() => {
+                  if (!portActionArtifact) {
+                    return
+                  }
+                  setPortActionMenu(null)
+                  void handleSetArtifactStateAction(portActionArtifact.nodeId, portActionArtifact.artifactName, 'stale')
+                }}
+              >
+                Mark stale
+              </button>
+              <button
+                className="secondary menu-item"
+                disabled={
+                  !portActionArtifact
+                  || !portActionHead
+                  || portActionHead.current_version_id === null
+                  || portActionHead.state === 'ready'
+                  || !nodeInputsAreReady(portActionMenuNode)
+                  || Boolean(portActionMutationBlockedReason)
+                }
+                title={portActionMutationBlockedReason}
+                onClick={() => {
+                  if (!portActionArtifact) {
+                    return
+                  }
+                  setPortActionMenu(null)
+                  setConfirmationState({
+                    kind: 'artifact-state',
+                    nodeId: portActionArtifact.nodeId,
+                    artifactName: portActionArtifact.artifactName,
+                    state: 'ready',
+                    title: 'Mark output ready?',
+                    message: `This bypasses consistency checks for ${portActionArtifact.nodeId}/${portActionArtifact.artifactName}.`,
+                  })
+                }}
+              >
+                Mark ready
+              </button>
+            </>
+          ) : null}
           <button
             className="secondary menu-item"
             disabled={!portActionEdgeIds.length || Boolean(portDisconnectBlockedReason)}
@@ -3635,21 +3815,33 @@ function App() {
         />
       ) : null}
 
-      {pendingBlockCreation && liveSnapshot && blockCreateMode(pendingBlockCreation.entry) === 'constant_value' ? (
-        <CreateConstantValueDialog
-          suggestedTitle={pendingBlockCreation.entry.title}
-          existingIds={existingNodeIds}
+      {pendingBlockCreation && liveSnapshot && blockCreateMode(pendingBlockCreation.entry) === 'constant' ? (
+        <EditConstantDialog
+          initialDataType={pendingBlockCreation.presetConstantType ?? 'int'}
+          allowTypeChange={!pendingBlockCreation.connectToInput}
           onClose={() => setPendingBlockCreation(null)}
-          onCreate={handleCreateConstantValueBlock}
+          onSave={handleCreateConstantBlock}
         />
       ) : null}
 
-      {pendingBlockCreation && liveSnapshot && blockCreateMode(pendingBlockCreation.entry) === 'file' ? (
-        <CreateFileDialog
-          suggestedTitle={pendingBlockCreation.entry.title}
-          existingIds={existingNodeIds}
-          onClose={() => setPendingBlockCreation(null)}
-          onCreate={handleCreateFileBlock}
+      {constantNodeEdit ? (
+        <EditConstantDialog
+          mode="edit"
+          initialDataType={constantNodeEdit.dataType}
+          allowTypeChange={false}
+          initialJsonValue={constantNodeEdit.initialJsonValue}
+          initialJsonTooLarge={constantNodeEdit.initialJsonTooLarge}
+          uploadDisabledMessage={constantNodeEdit.frozen ? 'This block is frozen. Unfreeze it before editing the value.' : null}
+          onClose={() => setConstantNodeEdit(null)}
+          onSave={async (payload) => {
+            const editing = constantNodeEdit
+            setConstantNodeEdit(null)
+            if (!editing || !projectId) {
+              return
+            }
+            await saveConstantBlockValue(editing.nodeId, payload)
+            await refreshSnapshot()
+          }}
         />
       ) : null}
 

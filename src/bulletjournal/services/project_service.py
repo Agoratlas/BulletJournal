@@ -14,6 +14,8 @@ from bulletjournal.domain.models import (
     NotebookInterface,
     Port,
     ProjectMetadata,
+    constant_artifact_name,
+    constant_data_type,
     file_input_artifact_name,
 )
 from bulletjournal.domain.state_machine import derive_node_state
@@ -148,6 +150,8 @@ class ProjectService:
         node = self.get_node(node_id)
         if node.kind == NodeKind.FILE_INPUT:
             return self.synthetic_file_input_interface(node).to_dict()
+        if node.kind == NodeKind.CONSTANT:
+            return self.synthetic_constant_interface(node).to_dict()
         if node.kind == NodeKind.ORGANIZER:
             return organizer_interface_for_node(node).to_dict()
         if node.kind == NodeKind.AREA:
@@ -186,6 +190,29 @@ class ProjectService:
             ],
             assets=[],
             docs='File input node.',
+            issues=[],
+        )
+
+    def synthetic_constant_interface(self, node: Node) -> NotebookInterface:
+        artifact_name = constant_artifact_name(node)
+        data_type = constant_data_type(node)
+        return NotebookInterface(
+            node_id=node.id,
+            source_hash=f'constant:{data_type}',
+            inputs=[],
+            outputs=[
+                Port(
+                    name=artifact_name,
+                    data_type=data_type,
+                    role=ArtifactRole.OUTPUT,
+                    description='Constant artifact',
+                    kind='file' if data_type == 'file' else 'value',
+                    direction='output',
+                    declaration_index=0,
+                )
+            ],
+            assets=[],
+            docs='Constant block.',
             issues=[],
         )
 
@@ -520,6 +547,9 @@ class ProjectService:
         for node in graph.nodes:
             if node.kind == NodeKind.FILE_INPUT:
                 project.state_db.ensure_artifact_head(node.id, file_input_artifact_name(node), ArtifactState.PENDING)
+                continue
+            if node.kind == NodeKind.CONSTANT:
+                project.state_db.ensure_artifact_head(node.id, constant_artifact_name(node), ArtifactState.PENDING)
                 continue
             if node.kind in {NodeKind.ORGANIZER, NodeKind.AREA}:
                 continue

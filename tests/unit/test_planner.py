@@ -14,7 +14,7 @@ def _graph() -> GraphData:
     return GraphData(
         meta={'graph_version': 1},
         nodes=[
-            Node(id='input_file', kind=NodeKind.FILE_INPUT, title='Input File'),
+            Node(id='input_file', kind=NodeKind.CONSTANT, title='Input File', ui={'data_type': 'file'}),
             Node(id='source', kind=NodeKind.NOTEBOOK, title='Source'),
             Node(id='middle', kind=NodeKind.NOTEBOOK, title='Middle'),
             Node(id='leaf', kind=NodeKind.NOTEBOOK, title='Leaf'),
@@ -73,7 +73,7 @@ def test_run_plan_for_node_includes_requested_upstream_nodes_once() -> None:
     assert plan == ['input_file', 'source', 'middle', 'leaf']
 
 
-def test_stale_or_pending_nodes_excludes_file_inputs_by_default() -> None:
+def test_stale_or_pending_nodes_excludes_constants_by_default() -> None:
     graph = _graph()
     artifact_heads = [
         {'node_id': 'input_file', 'state': 'pending'},

@@ -37,14 +37,14 @@ export type TemplateRef = {
 
 export type NodeRecord = {
   id: string
-  kind: 'notebook' | 'file_input' | 'organizer' | 'area'
+  kind: 'notebook' | 'constant' | 'file_input' | 'organizer' | 'area'
   title: string
   path?: string | null
   template?: TemplateRef | null
   template_status?: 'template' | 'modified' | null
   ui?: {
     artifact_name?: string
-    origin?: 'constant_value' | null
+    data_type?: string
     frozen?: boolean
     organizer_ports?: Array<{
       key: string
@@ -183,12 +183,15 @@ export type TemplateRecord = {
       documentation?: string
       nodes?: Array<{
         id: string
-        kind: 'notebook' | 'file_input' | 'organizer' | 'area'
+        kind: 'notebook' | 'constant' | 'file_input' | 'organizer' | 'area'
         title: string
         template_ref?: string
+        data_type?: string
+        value?: unknown
         artifact_name?: string
         ui?: {
           artifact_name?: string
+          data_type?: string
           organizer_ports?: Array<{
             key: string
             name: string
@@ -260,7 +263,8 @@ export type GraphPatchResponse = {
 export type ProjectOpenResponse = ProjectSnapshot
 
 export type GraphPatchOperation =
-  | { type: 'add_notebook_node'; node_id: string; title: string; x?: number; y?: number; w?: number; h?: number; template_ref?: string; source_text?: string; ui?: { origin?: 'constant_value' | null; frozen?: boolean } }
+  | { type: 'add_notebook_node'; node_id: string; title: string; x?: number; y?: number; w?: number; h?: number; template_ref?: string; source_text?: string; ui?: { frozen?: boolean } }
+  | { type: 'add_constant_node'; node_id: string; title?: string; data_type: string; value?: unknown; ui?: { artifact_name?: string; data_type?: string; frozen?: boolean }; x?: number; y?: number; w?: number; h?: number }
   | { type: 'add_file_input_node'; node_id: string; title: string; artifact_name?: string; ui?: { frozen?: boolean }; x?: number; y?: number; w?: number; h?: number }
   | { type: 'add_organizer_node'; node_id: string; title?: string; ui?: { frozen?: boolean; organizer_ports?: Array<{ key: string; name: string; data_type: string }> }; x?: number; y?: number; w?: number; h?: number }
   | { type: 'add_area_node'; node_id: string; title?: string; ui?: { frozen?: boolean; title_position?: string; area_color?: string; area_filled?: boolean }; x?: number; y?: number; w?: number; h?: number }
@@ -269,6 +273,7 @@ export type GraphPatchOperation =
   | { type: 'remove_edge'; edge_id: string }
   | { type: 'update_node_layout'; node_id: string; x: number; y: number; w?: number; h?: number }
   | { type: 'update_node_title'; node_id: string; title: string }
+  | { type: 'update_constant_node'; node_id: string; data_type: string }
   | { type: 'update_organizer_ports'; node_id: string; ports: Array<{ key: string; name: string; data_type: string }> }
   | { type: 'update_area_style'; node_id: string; title_position: string; color: string; filled: boolean }
   | { type: 'update_node_frozen'; node_id: string; frozen: boolean }

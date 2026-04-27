@@ -76,7 +76,7 @@ def stale_or_pending_nodes(
     selected: list[str] = []
     for node_id in ordered:
         node = node_map[node_id]
-        if node.kind == NodeKind.FILE_INPUT and not include_file_inputs:
+        if node.kind in {NodeKind.FILE_INPUT, NodeKind.CONSTANT} and not include_file_inputs:
             continue
         states = states_by_node.get(node_id, set())
         if ArtifactState.PENDING.value in states or ArtifactState.STALE.value in states:

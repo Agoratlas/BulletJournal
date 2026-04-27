@@ -11,6 +11,7 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from bulletjournal.api.app import create_app
+from bulletjournal.domain.enums import RunStatus, ValidationSeverity
 from bulletjournal.storage.project_fs import init_project_root
 
 
@@ -1949,6 +1950,7 @@ def test_recreating_deleted_node_id_clears_execution_metadata(tmp_path) -> None:
     app = create_app(project_path=project_root)
     client = TestClient(app)
     container = app.state.container
+    project = container.project_service.require_project()
 
     opened = client.get('/api/v1/project/snapshot')
     graph_version = opened.json()['graph']['meta']['graph_version']
@@ -1968,7 +1970,25 @@ def test_recreating_deleted_node_id_clears_execution_metadata(tmp_path) -> None:
     )
     assert patch.status_code == 200
 
-    container.project_service.require_project().state_db.upsert_orchestrator_execution_meta(
+    stdout_log = project.paths.execution_logs_dir / 'run-1_sample_node.stdout.log'
+    stderr_log = project.paths.execution_logs_dir / 'run-1_sample_node.stderr.log'
+    stdout_log.write_text('stdout from old node\n', encoding='utf-8')
+    stderr_log.write_text('stderr from old node\n', encoding='utf-8')
+
+    project.state_db.record_run(
+        'run-1',
+        opened.json()['project']['project_id'],
+        'run_stale',
+        {'node_id': 'sample_node', 'node_ids': ['sample_node'], 'plan': ['sample_node']},
+        patch.json()['meta']['graph_version'],
+        {'started_at': '2026-03-26T00:00:00Z'},
+    )
+    project.state_db.update_run_status(
+        'run-1',
+        status=RunStatus.FAILED,
+        failure_json={'node_id': 'sample_node', 'error': 'boom'},
+    )
+    project.state_db.upsert_orchestrator_execution_meta(
         node_id='sample_node',
         run_id='run-1',
         status='running',
@@ -1976,6 +1996,16 @@ def test_recreating_deleted_node_id_clears_execution_metadata(tmp_path) -> None:
         current_cell={'cell_id': 'cell-1', 'cell_number': 2, 'total_cells': 5, 'cell_code': 'x = 1'},
         total_cells=5,
         last_completed_cell_number=1,
+        stdout_path=str(stdout_log),
+        stderr_path=str(stderr_log),
+    )
+    container.project_service.record_notice(
+        issue_id='run-failed-sample-node',
+        node_id='sample_node',
+        severity=ValidationSeverity.ERROR,
+        code='run_failed',
+        message='Run failed in `Sample Node` (`sample_node`). boom',
+        details={'run_id': 'run-1', 'node_id': 'sample_node', 'error': 'boom'},
     )
 
     deleted = client.patch(
@@ -2012,6 +2042,20 @@ def test_recreating_deleted_node_id_clears_execution_metadata(tmp_path) -> None:
     node = next(node for node in snapshot.json()['graph']['nodes'] if node['id'] == 'sample_node')
     assert node['execution_meta'] is None
     assert node['orchestrator_state'] is None
+    assert node['state'] == 'pending'
+    assert not any(
+        notice['code'] == 'run_failed' and notice.get('node_id') == 'sample_node'
+        for notice in snapshot.json()['notices']
+    )
+    assert not any(
+        run['target_json'].get('node_id') == 'sample_node'
+        or 'sample_node' in run['target_json'].get('node_ids', [])
+        or 'sample_node' in run['target_json'].get('plan', [])
+        or (isinstance(run.get('failure_json'), dict) and run['failure_json'].get('node_id') == 'sample_node')
+        for run in snapshot.json()['runs']
+    )
+    assert not stdout_log.exists()
+    assert not stderr_log.exists()
 
 
 def test_template_backed_node_renders_node_id_in_notebook_source(tmp_path) -> None:

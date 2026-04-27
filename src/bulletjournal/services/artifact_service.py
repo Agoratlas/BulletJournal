@@ -1,13 +1,16 @@
 from __future__ import annotations
 
+import io
 import mimetypes
 from pathlib import Path
 from typing import Any
 
+import pandas as pd
+
 from bulletjournal.domain.enums import ArtifactRole, ArtifactState, LineageMode, NodeKind, StorageKind
 from bulletjournal.domain.errors import InvalidRequestError, NotFoundError
 from bulletjournal.domain.graph_bindings import resolve_input_binding
-from bulletjournal.domain.models import file_input_artifact_name
+from bulletjournal.domain.models import constant_artifact_name, constant_data_type, file_input_artifact_name
 from bulletjournal.services.graph_service import GraphService
 from bulletjournal.utils import utc_now_iso
 
@@ -28,31 +31,115 @@ class ArtifactService:
         return head
 
     def upload_file(self, node_id: str, filename: str, content: bytes, mime_type: str | None = None) -> dict[str, Any]:
-        project = self.project_service.require_project()
         node = self.project_service.get_node(node_id)
-        if node.kind != NodeKind.FILE_INPUT:
-            raise InvalidRequestError(f'Node `{node_id}` is not a file input node.')
         blockers = self.project_service.frozen_block_blockers_for_stale_roots([node_id])
         if blockers:
             raise InvalidRequestError(self.project_service.freeze_block_message(blockers))
-        artifact_name = file_input_artifact_name(node)
+        if node.kind == NodeKind.FILE_INPUT:
+            artifact_name = file_input_artifact_name(node)
+            persisted = self._persist_uploaded_file(filename=filename, content=content)
+            return self._save_managed_artifact(
+                node_id=node_id,
+                artifact_name=artifact_name,
+                persisted=persisted,
+                source_hash='file_input',
+                mime_type=mime_type,
+                original_filename=filename,
+            )
+        if node.kind != NodeKind.CONSTANT:
+            raise InvalidRequestError(f'Node `{node_id}` does not support file uploads.')
+        data_type = constant_data_type(node)
+        if data_type == 'file':
+            persisted = self._persist_uploaded_file(filename=filename, content=content)
+        elif data_type == 'pandas.DataFrame':
+            persisted = self._persist_uploaded_dataframe_csv(filename=filename, content=content)
+        else:
+            raise InvalidRequestError(
+                f'Constant block `{node_id}` expects `{data_type}` and cannot accept uploaded files.'
+            )
+        return self._save_managed_artifact(
+            node_id=node_id,
+            artifact_name=constant_artifact_name(node),
+            persisted=persisted,
+            source_hash=f'constant:{data_type}',
+            mime_type=mime_type,
+            original_filename=filename,
+        )
+
+    def set_constant_value(
+        self,
+        node_id: str,
+        value: Any,
+        *,
+        propagate_downstream_stale: bool = True,
+        interrupt_active_run: bool = True,
+    ) -> dict[str, Any]:
+        node = self.project_service.get_node(node_id)
+        if node.kind != NodeKind.CONSTANT:
+            raise InvalidRequestError(f'Node `{node_id}` is not a constant block.')
+        blockers = self.project_service.frozen_block_blockers_for_stale_roots([node_id])
+        if blockers:
+            raise InvalidRequestError(self.project_service.freeze_block_message(blockers))
+        data_type = constant_data_type(node)
+        if data_type in {'file', 'pandas.DataFrame'}:
+            raise InvalidRequestError(
+                f'Constant block `{node_id}` expects `{data_type}` and must be populated from an uploaded file.'
+            )
+        if data_type == 'pandas.Series' and isinstance(value, list):
+            value = pd.Series(value)
+        persisted = self.project_service.require_project().object_store.persist_value(value, data_type)
+        return self._save_managed_artifact(
+            node_id=node_id,
+            artifact_name=constant_artifact_name(node),
+            persisted=persisted,
+            source_hash=f'constant:{data_type}',
+            propagate_downstream_stale=propagate_downstream_stale,
+            interrupt_active_run=interrupt_active_run,
+        )
+
+    def _persist_uploaded_file(self, *, filename: str, content: bytes) -> dict[str, Any]:
+        project = self.project_service.require_project()
         temp_path = project.object_store.create_temp_file(Path(filename).suffix)
         try:
             temp_path.write_bytes(content)
-            persisted = project.object_store.persist_file(temp_path, extension=Path(filename).suffix)
+            return project.object_store.persist_file(temp_path, extension=Path(filename).suffix)
         finally:
             if temp_path.exists():
                 temp_path.unlink()
+
+    def _persist_uploaded_dataframe_csv(self, *, filename: str, content: bytes) -> dict[str, Any]:
+        suffix = Path(filename).suffix.lower()
+        if suffix != '.csv':
+            raise InvalidRequestError('DataFrame constants currently only support `.csv` uploads.')
+        try:
+            frame = pd.read_csv(io.BytesIO(content))
+        except Exception as exc:  # pragma: no cover - pandas error surface varies by version
+            raise InvalidRequestError(f'Failed to parse CSV upload for constant block: {exc}.') from exc
+        return self.project_service.require_project().object_store.persist_value(frame, 'pandas.DataFrame')
+
+    def _save_managed_artifact(
+        self,
+        *,
+        node_id: str,
+        artifact_name: str,
+        persisted: dict[str, Any],
+        source_hash: str,
+        mime_type: str | None = None,
+        original_filename: str | None = None,
+        propagate_downstream_stale: bool = True,
+        interrupt_active_run: bool = True,
+    ) -> dict[str, Any]:
+        project = self.project_service.require_project()
         project.state_db.upsert_artifact_object(
             persisted['artifact_hash'],
             persisted['storage_kind'],
             persisted['data_type'],
             persisted['size_bytes'],
             persisted.get('extension'),
-            mime_type or persisted.get('mime_type') or mimetypes.guess_type(filename)[0],
+            mime_type or persisted.get('mime_type') or mimetypes.guess_type(original_filename or artifact_name)[0],
             {
                 **(persisted.get('preview') or {}),
-                'original_filename': filename,
+                **({'original_filename': original_filename} if original_filename else {}),
                 'uploaded_at': utc_now_iso(),
             },
         )
@@ -62,7 +149,7 @@ class ArtifactService:
             artifact_name=artifact_name,
             role=ArtifactRole.OUTPUT,
             artifact_hash=persisted['artifact_hash'],
-            source_hash='file_input',
+            source_hash=source_hash,
             upstream_code_hash=persisted['artifact_hash'],
             upstream_data_hash=persisted['artifact_hash'],
             run_id=f'upload:{node_id}:{utc_now_iso()}',
@@ -83,12 +170,13 @@ class ArtifactService:
                 'version_id': version_id,
             },
         )
-        if self.project_service.run_service is not None:
+        if interrupt_active_run and self.project_service.run_service is not None:
             self.project_service.run_service.interrupt_active_run_if_nodes_affected(
                 [node_id],
                 self.project_service.graph(),
             )
-        GraphService(self.project_service).mark_downstream_stale([node_id])
+        if propagate_downstream_stale:
+            GraphService(self.project_service).mark_downstream_stale([node_id])
         return self.get_artifact(node_id, artifact_name)
 
     def set_artifact_state(

@@ -43,6 +43,9 @@ def launch_editor(
     environment: dict[str, str] | None = None,
 ) -> subprocess.Popen[str]:
     env = os.environ.copy()
+    src_path = str(Path(__file__).resolve().parents[2])
+    existing_pythonpath = env.get('PYTHONPATH', '').strip()
+    env['PYTHONPATH'] = src_path if not existing_pythonpath else f'{src_path}{os.pathsep}{existing_pythonpath}'
     if environment:
         env.update(environment)
     return subprocess.Popen(  # noqa: S603

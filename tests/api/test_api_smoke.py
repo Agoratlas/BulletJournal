@@ -1,3 +1,5 @@
+import json
+
 from fastapi.testclient import TestClient
 
 from bulletjournal.api.app import create_app
@@ -701,13 +703,15 @@ def test_graph_patch_can_add_pipeline_template(tmp_path) -> None:
     assert created.status_code == 200
     snapshot = client.get('/api/v1/project/snapshot').json()
     node_ids = {node['id'] for node in snapshot['graph']['nodes']}
-    assert {'file', 'example_1', 'example_2', 'example_3', 'example_4'} <= node_ids
+    assert {'constant', 'example_1', 'example_2', 'example_3', 'example_4'} <= node_ids
+    constant_node = next(node for node in snapshot['graph']['nodes'] if node['id'] == 'constant')
+    assert constant_node['interface']['outputs'][0]['name'] == 'file'
     edge_ids = {edge['id'] for edge in snapshot['graph']['edges']}
-    assert 'file.file__example_1.iris_csv' in edge_ids
+    assert 'constant.file__example_1.iris_csv' in edge_ids
     layout_by_node = {entry['node_id']: entry for entry in snapshot['graph']['layout']}
-    assert layout_by_node['file']['x'] == 200
+    assert layout_by_node['constant']['x'] == 200
     assert layout_by_node['example_4']['y'] == 240
-    assert layout_by_node['file']['y'] - layout_by_node['example_4']['y'] == 180
+    assert layout_by_node['constant']['y'] - layout_by_node['example_4']['y'] == 240
 
 
 def test_graph_patch_requires_prefix_when_pipeline_template_collides(tmp_path) -> None:
@@ -791,12 +795,133 @@ def test_graph_patch_accepts_prefixed_pipeline_template(tmp_path) -> None:
     snapshot = client.get('/api/v1/project/snapshot').json()
     node_ids = {node['id'] for node in snapshot['graph']['nodes']}
     assert {
-        'study_b_file',
+        'study_b_constant',
         'study_b_example_1',
         'study_b_example_2',
         'study_b_example_3',
         'study_b_example_4',
     } <= node_ids
+
+
+def test_pipeline_constants_do_not_force_prefix_collisions(tmp_path, monkeypatch) -> None:
+    pipeline_source = json.dumps(
+        {
+            'title': 'Constant Only',
+            'nodes': [
+                {
+                    'id': 'source',
+                    'title': 'Source',
+                    'kind': 'constant',
+                    'artifact_name': 'value',
+                    'data_type': 'int',
+                    'value': 7,
+                }
+            ],
+            'edges': [],
+            'layout': [{'node_id': 'source', 'x': 80, 'y': 120, 'w': 100, 'h': 40}],
+        }
+    )
+
+    class Provider:
+        provider_name = 'acme'
+        provider_revision = '0.1.0'
+
+        def list_notebook_templates(self):
+            return []
+
+        def list_pipeline_templates(self):
+            return [
+                {
+                    'name': 'constant_only',
+                    'ref': 'acme/constant_only',
+                    'title': 'Constant Only',
+                    'path': 'pipelines/constant_only.json',
+                    'hidden': False,
+                }
+            ]
+
+        def load_notebook_template(self, name: str) -> str:
+            return ''
+
+        def load_pipeline_template(self, name: str) -> str:
+            return pipeline_source if name == 'constant_only' else ''
+
+    monkeypatch.setattr('bulletjournal.services.template_service.discover_template_providers', lambda: [Provider()])
+
+    project_root = init_project_root(tmp_path / 'project').root
+    app = create_app(project_path=project_root)
+    client = TestClient(app)
+
+    opened = client.get('/api/v1/project/snapshot')
+    graph_version = opened.json()['graph']['meta']['graph_version']
+
+    first = client.patch(
+        '/api/v1/graph',
+        json={
+            'graph_version': graph_version,
+            'operations': [{'type': 'add_pipeline_template', 'template_ref': 'acme/constant_only'}],
+        },
+    )
+    assert first.status_code == 200
+
+    second = client.patch(
+        '/api/v1/graph',
+        json={
+            'graph_version': first.json()['meta']['graph_version'],
+            'operations': [{'type': 'add_pipeline_template', 'template_ref': 'acme/constant_only'}],
+        },
+    )
+    assert second.status_code == 200
+
+    snapshot = client.get('/api/v1/project/snapshot').json()
+    node_ids = {node['id'] for node in snapshot['graph']['nodes']}
+    assert {'constant', 'constant_2'} <= node_ids
+
+
+def test_uploaded_constant_file_unblocks_downstream_notebook_run(tmp_path) -> None:
+    project_root = init_project_root(tmp_path / 'project').root
+    app = create_app(project_path=project_root)
+    client = TestClient(app)
+
+    opened = client.get('/api/v1/project/snapshot')
+    graph_version = opened.json()['graph']['meta']['graph_version']
+
+    created = client.patch(
+        '/api/v1/graph',
+        json={
+            'graph_version': graph_version,
+            'operations': [
+                {
+                    'type': 'add_pipeline_template',
+                    'template_ref': 'builtin/example_iris_pipeline',
+                }
+            ],
+        },
+    )
+    assert created.status_code == 200
+
+    blocked = client.post('/api/v1/nodes/example_1/run', json={'mode': 'run_stale', 'action': 'run_upstream'})
+    assert blocked.status_code == 200
+    assert blocked.json()['status'] == 'blocked'
+    assert blocked.json()['blocked_inputs'][0]['source'] == 'constant/file'
+
+    csv_bytes = b'sepal_length,sepal_width,petal_length,petal_width,species\n5.1,3.5,1.4,0.2,setosa\n'
+    upload = client.post(
+        '/api/v1/constants/constant/upload',
+        content=csv_bytes,
+        headers={'X-Filename': 'iris.csv', 'Content-Type': 'text/csv'},
+    )
+    assert upload.status_code == 200
+    assert upload.json()['artifact_name'] == 'file'
+    assert upload.json()['state'] == 'ready'
+
+    run = client.post('/api/v1/nodes/example_1/run', json={'mode': 'run_stale'})
+    assert run.status_code == 200
+    assert run.json()['status'] == 'succeeded'
+
+    dataframe = client.get('/api/v1/artifacts/example_1/iris_dataframe')
+    assert dataframe.status_code == 200
+    assert dataframe.json()['preview']['rows'] == 1
 
 
 def test_file_input_node_can_use_custom_artifact_name(tmp_path) -> None:
@@ -827,6 +952,124 @@ def test_file_input_node_can_use_custom_artifact_name(tmp_path) -> None:
     snapshot = client.get('/api/v1/project/snapshot')
     node = next(item for item in snapshot.json()['graph']['nodes'] if item['id'] == 'source_file')
     assert node['interface']['outputs'][0]['name'] == 'dataset'
+
+
+def test_constant_node_can_populate_downstream_notebook(tmp_path) -> None:
+    project_root = init_project_root(tmp_path / 'project').root
+    app = create_app(project_path=project_root)
+    client = TestClient(app)
+
+    opened = client.get('/api/v1/project/snapshot')
+    graph_version = opened.json()['graph']['meta']['graph_version']
+
+    created = client.patch(
+        '/api/v1/graph',
+        json={
+            'graph_version': graph_version,
+            'operations': [
+                {
+                    'type': 'add_constant_node',
+                    'node_id': 'value_source',
+                    'title': 'Value Source',
+                    'data_type': 'int',
+                    'value': 42,
+                },
+                {
+                    'type': 'add_notebook_node',
+                    'node_id': 'table_sink',
+                    'title': 'Table Sink',
+                    'template_ref': 'builtin/test_starter_notebook',
+                },
+            ],
+        },
+    )
+    assert created.status_code == 200
+
+    connected = client.patch(
+        '/api/v1/graph',
+        json={
+            'graph_version': created.json()['meta']['graph_version'],
+            'operations': [
+                {
+                    'type': 'add_edge',
+                    'source_node': 'value_source',
+                    'source_port': 'value',
+                    'target_node': 'table_sink',
+                    'target_port': 'sample_count',
+                }
+            ],
+        },
+    )
+    assert connected.status_code == 200
+
+    run = client.post(
+        '/api/v1/nodes/table_sink/run',
+        json={'mode': 'run_stale', 'action': 'use_stale'},
+    )
+    assert run.status_code == 200
+    assert run.json()['status'] == 'succeeded'
+
+    artifact = client.get('/api/v1/artifacts/table_sink/sample_df')
+    assert artifact.status_code == 200
+    assert artifact.json()['preview']['rows'] == 42
+
+
+def test_constant_file_artifact_content_endpoint_renders_inline_image(tmp_path) -> None:
+    project_root = init_project_root(tmp_path / 'project').root
+    app = create_app(project_path=project_root)
+    client = TestClient(app)
+
+    opened = client.get('/api/v1/project/snapshot')
+    graph_version = opened.json()['graph']['meta']['graph_version']
+
+    created = client.patch(
+        '/api/v1/graph',
+        json={
+            'graph_version': graph_version,
+            'operations': [
+                {
+                    'type': 'add_constant_node',
+                    'node_id': 'image_source',
+                    'title': 'Image Source',
+                    'data_type': 'file',
+                }
+            ],
+        },
+    )
+    assert created.status_code == 200
+
+    png_bytes = (
+        b'\x89PNG\r\n\x1a\n'
+        b'\x00\x00\x00\rIHDR'
+        b'\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00'
+        b'\x1f\x15\xc4\x89'
+        b'\x00\x00\x00\x0cIDATx\x9cc``\xf8\xcf\xc0\x00\x00\x03\x01\x01\x00'
+        b'\x18\xdd\x8d\xb1'
+        b'\x00\x00\x00\x00IEND\xaeB`\x82'
+    )
+    upload = client.post(
+        '/api/v1/constants/image_source/upload',
+        content=png_bytes,
+        headers={
+            'X-Filename': 'chart upload.png',
+            'Content-Type': 'image/png',
+        },
+    )
+    assert upload.status_code == 200
+
+    artifact = client.get('/api/v1/artifacts/image_source/value')
+    assert artifact.status_code == 200
+    preview = artifact.json()['preview']
+    assert preview['kind'] == 'file'
+    assert preview['image_inline'] is True
+    assert preview['mime_type'] == 'image/png'
+
+    content = client.get('/api/v1/artifacts/image_source/value/content')
+
+    assert content.status_code == 200
+    assert content.headers['content-type'].startswith('image/png')
+    assert 'attachment' not in content.headers.get('content-disposition', '')
+    assert content.content == png_bytes
 
 
 def test_artifact_download_uses_artifact_name_and_extension(tmp_path) -> None:

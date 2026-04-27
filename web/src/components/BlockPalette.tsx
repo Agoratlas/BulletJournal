@@ -1,6 +1,7 @@
 import { useMemo, useRef, useState } from 'react'
 
 import type { PaletteEntry, PalettePreviewBlock } from '../appTypes'
+import { CONSTANT_NODE_HEIGHT, CONSTANT_NODE_WIDTH } from '../lib/helpers'
 import { ChevronDown } from './Icons'
 
 type PaletteTreeNode = PaletteDirectoryNode | PaletteEntryNode
@@ -149,7 +150,7 @@ function buildPaletteSections(entries: PaletteEntry[], groupTemplatesByProvider:
     createSection(
       'palette:core',
       'Core blocks',
-      entries.filter((entry) => entry.kind === 'empty' || entry.kind === 'value_input' || entry.kind === 'file_input' || entry.kind === 'organizer' || entry.kind === 'area'),
+      entries.filter((entry) => entry.kind === 'empty' || entry.kind === 'constant' || entry.kind === 'organizer' || entry.kind === 'area'),
     ),
     createTemplateSection(
       'palette:pipelines',
@@ -281,12 +282,17 @@ function createPalettePreviewBlock(block: PalettePreviewBlock, scale: number): H
     return node
   }
 
+  if (block.kind === 'constant') {
+    node.textContent = 'Constant'
+    return node
+  }
+
   const header = document.createElement('div')
   header.className = 'palette-drag-preview-node-header'
 
   const badge = document.createElement('div')
   badge.className = 'palette-drag-preview-badge'
-  badge.textContent = block.kind === 'file_input' ? 'F' : block.kind === 'organizer' ? 'O' : 'N'
+  badge.textContent = block.kind === 'organizer' ? 'O' : 'N'
   header.appendChild(badge)
 
   const copy = document.createElement('div')
@@ -297,7 +303,7 @@ function createPalettePreviewBlock(block: PalettePreviewBlock, scale: number): H
   copy.appendChild(title)
 
   const subtitle = document.createElement('span')
-  subtitle.textContent = block.kind === 'file_input' ? 'File input' : block.kind === 'organizer' ? 'Organizer' : 'Notebook'
+  subtitle.textContent = block.kind === 'organizer' ? 'Organizer' : 'Notebook'
   copy.appendChild(subtitle)
   header.appendChild(copy)
 
@@ -317,10 +323,10 @@ function defaultPreviewBlock(entry: PaletteEntry): PalettePreviewBlock {
   return {
     key: entry.key,
     title: entry.title,
-    kind: entry.kind === 'file_input' ? 'file_input' : entry.kind === 'organizer' ? 'organizer' : entry.kind === 'area' ? 'area' : 'notebook',
+    kind: entry.kind === 'constant' ? 'constant' : entry.kind === 'organizer' ? 'organizer' : entry.kind === 'area' ? 'area' : 'notebook',
     x: 0,
     y: 0,
-    width: entry.previewSize?.width ?? (entry.kind === 'organizer' ? 160 : entry.kind === 'area' ? 320 : 360),
-    height: entry.previewSize?.height ?? (entry.kind === 'organizer' ? 140 : entry.kind === 'area' ? 220 : 220),
+    width: entry.previewSize?.width ?? (entry.kind === 'constant' ? CONSTANT_NODE_WIDTH : entry.kind === 'organizer' ? 160 : entry.kind === 'area' ? 320 : 360),
+    height: entry.previewSize?.height ?? (entry.kind === 'constant' ? CONSTANT_NODE_HEIGHT : entry.kind === 'organizer' ? 140 : entry.kind === 'area' ? 220 : 220),
   }
 }

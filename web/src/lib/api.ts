@@ -243,6 +243,29 @@ export async function uploadFile(nodeId: string, file: File) {
   return response.json() as Promise<Record<string, unknown>>
 }
 
+export async function uploadConstantFile(nodeId: string, file: File) {
+  const response = await fetch(appUrl(`/api/v1/constants/${nodeId}/upload`), {
+    method: 'POST',
+    headers: {
+      'X-Filename': file.name,
+      'Content-Type': file.type || 'application/octet-stream',
+    },
+    body: await file.arrayBuffer(),
+  })
+  if (!response.ok) {
+    const text = await response.text()
+    throw new Error(text)
+  }
+  return response.json() as Promise<Record<string, unknown>>
+}
+
+export async function setConstantValue(nodeId: string, value: unknown) {
+  return request<Record<string, unknown>>(`/api/v1/constants/${encodeURIComponent(nodeId)}/value`, {
+    method: 'POST',
+    body: JSON.stringify({ value }),
+  })
+}
+
 export async function setArtifactState(nodeId: string, artifactName: string, state: 'ready' | 'stale') {
   return request<Record<string, unknown>>(`/api/v1/artifacts/${encodeURIComponent(nodeId)}/${encodeURIComponent(artifactName)}/state`, {
     method: 'POST',

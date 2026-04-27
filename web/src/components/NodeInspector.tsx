@@ -106,6 +106,7 @@ export function NodeInspector({
 }) {
   const badge = badgeForNode(snapshot, node)
   const counts = artifactCounts(snapshot, node.id)
+  const constantArtifact = node.kind === 'constant' ? artifactFor(snapshot, node.id, node.ui?.artifact_name ?? 'value') ?? null : null
   const template = templateByRef(snapshot, node.template?.ref)
   const validationIssues = validationIssuesForNode(snapshot, node.id)
   const blockingValidationIssues = validationIssues.filter((issue) => issue.severity === 'error')
@@ -259,9 +260,23 @@ export function NodeInspector({
       ) : null}
 
       <div className="inspector-block">
-        <h3>{node.kind === 'organizer' || node.kind === 'area' ? 'Block docs' : 'Notebook docs'}</h3>
-        <pre className="code-block docs-block">{node.interface?.docs ?? 'No notebook docs found.'}</pre>
+        <h3>{node.kind === 'notebook' ? 'Notebook docs' : 'Block docs'}</h3>
+        <pre className="code-block docs-block">{node.interface?.docs ?? 'No block docs found.'}</pre>
       </div>
+
+      {node.kind === 'constant' ? (
+        <div className="inspector-block">
+          <h3>Value</h3>
+          <pre className="code-block docs-block execution-log-block execution-log-terminal">
+            {typeof (constantArtifact?.preview as { inspector_text?: unknown } | null)?.inspector_text === 'string'
+              ? String((constantArtifact?.preview as { inspector_text?: unknown }).inspector_text)
+              : constantArtifact?.state === 'pending'
+                ? 'Pending constant value.'
+                : 'No value preview available.'}
+            {Boolean((constantArtifact?.preview as { inspector_truncated?: unknown } | null)?.inspector_truncated) ? '\n\n[truncated to first 10 kB]' : ''}
+          </pre>
+        </div>
+      ) : null}
 
       <div className="inspector-block">
         <h3>Inputs</h3>

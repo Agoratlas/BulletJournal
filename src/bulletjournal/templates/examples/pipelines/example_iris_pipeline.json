@@ -4,9 +4,10 @@
   "nodes": [
     {
       "id": "file",
-      "kind": "file_input",
+      "kind": "constant",
       "title": "File",
-      "artifact_name": "file"
+      "artifact_name": "file",
+      "data_type": "file"
     },
     {
       "id": "example_1",
@@ -114,10 +115,10 @@
     },
     {
       "node_id": "file",
-      "x": 260,
-      "y": 280,
-      "w": 360,
-      "h": 220
+      "x": 580,
+      "y": 340,
+      "w": 100,
+      "h": 40
     }
   ]
 }

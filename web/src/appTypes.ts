@@ -3,7 +3,7 @@ import type { EdgeRecord, GraphPatchOperation, LayoutRecord, NodeRecord, NoticeR
 export type PalettePreviewBlock = {
   key: string
   title: string
-  kind: 'notebook' | 'file_input' | 'organizer' | 'area'
+  kind: 'notebook' | 'constant' | 'file_input' | 'organizer' | 'area'
   x: number
   y: number
   width: number
@@ -15,7 +15,7 @@ export type PaletteEntry = {
   title: string
   description?: string
   documentation?: string
-  kind: 'empty' | 'value_input' | 'file_input' | 'organizer' | 'area' | 'template' | 'pipeline'
+  kind: 'empty' | 'constant' | 'organizer' | 'area' | 'template' | 'pipeline'
   templateRef?: string
   templateName?: string
   templateProvider?: string
@@ -34,7 +34,7 @@ export type PortActionMenuState = {
   y: number
 }
 
-export type ConstantValueType = 'int' | 'float' | 'bool' | 'str' | 'list' | 'dict' | 'object'
+export type ConstantValueType = 'int' | 'float' | 'bool' | 'str' | 'list' | 'dict' | 'file' | 'pandas.DataFrame'
 
 export type AppNotice = NoticeRecord & {
   origin: 'snapshot' | 'client'

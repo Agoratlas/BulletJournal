@@ -179,3 +179,17 @@ def file_input_artifact_name(node: Node) -> str:
         return 'file'
     value = node.ui.get('artifact_name')
     return str(value) if isinstance(value, str) and value else 'file'
+
+
+def constant_artifact_name(node: Node) -> str:
+    if node.kind != NodeKind.CONSTANT:
+        return 'value'
+    value = node.ui.get('artifact_name')
+    return str(value) if isinstance(value, str) and value else 'value'
+
+
+def constant_data_type(node: Node) -> str:
+    if node.kind != NodeKind.CONSTANT:
+        return 'object'
+    value = node.ui.get('data_type')
+    return str(value) if isinstance(value, str) and value else 'object'

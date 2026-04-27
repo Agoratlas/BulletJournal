@@ -14,15 +14,12 @@ const MARKDOWN_VALUE_PATTERN = /(^|[^A-Za-z0-9`])([A-Za-z0-9]+(?:[._/-][A-Za-z0-
 
 export const DATAFRAME_CSV_DOWNLOAD_MAX_BYTES = 100_000_000
 
-export function blockCreateMode(entry: PaletteEntry): 'notebook' | 'constant_value' | 'file' | 'pipeline' | null {
+export function blockCreateMode(entry: PaletteEntry): 'notebook' | 'constant' | 'pipeline' | null {
   if (entry.kind === 'pipeline') {
     return 'pipeline'
   }
-  if (entry.kind === 'value_input') {
-    return 'constant_value'
-  }
-  if (entry.kind === 'file_input') {
-    return 'file'
+  if (entry.kind === 'constant') {
+    return 'constant'
   }
   if (entry.kind === 'organizer' || entry.kind === 'area') {
     return null
@@ -68,6 +65,21 @@ export function isEditableTarget(target: EventTarget | null): boolean {
 function prefixedNodeId(nodeIdPrefix: string | null | undefined, templateNodeId: string): string {
   const normalizedPrefix = normalizeNodeId(nodeIdPrefix ?? '')
   return normalizedPrefix ? `${normalizedPrefix}_${templateNodeId}` : templateNodeId
+}
+
+function nextAvailableNodeIdForSet(existingNodeIds: Set<string>, base: string): string {
+  const normalizedBase = normalizeNodeId(base) || 'node'
+  if (!existingNodeIds.has(normalizedBase)) {
+    existingNodeIds.add(normalizedBase)
+    return normalizedBase
+  }
+  let index = 2
+  while (existingNodeIds.has(`${normalizedBase}_${index}`)) {
+    index += 1
+  }
+  const resolved = `${normalizedBase}_${index}`
+  existingNodeIds.add(resolved)
+  return resolved
 }
 
 export function artifactEndpoint(artifact: ArtifactRecord, action: 'download' | 'content'): string {
@@ -382,10 +394,19 @@ export function pipelineTemplateNodeRecords(
   nodeIdPrefix?: string | null,
 ): Array<{ nodeId: string; title: string }> {
   const template = snapshot.templates.find((entry) => entry.ref === templateRef && entry.kind === 'pipeline')
-  return (template?.definition?.nodes ?? []).map((node) => ({
-    nodeId: prefixedNodeId(nodeIdPrefix, node.id),
-    title: nodeIdPrefix?.trim() ? `${nodeIdPrefix.trim()} ${node.title}` : node.title,
-  }))
+  const existingNodeIds = new Set(snapshot.graph.nodes.map((node) => node.id))
+  const normalizedPrefix = normalizeNodeId(nodeIdPrefix ?? '')
+  return (template?.definition?.nodes ?? []).map((node) => {
+    const kind = String(node.kind ?? '')
+    const nodeId = kind === 'constant'
+      ? nextAvailableNodeIdForSet(existingNodeIds, normalizedPrefix ? `${normalizedPrefix}_constant` : 'constant')
+      : prefixedNodeId(nodeIdPrefix, node.id)
+    existingNodeIds.add(nodeId)
+    return {
+      nodeId,
+      title: nodeIdPrefix?.trim() ? `${nodeIdPrefix.trim()} ${node.title}` : node.title,
+    }
+  })
 }
 
 export function expandMutationPlan(plan: GraphMutationPlan): GraphPatchOperation[] {
@@ -394,7 +415,6 @@ export function expandMutationPlan(plan: GraphMutationPlan): GraphPatchOperation
 
 function cloneNodeUi(node: NodeRecord): NonNullable<GraphPatchOperation & { type: 'add_notebook_node' }>['ui'] {
   return {
-    origin: node.ui?.origin ?? null,
     frozen: Boolean(node.ui?.frozen),
   }
 }
@@ -427,6 +447,24 @@ export function fileInputAddOperationForNode(node: NodeRecord, layout: LayoutRec
     title,
     artifact_name: node.ui?.artifact_name ?? 'file',
     ui: { frozen: Boolean(node.ui?.frozen) },
+    x: layout.x,
+    y: layout.y,
+    w: layout.w,
+    h: layout.h,
+  }
+}
+
+export function constantAddOperationForNode(node: NodeRecord, layout: LayoutRecord, nodeId: string, title = 'Constant'): GraphPatchOperation {
+  return {
+    type: 'add_constant_node',
+    node_id: nodeId,
+    title,
+    data_type: node.ui?.data_type ?? 'object',
+    ui: {
+      artifact_name: node.ui?.artifact_name ?? 'value',
+      data_type: node.ui?.data_type ?? 'object',
+      frozen: Boolean(node.ui?.frozen),
+    },
     x: layout.x,
     y: layout.y,
     w: layout.w,
@@ -479,10 +517,12 @@ export function applyOptimisticGraphOperations(snapshot: ProjectSnapshot, operat
     if (type === 'add_pipeline_template') {
       continue
     }
-    if (type === 'add_notebook_node' || type === 'add_file_input_node' || type === 'add_organizer_node' || type === 'add_area_node') {
+    if (type === 'add_notebook_node' || type === 'add_constant_node' || type === 'add_file_input_node' || type === 'add_organizer_node' || type === 'add_area_node') {
       const nodeId = String(operation.node_id)
       if (!next.graph.nodes.some((node) => node.id === nodeId)) {
-        const kind = type === 'add_file_input_node'
+        const kind = type === 'add_constant_node'
+          ? 'constant'
+          : type === 'add_file_input_node'
           ? 'file_input'
           : type === 'add_organizer_node'
             ? 'organizer'
@@ -492,11 +532,17 @@ export function applyOptimisticGraphOperations(snapshot: ProjectSnapshot, operat
         next.graph.nodes.push({
           id: nodeId,
           kind,
-          title: String(operation.title ?? (kind === 'organizer' ? 'Organizer' : kind === 'area' ? 'Area' : nodeId)),
+          title: String(operation.title ?? (kind === 'constant' ? 'Constant' : kind === 'organizer' ? 'Organizer' : kind === 'area' ? 'Area' : nodeId)),
           path: kind === 'notebook' ? `${nodeId}.py` : null,
           template: null,
           template_status: null,
-          ui: type === 'add_file_input_node'
+          ui: type === 'add_constant_node'
+            ? {
+              artifact_name: String((operation.ui as { artifact_name?: unknown } | undefined)?.artifact_name ?? 'value'),
+              data_type: String(operation.data_type ?? (operation.ui as { data_type?: unknown } | undefined)?.data_type ?? 'object'),
+              frozen: Boolean((operation.ui as { frozen?: unknown } | undefined)?.frozen),
+            }
+            : type === 'add_file_input_node'
             ? { artifact_name: String(operation.artifact_name ?? 'file'), frozen: false }
             : type === 'add_organizer_node'
               ? {
@@ -518,7 +564,6 @@ export function applyOptimisticGraphOperations(snapshot: ProjectSnapshot, operat
                 }
               : {
                   frozen: Boolean((operation.ui as { frozen?: unknown } | undefined)?.frozen),
-                  origin: (operation.ui as { origin?: 'constant_value' | null } | undefined)?.origin ?? null,
                 },
           interface: null,
           execution_meta: null,
@@ -530,7 +575,7 @@ export function applyOptimisticGraphOperations(snapshot: ProjectSnapshot, operat
           x: Number(operation.x ?? 80),
           y: Number(operation.y ?? 80),
           w: Number(operation.w ?? (type === 'add_organizer_node' ? 160 : type === 'add_area_node' ? 480 : 360)),
-          h: Number(operation.h ?? (type === 'add_organizer_node' ? 140 : type === 'add_area_node' ? 280 : 220)),
+          h: Number(operation.h ?? (type === 'add_constant_node' ? 120 : type === 'add_organizer_node' ? 140 : type === 'add_area_node' ? 280 : 220)),
         })
         changed = true
       }
@@ -587,6 +632,17 @@ export function applyOptimisticGraphOperations(snapshot: ProjectSnapshot, operat
       const node = next.graph.nodes.find((entry) => entry.id === String(operation.node_id))
       if (node) {
         node.ui = { ...(node.ui ?? {}), frozen: Boolean(operation.frozen) }
+        changed = true
+      }
+      continue
+    }
+    if (type === 'update_constant_node') {
+      const node = next.graph.nodes.find((entry) => entry.id === String(operation.node_id))
+      if (node) {
+        node.ui = {
+          ...(node.ui ?? {}),
+          data_type: String(operation.data_type ?? 'object'),
+        }
         changed = true
       }
       continue
@@ -740,13 +796,6 @@ export function nodeRunFailures(snapshot: ProjectSnapshot, nodeId: string) {
   })
 }
 
-export function pipelineDefinitionNodeIds(template: TemplateRecord | null | undefined): string[] {
-  if (!template) {
-    return []
-  }
-  return (template.definition?.nodes ?? []).map((node) => node.id)
-}
-
 export function pipelineTopLeftForCenter(template: TemplateRecord, center: { x: number; y: number }): { x: number; y: number } {
   const layout = template.definition?.layout ?? []
   if (!layout.length) {
@@ -766,56 +815,4 @@ export function pipelineTopLeftForCenter(template: TemplateRecord, center: { x: 
 
 export function snapToGrid(value: number): number {
   return Math.round(value / GRID_SIZE) * GRID_SIZE
-}
-
-function pythonTypeExpression(dataType: Exclude<ConstantValueType, 'object'>): string {
-  return dataType
-}
-
-export function buildConstantValueNotebookSource(
-  title: string,
-  outputs: Array<{ name: string; dataType: ConstantValueType; value: string }>,
-): string {
-  const setupImports = new Set(['from bulletjournal.runtime import artifacts'])
-
-  const cells = outputs.flatMap((output) => {
-    const variableName = `${output.name}_value`
-    if (output.dataType === 'object') {
-      return [
-        '@app.cell',
-        'def _():',
-        `    placeholder_note_${output.name} = \'Edit this notebook to set ${output.name} to a custom object.\'`,
-        `    ${variableName} = None`,
-        `    artifacts.push(${variableName}, name='${output.name}', data_type='object', description='Constant value output')`,
-        `    return placeholder_note_${output.name}, ${variableName}`,
-        '',
-      ]
-    }
-    const dataTypeExpression = pythonTypeExpression(output.dataType)
-    return [
-      '@app.cell',
-      'def _():',
-      `    ${variableName} = ${output.value}`,
-      `    artifacts.push(${variableName}, name='${output.name}', data_type=${dataTypeExpression}, description='Constant value output')`,
-      `    return ${variableName}`,
-      '',
-    ]
-  })
-
-  return [
-    'import marimo',
-    '',
-    "__generated_with = '0.20.4'",
-    `app = marimo.App(width='medium', app_title=${JSON.stringify(title)})`,
-    '',
-    'with app.setup:',
-    ...Array.from(setupImports).sort().map((line) => `    ${line}`),
-    '',
-    ...cells,
-    "if __name__ == '__main__':",
-    '    from bulletjournal.runtime.standalone import run_notebook_app',
-    '',
-    "    run_notebook_app(app, __file__)",
-    '',
-  ].join('\n')
 }

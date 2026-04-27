@@ -33,6 +33,7 @@ dependencies = [
     "pydantic>=2.8.0",
     "python-multipart>=0.0.9",
     "uvicorn[standard]>=0.30.0",
+    "websockets>=14.2.0",
 ]
 
 [project.optional-dependencies]

@@ -301,6 +301,7 @@ class StateDB:
 
     def delete_node_state(self, node_id: str) -> None:
         with self._connect() as connection:
+            self._delete_run_records_for_node(connection, node_id)
             connection.execute('DELETE FROM run_inputs WHERE logical_artifact_id LIKE ?', (f'{node_id}/%',))
             connection.execute('DELETE FROM run_outputs WHERE node_id = ?', (node_id,))
             connection.execute('DELETE FROM cache_index WHERE node_id = ?', (node_id,))
@@ -682,6 +683,53 @@ class StateDB:
         connection.execute(
             'DELETE FROM validation_issue_dismissals WHERE issue_id NOT IN (SELECT issue_id FROM validation_issues)'
         )
+
+    @classmethod
+    def _delete_run_records_for_node(cls, connection: sqlite3.Connection, node_id: str) -> None:
+        run_ids = [
+            str(row['run_id'])
+            for row in connection.execute('SELECT run_id, target_json, failure_json FROM run_records').fetchall()
+            if cls._run_record_references_node(row, node_id)
+        ]
+        if not run_ids:
+            return
+        run_id_rows = [(run_id,) for run_id in run_ids]
+        connection.executemany('DELETE FROM run_inputs WHERE run_id = ?', run_id_rows)
+        connection.executemany('DELETE FROM run_outputs WHERE run_id = ?', run_id_rows)
+        connection.executemany('DELETE FROM run_records WHERE run_id = ?', run_id_rows)
+
+    @classmethod
+    def _run_record_references_node(cls, row: sqlite3.Row, node_id: str) -> bool:
+        target = cls._load_json_dict(row['target_json'])
+        if cls._run_target_references_node(target, node_id):
+            return True
+        failure = cls._load_json_dict(row['failure_json'])
+        return cls._run_failure_references_node(failure, node_id)
+
+    @staticmethod
+    def _load_json_dict(raw: Any) -> dict[str, Any] | None:
+        if raw is None:
+            return None
+        decoded = json.loads(str(raw))
+        return decoded if isinstance(decoded, dict) else None
+
+    @staticmethod
+    def _run_target_references_node(target: dict[str, Any] | None, node_id: str) -> bool:
+        if target is None:
+            return False
+        if str(target.get('node_id') or '') == node_id:
+            return True
+        for key in ('node_ids', 'plan'):
+            values = target.get(key)
+            if isinstance(values, list) and any(str(value) == node_id for value in values):
+                return True
+        return False
+
+    @staticmethod
+    def _run_failure_references_node(failure: dict[str, Any] | None, node_id: str) -> bool:
+        if failure is None:
+            return False
+        return str(failure.get('node_id') or '') == node_id
 
     @staticmethod
     def _row_to_artifact(row: sqlite3.Row) -> dict[str, Any]:

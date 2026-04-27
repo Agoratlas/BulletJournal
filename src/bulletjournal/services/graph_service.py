@@ -18,7 +18,15 @@ from bulletjournal.domain.graph_rules import (
     validate_unique_target_ports,
 )
 from bulletjournal.domain.hashing import combine_hashes, hash_json
-from bulletjournal.domain.models import Edge, GraphData, LayoutEntry, Node, file_input_artifact_name
+from bulletjournal.domain.models import (
+    Edge,
+    GraphData,
+    LayoutEntry,
+    Node,
+    constant_artifact_name,
+    constant_data_type,
+    file_input_artifact_name,
+)
 from bulletjournal.domain.type_system import types_compatible
 from bulletjournal.execution.planner import downstream_closure, topological_nodes, visible_edge_id
 
@@ -48,7 +56,9 @@ class GraphService:
         pending_notebook_creates: list[tuple[str, str]] = []
         pending_notebook_deletes: list[str] = []
         pending_editor_stops: list[str] = []
-        pending_file_input_heads: list[str] = []
+        pending_input_heads: list[tuple[str, str]] = []
+        pending_constant_values: list[tuple[str, Any]] = []
+        pending_artifact_state_resets: list[tuple[str, str]] = []
         pending_state_deletes: list[str] = []
         for operation in operations:
             op_type = operation['type']
@@ -57,9 +67,17 @@ class GraphService:
                 pending_notebook_creates.append((node_id, source))
                 reparse_all = True
                 interruption_roots.add(node_id)
+            elif op_type == 'add_constant_node':
+                node_id, artifact_name = self._add_constant_node(graph, operation)
+                pending_input_heads.append((node_id, artifact_name))
+                if operation.get('value') is not None:
+                    pending_constant_values.append((node_id, operation.get('value')))
+                interruption_roots.add(node_id)
             elif op_type == 'add_file_input_node':
                 node_id = self._add_file_input_node(graph, operation)
-                pending_file_input_heads.append(node_id)
+                pending_input_heads.append(
+                    (node_id, file_input_artifact_name(next(node for node in graph.nodes if node.id == node_id)))
+                )
                 interruption_roots.add(node_id)
             elif op_type == 'add_organizer_node':
                 self._add_organizer_node(graph, operation)
@@ -68,10 +86,11 @@ class GraphService:
             elif op_type == 'add_pipeline_template':
                 created = self._add_pipeline_template(graph, operation)
                 pending_notebook_creates.extend(created['notebook_creates'])
-                pending_file_input_heads.extend(created['file_input_heads'])
+                pending_input_heads.extend(created['input_heads'])
+                pending_constant_values.extend(created['constant_values'])
                 reparse_all = True
                 interruption_roots.update(node_id for node_id, _ in created['notebook_creates'])
-                interruption_roots.update(created['file_input_heads'])
+                interruption_roots.update(node_id for node_id, _ in created['input_heads'])
             elif op_type == 'add_edge':
                 self._add_edge(graph, operation)
                 stale_roots.add(str(operation['target_node']))
@@ -85,6 +104,14 @@ class GraphService:
                 self._update_layout(graph, operation)
             elif op_type == 'update_node_title':
                 self._update_title(graph, operation)
+            elif op_type == 'update_constant_node':
+                updated = self._update_constant_node(graph, operation)
+                if not updated['changed']:
+                    continue
+                stale_roots.update(updated['stale_roots'])
+                interruption_roots.update(updated['stale_roots'])
+                pending_artifact_state_resets.append((updated['node_id'], updated['artifact_name']))
+                pending_input_heads.append((updated['node_id'], updated['artifact_name']))
             elif op_type == 'update_organizer_ports':
                 removed_targets = self._update_organizer_ports(graph, operation)
                 stale_roots.update(removed_targets)
@@ -117,12 +144,22 @@ class GraphService:
         for node_id in pending_editor_stops:
             if self.project_service.run_service is not None:
                 self.project_service.run_service.session_manager.stop_by_node(node_id)
-        for node_id in pending_file_input_heads:
-            node = next(node for node in graph.nodes if node.id == node_id)
+        for node_id, artifact_name in pending_artifact_state_resets:
+            self.project_service.require_project().state_db.delete_artifact_state(node_id, artifact_name)
+        for node_id, artifact_name in pending_input_heads:
             self.project_service.require_project().state_db.ensure_artifact_head(
                 node_id,
-                file_input_artifact_name(node),
+                artifact_name,
                 ArtifactState.PENDING,
+            )
+        for node_id, value in pending_constant_values:
+            from bulletjournal.services.artifact_service import ArtifactService  # local import to avoid cycle
+
+            ArtifactService(self.project_service).set_constant_value(
+                node_id,
+                value,
+                propagate_downstream_stale=False,
+                interrupt_active_run=False,
             )
         for node_id in pending_notebook_deletes:
             path = self.project_service.require_project().paths.notebook_path(node_id)
@@ -130,6 +167,7 @@ class GraphService:
                 path.unlink()
         for node_id in pending_state_deletes:
             self.project_service.require_project().state_db.delete_node_state(node_id)
+            self._delete_execution_logs(node_id)
         if reparse_all:
             self.project_service.reparse_all_notebooks()
         if stale_roots:
@@ -375,6 +413,31 @@ class GraphService:
         graph.layout.append(self._layout_entry(node_id, operation))
         return node_id
 
+    def _add_constant_node(self, graph: GraphData, operation: dict[str, Any]) -> tuple[str, str]:
+        node_id = str(operation['node_id'])
+        title = str(operation.get('title') or 'Constant')
+        if any(node.id == node_id for node in graph.nodes):
+            raise GraphValidationError(f'Node `{node_id}` already exists.')
+        data_type = str(operation.get('data_type') or '').strip()
+        if not data_type:
+            raise GraphValidationError('Constant blocks require a `data_type`.')
+        ui = operation.get('ui')
+        resolved_ui = {**(ui if isinstance(ui, dict) else {})}
+        resolved_ui['artifact_name'] = str(
+            operation.get('artifact_name') or resolved_ui.get('artifact_name') or 'value'
+        )
+        resolved_ui['data_type'] = data_type
+        graph.nodes.append(
+            Node(
+                id=node_id,
+                kind=NodeKind.CONSTANT,
+                title=title,
+                ui=resolved_ui,
+            )
+        )
+        graph.layout.append(self._layout_entry(node_id, operation))
+        return node_id, str(resolved_ui['artifact_name'])
+
     def _add_organizer_node(self, graph: GraphData, operation: dict[str, Any]) -> str:
         node_id = str(operation['node_id'])
         title = str(operation.get('title') or 'Organizer')
@@ -441,7 +504,8 @@ class GraphService:
         title_prefix = _normalize_title_prefix(operation.get('node_id_prefix'))
 
         notebook_creates: list[tuple[str, str]] = []
-        file_input_heads: list[str] = []
+        input_heads: list[tuple[str, str]] = []
+        constant_values: list[tuple[str, Any]] = []
         node_id_map: dict[str, str] = {}
         interfaces_by_node: dict[str, dict[str, Any]] = self.project_service.template_service.pipeline_node_interfaces(
             definition
@@ -458,14 +522,22 @@ class GraphService:
                 raise GraphValidationError(
                     f'Pipeline template `{template_ref}` is missing layout for `{template_node_id}`.'
                 )
-            resolved_node_id = f'{node_id_prefix}{template_node_id}' if node_id_prefix else template_node_id
-            if any(node.id == resolved_node_id for node in graph.nodes) or resolved_node_id in node_id_map.values():
+            kind = str(raw_node.get('kind') or '')
+            resolved_node_id = (
+                _next_available_node_id(graph, f'{node_id_prefix}constant' if node_id_prefix else 'constant')
+                if kind == NodeKind.CONSTANT.value
+                else f'{node_id_prefix}{template_node_id}'
+                if node_id_prefix
+                else template_node_id
+            )
+            if kind != NodeKind.CONSTANT.value and (
+                any(node.id == resolved_node_id for node in graph.nodes) or resolved_node_id in node_id_map.values()
+            ):
                 raise GraphValidationError(
                     f'Pipeline template `{template_ref}` would create duplicate node `{resolved_node_id}`. '
                     'Use a prefix to instantiate it.'
                 )
             resolved_title = _apply_title_prefix(str(raw_node.get('title') or template_node_id), title_prefix)
-            kind = str(raw_node.get('kind') or '')
             if kind == NodeKind.NOTEBOOK.value:
                 add_operation = {
                     'node_id': resolved_node_id,
@@ -479,13 +551,36 @@ class GraphService:
                 }
                 node_id, source = self._add_notebook_node(graph, add_operation)
                 notebook_creates.append((node_id, source))
+            elif kind == NodeKind.CONSTANT.value:
+                artifact_name = _pipeline_constant_artifact_name(raw_node)
+                data_type = str(raw_node.get('data_type') or '').strip()
+                if not data_type and isinstance(raw_node.get('ui'), dict):
+                    data_type = str(raw_node['ui'].get('data_type') or '').strip()
+                node_id, artifact_name = self._add_constant_node(
+                    graph,
+                    {
+                        'node_id': resolved_node_id,
+                        'title': resolved_title,
+                        'artifact_name': artifact_name,
+                        'data_type': data_type,
+                        'ui': raw_node.get('ui') if isinstance(raw_node.get('ui'), dict) else None,
+                        'x': int(layout.get('x', 80)) + offset_x,
+                        'y': int(layout.get('y', 80)) + offset_y,
+                        'w': int(layout.get('w', 180)),
+                        'h': int(layout.get('h', 120)),
+                    },
+                )
+                input_heads.append((node_id, artifact_name))
+                if 'value' in raw_node:
+                    constant_values.append((node_id, raw_node.get('value')))
             elif kind == NodeKind.FILE_INPUT.value:
+                artifact_name = str(raw_node.get('artifact_name') or '').strip()
+                if not artifact_name and isinstance(raw_node.get('ui'), dict):
+                    artifact_name = str(raw_node['ui'].get('artifact_name') or '').strip()
                 add_operation = {
                     'node_id': resolved_node_id,
                     'title': resolved_title,
-                    'artifact_name': raw_node.get('artifact_name') or raw_node.get('ui', {}).get('artifact_name')
-                    if isinstance(raw_node.get('ui'), dict)
-                    else 'file',
+                    'artifact_name': artifact_name or 'file',
                     'ui': raw_node.get('ui') if isinstance(raw_node.get('ui'), dict) else None,
                     'x': int(layout.get('x', 80)) + offset_x,
                     'y': int(layout.get('y', 80)) + offset_y,
@@ -493,7 +588,7 @@ class GraphService:
                     'h': int(layout.get('h', 220)),
                 }
                 node_id = self._add_file_input_node(graph, add_operation)
-                file_input_heads.append(node_id)
+                input_heads.append((node_id, artifact_name or 'file'))
             elif kind == NodeKind.ORGANIZER.value:
                 add_operation = {
                     'node_id': resolved_node_id,
@@ -545,7 +640,11 @@ class GraphService:
                 target_interface=target_interface,
             )
 
-        return {'notebook_creates': notebook_creates, 'file_input_heads': file_input_heads}
+        return {
+            'notebook_creates': notebook_creates,
+            'input_heads': input_heads,
+            'constant_values': constant_values,
+        }
 
     def _add_edge(self, graph: GraphData, operation: dict[str, Any]) -> None:
         source_node = str(operation['source_node'])
@@ -568,6 +667,8 @@ class GraphService:
         node = next((item for item in graph.nodes if item.id == node_id), None)
         if node is None:
             return None
+        if node.kind == NodeKind.CONSTANT:
+            return self.project_service.synthetic_constant_interface(node).to_dict()
         if node.kind == NodeKind.FILE_INPUT:
             return self.project_service.synthetic_file_input_interface(node).to_dict()
         if node.kind == NodeKind.ORGANIZER:
@@ -575,6 +676,45 @@ class GraphService:
         if node.kind == NodeKind.AREA:
             return {'inputs': [], 'outputs': [], 'assets': []}
         return self.project_service.latest_interface(node_id)
+
+    def _update_constant_node(self, graph: GraphData, operation: dict[str, Any]) -> dict[str, Any]:
+        node_id = str(operation['node_id'])
+        node = next((item for item in graph.nodes if item.id == node_id), None)
+        if node is None or node.kind != NodeKind.CONSTANT:
+            raise GraphValidationError(f'Unknown constant node `{node_id}`.')
+        next_data_type = str(operation.get('data_type') or '').strip()
+        if not next_data_type:
+            raise GraphValidationError('Constant blocks require a `data_type`.')
+        artifact_name = constant_artifact_name(node)
+        if constant_data_type(node) == next_data_type:
+            return {'node_id': node_id, 'artifact_name': artifact_name, 'stale_roots': [], 'changed': False}
+        node.ui = {
+            **node.ui,
+            'data_type': next_data_type,
+        }
+        removed_targets: set[str] = set()
+        kept_edges: list[Edge] = []
+        for edge in graph.edges:
+            if edge.source_node != node_id or edge.source_port != artifact_name:
+                kept_edges.append(edge)
+                continue
+            target_interface = self._interface_for_graph_node(graph, edge.target_node)
+            target_type = (
+                None
+                if target_interface is None
+                else _port_data_type(target_interface.get('inputs', []), edge.target_port)
+            )
+            if target_type == next_data_type:
+                kept_edges.append(edge)
+                continue
+            removed_targets.add(edge.target_node)
+        graph.edges = kept_edges
+        return {
+            'node_id': node_id,
+            'artifact_name': artifact_name,
+            'stale_roots': sorted(removed_targets),
+            'changed': True,
+        }
 
     def _add_edge_from_interfaces(
         self,
@@ -750,6 +890,9 @@ class GraphService:
         if op_type == 'update_organizer_ports':
             node_id = str(operation['node_id'])
             return self.project_service.frozen_block_blockers_for_node_edit(node_id, graph=graph)
+        if op_type == 'update_constant_node':
+            node_id = str(operation['node_id'])
+            return self.project_service.frozen_block_blockers_for_node_edit(node_id, graph=graph)
         if op_type == 'update_area_style':
             node_id = str(operation['node_id'])
             node = next((item for item in graph.nodes if item.id == node_id), None)
@@ -789,6 +932,17 @@ class GraphService:
             'stale_roots': stale_roots,
         }
 
+    def _delete_execution_logs(self, node_id: str) -> None:
+        logs_dir = self.project_service.require_project().paths.execution_logs_dir
+        suffixes = (f'_{node_id}.stdout.log', f'_{node_id}.stderr.log')
+        for path in logs_dir.iterdir():
+            if not path.is_file() or not path.name.endswith(suffixes):
+                continue
+            try:
+                path.unlink()
+            except FileNotFoundError:
+                continue
+
     def _validate_graph(self, graph: GraphData) -> None:
         validate_unique_node_ids(graph.nodes)
         validate_unique_edge_ids(graph.edges)
@@ -819,6 +973,38 @@ def _normalize_node_id_prefix(value: Any) -> str:
     normalized = re.sub(r'[^a-z0-9_]+', '_', str(value).strip().lower())
     normalized = re.sub(r'_+', '_', normalized).strip('_')
     return f'{normalized}_' if normalized else ''
+
+
+def _pipeline_constant_artifact_name(raw_node: dict[str, Any]) -> str:
+    template_node_id = str(raw_node.get('id') or 'constant').strip()
+    explicit_name = raw_node.get('artifact_name')
+    normalized_explicit = explicit_name.strip() if isinstance(explicit_name, str) and explicit_name.strip() else None
+    ui = raw_node.get('ui')
+    ui_name = None
+    if isinstance(ui, dict):
+        candidate = ui.get('artifact_name')
+        ui_name = candidate.strip() if isinstance(candidate, str) and candidate.strip() else None
+    if normalized_explicit and ui_name and normalized_explicit != ui_name:
+        raise GraphValidationError(
+            f'Constant node `{template_node_id}` defines conflicting artifact names '
+            f'`{normalized_explicit}` and `{ui_name}`.'
+        )
+    resolved = normalized_explicit or ui_name
+    if resolved is None:
+        raise GraphValidationError(f'Constant node `{template_node_id}` must define `artifact_name`.')
+    return resolved
+
+
+def _next_available_node_id(graph: GraphData, base: str) -> str:
+    normalized_base = re.sub(r'[^a-z0-9_]+', '_', str(base).strip().lower())
+    normalized_base = re.sub(r'_+', '_', normalized_base).strip('_') or 'node'
+    existing_ids = {node.id for node in graph.nodes}
+    if normalized_base not in existing_ids:
+        return normalized_base
+    index = 2
+    while f'{normalized_base}_{index}' in existing_ids:
+        index += 1
+    return f'{normalized_base}_{index}'
 
 
 def _normalize_title_prefix(value: Any) -> str:

@@ -44,7 +44,6 @@ def validate_template(path: Path, *, notebook_paths_by_ref: dict[str, Path] | No
 def validate_pipeline_template(
     path: Path, *, notebook_paths_by_ref: dict[str, Path] | None = None
 ) -> list[dict[str, object]]:
-    issues: list[dict[str, object]] = []
     try:
         definition = json.loads(path.read_text(encoding='utf-8'))
     except json.JSONDecodeError as exc:
@@ -58,10 +57,24 @@ def validate_pipeline_template(
             ).to_dict()
         ]
 
+    return validate_pipeline_template_definition(
+        definition,
+        notebook_paths_by_ref=notebook_paths_by_ref,
+        node_id=path.stem,
+    )
+
+
+def validate_pipeline_template_definition(
+    definition: dict[str, Any],
+    *,
+    notebook_paths_by_ref: dict[str, Path | TemplateAsset] | None = None,
+    node_id: str,
+) -> list[dict[str, object]]:
+    issues: list[dict[str, object]] = []
     if not isinstance(definition, dict):
         return [
             build_issue(
-                node_id=path.stem,
+                node_id=node_id,
                 severity=ValidationSeverity.ERROR,
                 code='invalid_pipeline_template_shape',
                 message='Pipeline template root must be a JSON object.',
@@ -74,7 +87,7 @@ def validate_pipeline_template(
     if not isinstance(nodes_raw, list) or not isinstance(edges_raw, list) or not isinstance(layout_raw, list):
         return [
             build_issue(
-                node_id=path.stem,
+                node_id=node_id,
                 severity=ValidationSeverity.ERROR,
                 code='invalid_pipeline_template_shape',
                 message='Pipeline templates must define list fields `nodes`, `edges`, and `layout`.',
@@ -93,22 +106,23 @@ def validate_pipeline_template(
         if not isinstance(raw_node, dict):
             issues.append(
                 build_issue(
-                    node_id=path.stem,
+                    node_id=node_id,
                     severity=ValidationSeverity.ERROR,
                     code='invalid_pipeline_node',
                     message=f'Node entry #{index + 1} must be an object.',
                 ).to_dict()
             )
             continue
-        node_id = str(raw_node.get('id') or '').strip()
+        template_node_id = str(raw_node.get('id') or '').strip()
         title = str(raw_node.get('title') or '').strip()
         kind_value = str(raw_node.get('kind') or '').strip()
         if (
-            not node_id
+            not template_node_id
             or not title
             or kind_value
             not in {
                 NodeKind.NOTEBOOK.value,
+                NodeKind.CONSTANT.value,
                 NodeKind.FILE_INPUT.value,
                 NodeKind.ORGANIZER.value,
                 NodeKind.AREA.value,
@@ -116,24 +130,41 @@ def validate_pipeline_template(
         ):
             issues.append(
                 build_issue(
-                    node_id=path.stem,
+                    node_id=node_id,
                     severity=ValidationSeverity.ERROR,
                     code='invalid_pipeline_node',
-                    message=f'Node `{node_id or index + 1}` must define `id`, `title`, and a supported `kind`.',
+                    message=(
+                        f'Node `{template_node_id or index + 1}` must define `id`, `title`, and a supported `kind`.'
+                    ),
                 ).to_dict()
             )
             continue
-        node_rows[node_id] = raw_node
-        graph_nodes.append(Node(id=node_id, kind=NodeKind(kind_value), title=title))
+        node_rows[template_node_id] = raw_node
+        graph_nodes.append(Node(id=template_node_id, kind=NodeKind(kind_value), title=title))
         try:
-            interfaces_by_node[node_id] = _pipeline_node_interface(raw_node, notebook_paths_by_ref=resolved_notebooks)
+            interfaces_by_node[template_node_id] = _pipeline_node_interface(
+                raw_node,
+                notebook_paths_by_ref=resolved_notebooks,
+            )
         except FileNotFoundError:
             issues.append(
                 build_issue(
-                    node_id=path.stem,
+                    node_id=node_id,
                     severity=ValidationSeverity.ERROR,
                     code='missing_template_ref',
-                    message=f'Node `{node_id}` references unknown notebook template `{raw_node.get("template_ref")}`.',
+                    message=(
+                        f'Node `{template_node_id}` references unknown notebook template '
+                        f'`{raw_node.get("template_ref")}`.'
+                    ),
+                ).to_dict()
+            )
+        except GraphValidationError as exc:
+            issues.append(
+                build_issue(
+                    node_id=node_id,
+                    severity=ValidationSeverity.ERROR,
+                    code='invalid_pipeline_node',
+                    message=str(exc),
                 ).to_dict()
             )
 
@@ -141,52 +172,52 @@ def validate_pipeline_template(
         if not isinstance(raw_layout, dict):
             issues.append(
                 build_issue(
-                    node_id=path.stem,
+                    node_id=node_id,
                     severity=ValidationSeverity.ERROR,
                     code='invalid_pipeline_layout',
                     message=f'Layout entry #{index + 1} must be an object.',
                 ).to_dict()
             )
             continue
-        node_id = str(raw_layout.get('node_id') or '').strip()
-        if not node_id:
+        layout_node_id = str(raw_layout.get('node_id') or '').strip()
+        if not layout_node_id:
             issues.append(
                 build_issue(
-                    node_id=path.stem,
+                    node_id=node_id,
                     severity=ValidationSeverity.ERROR,
                     code='invalid_pipeline_layout',
                     message='Each layout entry must define `node_id`.',
                 ).to_dict()
             )
             continue
-        layout_rows[node_id] = raw_layout
+        layout_rows[layout_node_id] = raw_layout
 
     issues.extend(
         build_issue(
-            node_id=path.stem,
+            node_id=node_id,
             severity=ValidationSeverity.ERROR,
             code='missing_pipeline_layout',
-            message=f'Node `{node_id}` is missing a layout entry.',
+            message=f'Node `{template_node_id}` is missing a layout entry.',
         ).to_dict()
-        for node_id in node_rows
-        if node_id not in layout_rows
+        for template_node_id in node_rows
+        if template_node_id not in layout_rows
     )
     issues.extend(
         build_issue(
-            node_id=path.stem,
+            node_id=node_id,
             severity=ValidationSeverity.ERROR,
             code='unknown_layout_node',
-            message=f'Layout entry references unknown node `{node_id}`.',
+            message=f'Layout entry references unknown node `{layout_node_id}`.',
         ).to_dict()
-        for node_id in layout_rows
-        if node_id not in node_rows
+        for layout_node_id in layout_rows
+        if layout_node_id not in node_rows
     )
 
     for raw_edge in edges_raw:
         if not isinstance(raw_edge, dict):
             issues.append(
                 build_issue(
-                    node_id=path.stem,
+                    node_id=node_id,
                     severity=ValidationSeverity.ERROR,
                     code='invalid_pipeline_edge',
                     message='Edge entries must be objects.',
@@ -200,7 +231,7 @@ def validate_pipeline_template(
         if not source_node or not source_port or not target_node or not target_port:
             issues.append(
                 build_issue(
-                    node_id=path.stem,
+                    node_id=node_id,
                     severity=ValidationSeverity.ERROR,
                     code='invalid_pipeline_edge',
                     message='Each edge must define source and target nodes and ports.',
@@ -221,13 +252,14 @@ def validate_pipeline_template(
         if source_interface is None or target_interface is None:
             continue
         source_type = _port_data_type(
-            source_interface.get('outputs', []) + source_interface.get('assets', []), source_port
+            source_interface.get('outputs', []) + source_interface.get('assets', []),
+            source_port,
         )
         target_type = _port_data_type(target_interface.get('inputs', []), target_port)
         if source_type is None:
             issues.append(
                 build_issue(
-                    node_id=path.stem,
+                    node_id=node_id,
                     severity=ValidationSeverity.ERROR,
                     code='unknown_source_port',
                     message=f'Edge references unknown source port `{source_node}.{source_port}`.',
@@ -237,7 +269,7 @@ def validate_pipeline_template(
         if target_type is None:
             issues.append(
                 build_issue(
-                    node_id=path.stem,
+                    node_id=node_id,
                     severity=ValidationSeverity.ERROR,
                     code='unknown_target_port',
                     message=f'Edge references unknown target port `{target_node}.{target_port}`.',
@@ -247,7 +279,7 @@ def validate_pipeline_template(
         if not types_compatible(source_type, target_type):
             issues.append(
                 build_issue(
-                    node_id=path.stem,
+                    node_id=node_id,
                     severity=ValidationSeverity.ERROR,
                     code='incompatible_edge_types',
                     message=(
@@ -259,7 +291,8 @@ def validate_pipeline_template(
 
     if issues:
         return sorted(
-            issues, key=lambda item: (str(item.get('severity')), str(item.get('code')), str(item.get('message')))
+            issues,
+            key=lambda item: (str(item.get('severity')), str(item.get('code')), str(item.get('message'))),
         )
 
     try:
@@ -270,7 +303,7 @@ def validate_pipeline_template(
     except GraphValidationError as exc:
         issues.append(
             build_issue(
-                node_id=path.stem,
+                node_id=node_id,
                 severity=ValidationSeverity.ERROR,
                 code='invalid_pipeline_graph',
                 message=str(exc),
@@ -305,6 +338,18 @@ def _pipeline_node_interface(
             direction='output',
         )
         return {'inputs': [], 'outputs': [output.to_dict()], 'assets': []}
+    if kind_value == NodeKind.CONSTANT.value:
+        artifact_name = _pipeline_constant_name(raw_node)
+        data_type = _pipeline_constant_data_type(raw_node)
+        output = Port(
+            name=artifact_name,
+            data_type=data_type,
+            role=ArtifactRole.OUTPUT,
+            description='Constant artifact',
+            kind='file' if data_type == 'file' else 'value',
+            direction='output',
+        )
+        return {'inputs': [], 'outputs': [output.to_dict()], 'assets': []}
     if kind_value == NodeKind.ORGANIZER.value:
         interface = organizer_interface_for_ports(
             node_id=str(raw_node.get('id') or 'organizer'),
@@ -332,6 +377,38 @@ def _pipeline_file_input_name(raw_node: dict[str, Any]) -> str:
         if isinstance(candidate, str) and candidate.strip():
             return candidate.strip()
     return 'file'
+
+
+def _pipeline_constant_name(raw_node: dict[str, Any]) -> str:
+    node_id = str(raw_node.get('id') or 'constant').strip()
+    artifact_name = raw_node.get('artifact_name')
+    explicit_name = artifact_name.strip() if isinstance(artifact_name, str) and artifact_name.strip() else None
+    ui = raw_node.get('ui')
+    if isinstance(ui, dict):
+        candidate = ui.get('artifact_name')
+        ui_name = candidate.strip() if isinstance(candidate, str) and candidate.strip() else None
+    else:
+        ui_name = None
+    if explicit_name and ui_name and explicit_name != ui_name:
+        raise GraphValidationError(
+            f'Constant node `{node_id}` defines conflicting artifact names `{explicit_name}` and `{ui_name}`.'
+        )
+    resolved = explicit_name or ui_name
+    if resolved is None:
+        raise GraphValidationError(f'Constant node `{node_id}` must define `artifact_name`.')
+    return resolved
+
+
+def _pipeline_constant_data_type(raw_node: dict[str, Any]) -> str:
+    data_type = raw_node.get('data_type')
+    if isinstance(data_type, str) and data_type.strip():
+        return data_type.strip()
+    ui = raw_node.get('ui')
+    if isinstance(ui, dict):
+        candidate = ui.get('data_type')
+        if isinstance(candidate, str) and candidate.strip():
+            return candidate.strip()
+    return 'object'
 
 
 def _port_data_type(ports: list[dict[str, Any]], name: str) -> str | None:

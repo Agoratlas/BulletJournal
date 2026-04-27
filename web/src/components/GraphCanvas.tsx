@@ -26,7 +26,7 @@ import ReactFlow, {
 } from 'reactflow'
 
 import { areaSettings } from '../lib/area'
-import { artifactCounts, artifactFor, artifactIsEmpty, assetsForNode, badgeForNode, formatDurationSeconds, inputBindingSource, inputState, inputsForNode, outputsForNode } from '../lib/helpers'
+import { CONSTANT_NODE_PORT_CENTER_OFFSET, CONSTANT_NODE_WIDTH, ORGANIZER_NODE_PORT_CENTER_OFFSET, PORT_ROW_HEIGHT, STANDARD_NODE_PORT_CENTER_OFFSET, artifactCounts, artifactFor, artifactIsEmpty, assetsForNode, badgeForNode, formatDurationSeconds, inputBindingSource, inputState, inputsForNode, outputsForNode } from '../lib/helpers'
 import type { ArtifactState, NodeRecord, Port, ProjectSnapshot } from '../lib/types'
 import { ArtifactCounts } from './ArtifactCounts'
 import { Pencil, Play } from './Icons'
@@ -50,6 +50,7 @@ type GraphCanvasProps = {
   onNodeContextMenu: (nodeId: string, position: { x: number; y: number }) => void
   onSelectionContextMenu: (position: { x: number; y: number }) => void
   onPortContextMenu: (nodeId: string, portName: string, side: 'input' | 'output', position: { x: number; y: number }) => void
+  onEditConstantNode: (nodeId: string) => void
   onEditFileNode: (nodeId: string) => void
   onEditOrganizerNode: (nodeId: string) => void
   onEditAreaNode: (nodeId: string) => void
@@ -67,7 +68,7 @@ type GraphCanvasProps = {
   onViewportChange: (viewport: { center: { x: number; y: number }; zoom: number }) => void
 }
 
-const NON_RUNNABLE_NODE_KINDS = new Set(['file_input', 'organizer', 'area'])
+const NON_RUNNABLE_NODE_KINDS = new Set(['constant', 'file_input', 'organizer', 'area'])
 const GRAPH_MIN_ZOOM = 0.18
 const GRAPH_MAX_ZOOM = 1.35
 const GRAPH_DEFAULT_ZOOM = 0.78
@@ -88,6 +89,7 @@ type BulletJournalNodeData = {
   onSelect: (nodeId: string, options?: { additive?: boolean }) => void
   onNodeContextMenu: (nodeId: string, position: { x: number; y: number }) => void
   onPortContextMenu: (nodeId: string, portName: string, side: 'input' | 'output', position: { x: number; y: number }) => void
+  onEditConstantNode: (nodeId: string) => void
   onEditFileNode: (nodeId: string) => void
   onEditOrganizerNode: (nodeId: string) => void
   onEditAreaNode: (nodeId: string) => void
@@ -140,9 +142,6 @@ function useConnectionIntent(): ConnectionIntent {
   }, [connectionHandleId, connectionHandleType, connectionNodeId])
 }
 
-const PORT_TOP_OFFSET = 82
-const PORT_STEP = 40
-
 const STATE_COLORS: Record<ArtifactState | 'mixed', string> = {
   ready: '#34b85a',
   stale: '#c97c00',
@@ -171,13 +170,19 @@ function toggleIds(baseIds: string[], toggledIds: string[]): string[] {
 function portLayoutMetrics(node: NodeRecord) {
   if (node.kind === 'organizer') {
     return {
-      topOffset: 20,
-      step: 40,
+      topOffset: ORGANIZER_NODE_PORT_CENTER_OFFSET,
+      step: PORT_ROW_HEIGHT,
+    }
+  }
+  if (node.kind === 'constant') {
+    return {
+      topOffset: CONSTANT_NODE_PORT_CENTER_OFFSET,
+      step: PORT_ROW_HEIGHT,
     }
   }
   return {
-    topOffset: PORT_TOP_OFFSET,
-    step: PORT_STEP,
+    topOffset: STANDARD_NODE_PORT_CENTER_OFFSET,
+    step: PORT_ROW_HEIGHT,
   }
 }
 
@@ -189,7 +194,7 @@ function portAnchorForSelection(
   portName: string,
 ): { x: number; y: number } | null {
   const layout = snapshot.graph.layout.find((entry) => entry.node_id === node.id)
-  const width = nodeDimensions[node.id]?.width ?? layout?.w ?? 360
+  const width = nodeDimensions[node.id]?.width ?? layout?.w ?? (node.kind === 'constant' ? CONSTANT_NODE_WIDTH : 360)
   const inputs = inputsForNode(node)
   const outputs = outputsForNode(node)
   const ports = side === 'input' ? inputs : outputs
@@ -265,7 +270,7 @@ function PortRow({
           id={`in:${port.name}`}
           position={Position.Left}
           className={`rf-handle ${isConnectionStart ? 'connection-start' : ''} ${isConnecting ? 'connecting' : ''} ${isHighlighted ? 'connection-highlight' : ''}`}
-          style={{ color: typeColor, borderColor: stateColor, background: stateColor, top: PORT_TOP_OFFSET + index * PORT_STEP }}
+          style={{ color: typeColor, borderColor: stateColor, background: stateColor }}
           onContextMenu={handlePortCircleContextMenu}
         />
       ) : null}
@@ -276,7 +281,7 @@ function PortRow({
           id={`out:${port.name}`}
           position={Position.Right}
           className={`rf-handle ${isConnectionStart ? 'connection-start' : ''} ${isConnecting ? 'connecting' : ''} ${isHighlighted ? 'connection-highlight' : ''}`}
-          style={{ color: typeColor, borderColor: stateColor, background: stateColor, top: PORT_TOP_OFFSET + index * PORT_STEP }}
+          style={{ color: typeColor, borderColor: stateColor, background: stateColor }}
           onContextMenu={handlePortCircleContextMenu}
         />
       ) : null}
@@ -367,7 +372,7 @@ function OrganizerLaneRow({
         id={targetHandleId}
         position={Position.Left}
         className={`rf-handle ${targetStart ? 'connection-start' : ''} ${connecting ? 'connecting' : ''} ${highlightInput ? 'connection-highlight' : ''}`}
-        style={{ color: typeColor, borderColor: inputIsMissingRequired ? MISSING_REQUIRED_INPUT_COLOR : inputIsEmptyOrDefault ? EMPTY_OR_DEFAULT_COLOR : STATE_COLORS[inputArtifactState], background: inputIsMissingRequired ? MISSING_REQUIRED_INPUT_COLOR : inputIsEmptyOrDefault ? EMPTY_OR_DEFAULT_COLOR : STATE_COLORS[inputArtifactState], top: 20 }}
+        style={{ color: typeColor, borderColor: inputIsMissingRequired ? MISSING_REQUIRED_INPUT_COLOR : inputIsEmptyOrDefault ? EMPTY_OR_DEFAULT_COLOR : STATE_COLORS[inputArtifactState], background: inputIsMissingRequired ? MISSING_REQUIRED_INPUT_COLOR : inputIsEmptyOrDefault ? EMPTY_OR_DEFAULT_COLOR : STATE_COLORS[inputArtifactState] }}
         onContextMenu={handleInputContextMenu}
       />
       <PortLabel name={port.name} label={port.label} dataType={port.data_type} className="rf-organizer-copy" showTypeDot />
@@ -376,7 +381,7 @@ function OrganizerLaneRow({
         id={sourceHandleId}
         position={Position.Right}
         className={`rf-handle ${sourceStart ? 'connection-start' : ''} ${connecting ? 'connecting' : ''} ${highlightOutput ? 'connection-highlight' : ''}`}
-        style={{ color: typeColor, borderColor: outputIsEmpty ? EMPTY_OR_DEFAULT_COLOR : STATE_COLORS[outputArtifactState], background: outputIsEmpty ? EMPTY_OR_DEFAULT_COLOR : STATE_COLORS[outputArtifactState], top: 20 }}
+        style={{ color: typeColor, borderColor: outputIsEmpty ? EMPTY_OR_DEFAULT_COLOR : STATE_COLORS[outputArtifactState], background: outputIsEmpty ? EMPTY_OR_DEFAULT_COLOR : STATE_COLORS[outputArtifactState] }}
         onContextMenu={handleOutputContextMenu}
       />
     </div>
@@ -431,8 +436,80 @@ function OrganizerGhostHandleLayer({
   )
 }
 
+function compactConstantPreview(node: NodeRecord, snapshot: ProjectSnapshot): { text: string; fontSize: number } {
+  const artifactName = outputsForNode(node)[0]?.name ?? node.ui?.artifact_name ?? 'value'
+  const artifact = artifactFor(snapshot, node.id, artifactName)
+  const preview = artifact?.preview
+  const dataType = node.ui?.data_type ?? 'object'
+  if (!preview || preview.kind === 'empty') {
+    return constantPreviewLayout('-')
+  }
+  if (preview.kind === 'simple') {
+    const inspectorText = 'inspector_text' in preview && typeof preview.inspector_text === 'string'
+      ? preview.inspector_text
+      : null
+    if (dataType === 'str') {
+      if (inspectorText) {
+        try {
+          const parsed = JSON.parse(inspectorText)
+          if (typeof parsed === 'string') {
+            return constantPreviewLayout(parsed)
+          }
+        } catch {
+        }
+      }
+      const raw = preview.repr
+      const normalized = (raw.startsWith('"') && raw.endsWith('"')) || (raw.startsWith("'") && raw.endsWith("'"))
+        ? raw.slice(1, -1)
+        : raw
+      return constantPreviewLayout(normalized.replace(/\\n/g, ' ').replace(/\\t/g, ' '))
+    }
+    if (inspectorText) {
+      return constantPreviewLayout(inspectorText)
+    }
+    return constantPreviewLayout(preview.repr)
+  }
+  if (preview.kind === 'file') {
+    return constantPreviewLayout('file')
+  }
+  if (preview.kind === 'dataframe') {
+    return constantPreviewLayout('df')
+  }
+  if (preview.kind === 'series') {
+    return constantPreviewLayout('[...]')
+  }
+  return constantPreviewLayout(node.ui?.data_type === 'list' ? '[...]' : '{...}')
+}
+
+function truncateConstantPreview(value: string, maxLength: number): string {
+  const collapsed = value.replace(/\s+/g, ' ').trim()
+  if (collapsed.length <= maxLength) {
+    return collapsed || '-'
+  }
+  return `${collapsed.slice(0, Math.max(1, maxLength - 1))}…`
+}
+
+function constantPreviewLayout(value: string): { text: string; fontSize: number } {
+  const collapsed = value.replace(/\s+/g, ' ').trim() || '-'
+  const text = truncateConstantPreview(collapsed, 8)
+  const length = collapsed.length
+  if (length <= 3) {
+    return { text, fontSize: 14 }
+  }
+  if (length <= 5) {
+    return { text, fontSize: 13 }
+  }
+  if (length <= 7) {
+    return { text, fontSize: 12 }
+  }
+  if (length <= 8) {
+    return { text, fontSize: 11 }
+  }
+  return { text, fontSize: 10 }
+}
+
 const BulletJournalNodeCard = memo(({ data, selected }: NodeProps<BulletJournalNodeData>) => {
-  const { node, snapshot, onSelect, onNodeContextMenu, onPortContextMenu, onEditFileNode, onEditOrganizerNode, onEditAreaNode, onOpenEditor, onKillEditor, onRunNode, onOpenArtifacts } = data
+  const { node, snapshot, onSelect, onNodeContextMenu, onPortContextMenu, onEditConstantNode, onEditFileNode, onEditOrganizerNode, onEditAreaNode, onOpenEditor, onKillEditor, onRunNode, onOpenArtifacts } = data
   const inputs = inputsForNode(node)
   const outputs = outputsForNode(node)
   const assets = assetsForNode(node)
@@ -589,6 +666,67 @@ const BulletJournalNodeCard = memo(({ data, selected }: NodeProps<BulletJournalN
     )
   }
 
+  if (node.kind === 'constant') {
+    const outputPort = outputs[0] ?? null
+    const ownArtifact = outputPort ? artifactFor(snapshot, node.id, outputPort.name) : null
+    const outputIsExplicitlyEmpty = artifactIsEmpty(ownArtifact)
+    const outputArtifactState = ownArtifact?.state ?? 'pending'
+    const typeColor = TYPE_COLORS[outputPort?.data_type ?? node.ui?.data_type ?? 'object'] ?? TYPE_COLORS.object
+    const handleColor = outputIsExplicitlyEmpty ? EMPTY_OR_DEFAULT_COLOR : STATE_COLORS[outputArtifactState]
+    const isConnectionStart = connectionIntent?.nodeId === node.id
+      && connectionIntent?.handleId === `out:${outputPort?.name ?? 'value'}`
+      && connectionIntent?.handleType === 'source'
+    const isConnecting = Boolean(connectionIntent)
+    const matchesConnectionIntent = connectionIntent && outputPort
+      ? isCompatibleWithIntent(snapshot, node, outputPort, 'output', connectionIntent)
+      : true
+    const preview = compactConstantPreview(node, snapshot)
+
+    function handleOutputContextMenu(event: React.MouseEvent) {
+      if (!outputPort) {
+        return
+      }
+      event.preventDefault()
+      event.stopPropagation()
+      onPortContextMenu(node.id, outputPort.name, 'output', { x: event.clientX, y: event.clientY })
+    }
+
+    return (
+      <div
+        className={`rf-node constant-node state-${node.state} ${node.ui?.frozen ? 'is-frozen' : ''} ${selected ? 'is-selected' : ''} ${hasBlockingValidationIssues ? 'has-validation-error' : ''}`}
+        title={validationSummary || `${preview.text} (${outputPort?.data_type ?? node.ui?.data_type ?? 'object'})`}
+        onDoubleClick={(event) => {
+          event.stopPropagation()
+          onEditConstantNode(node.id)
+        }}
+        onContextMenu={(event) => {
+          event.preventDefault()
+          event.stopPropagation()
+          onNodeContextMenu(node.id, { x: event.clientX, y: event.clientY })
+        }}
+      >
+        <div className={`rf-constant-content ${isConnecting && !isConnectionStart && !matchesConnectionIntent ? 'incompatible' : ''}`}>
+          <span className="rf-constant-preview" style={{ fontSize: `${preview.fontSize}px` }}>{preview.text}</span>
+          <span className="port-type-dot rf-constant-type-dot" style={{ backgroundColor: typeColor }} aria-hidden="true" />
+          {outputPort ? (
+            <Handle
+              type="source"
+              id={`out:${outputPort.name}`}
+              position={Position.Right}
+              className={`rf-handle rf-constant-handle ${isConnectionStart ? 'connection-start' : ''} ${isConnecting && matchesConnectionIntent ? 'connection-highlight' : ''}`}
+              style={{
+                color: typeColor,
+                borderColor: handleColor,
+                background: handleColor,
+              }}
+              onContextMenu={handleOutputContextMenu}
+            />
+          ) : null}
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div
       className={`rf-node state-${node.state} ${node.ui?.frozen ? 'is-frozen' : ''} ${selected ? 'is-selected' : ''} ${hasBlockingValidationIssues ? 'has-validation-error' : ''} ${isExecutionActive ? 'execution-active' : ''} ${isExecutionQueued ? 'execution-queued' : ''} ${isExecutionComplete ? 'execution-complete' : ''}`}
@@ -604,6 +742,9 @@ const BulletJournalNodeCard = memo(({ data, selected }: NodeProps<BulletJournalN
         }
         if (node.kind === 'file_input') {
           onEditFileNode(node.id)
+        }
+        if (node.kind === 'constant') {
+          onEditConstantNode(node.id)
         }
       }}
       onContextMenu={(event) => {
@@ -752,7 +893,7 @@ function isGhostHandle(handleId: string | null | undefined): boolean {
   return Boolean(handleId && (handleId.startsWith('ghost-in:') || handleId.startsWith('ghost-out:')))
 }
 
-export function GraphCanvas({ snapshot, serverNowMs = Date.now(), serverNowClientAnchorMs = Date.now(), selectedNodeIds, selectedEdgeIds, activeRunNodeId = null, queuedRunNodeIds = [], completedRunNodeIds = [], activeEditorNodeIds = [], onConnect, onEdgesChange, onSelectionChange, onNodeSelect, onEdgeSelect, onNodeContextMenu, onSelectionContextMenu, onPortContextMenu, onEditFileNode, onEditOrganizerNode, onEditAreaNode, onOpenEditor, onKillEditor, onRunNode, onOpenArtifacts, onCanvasInteract, onCanvasClear, onNodeMove, onNodeResize, onNodesDelete, draggedBlock, onBlockDrop, onViewportChange }: GraphCanvasProps) {
+export function GraphCanvas({ snapshot, serverNowMs = Date.now(), serverNowClientAnchorMs = Date.now(), selectedNodeIds, selectedEdgeIds, activeRunNodeId = null, queuedRunNodeIds = [], completedRunNodeIds = [], activeEditorNodeIds = [], onConnect, onEdgesChange, onSelectionChange, onNodeSelect, onEdgeSelect, onNodeContextMenu, onSelectionContextMenu, onPortContextMenu, onEditConstantNode, onEditFileNode, onEditOrganizerNode, onEditAreaNode, onOpenEditor, onKillEditor, onRunNode, onOpenArtifacts, onCanvasInteract, onCanvasClear, onNodeMove, onNodeResize, onNodesDelete, draggedBlock, onBlockDrop, onViewportChange }: GraphCanvasProps) {
   const { screenToFlowPosition, setViewport } = useReactFlow()
   const store = useStoreApi()
   const updateNodeInternals = useUpdateNodeInternals()
@@ -792,7 +933,7 @@ export function GraphCanvas({ snapshot, serverNowMs = Date.now(), serverNowClien
         continue
       }
       const portCount = outputsForNode(node).length
-      const insertIndex = Math.max(0, Math.min(portCount, Math.round((pointerFlowPosition.y - layout.y - 20) / 40)))
+      const insertIndex = Math.max(0, Math.min(portCount, Math.round((pointerFlowPosition.y - layout.y - ORGANIZER_NODE_PORT_CENTER_OFFSET) / PORT_ROW_HEIGHT)))
       if (!nearest || distance < nearest.distance) {
         nearest = { nodeId: node.id, insertIndex, distance }
       }
@@ -826,6 +967,7 @@ export function GraphCanvas({ snapshot, serverNowMs = Date.now(), serverNowClien
           onSelect: onNodeSelect,
           onNodeContextMenu,
           onPortContextMenu,
+          onEditConstantNode,
           onEditFileNode,
           onEditOrganizerNode,
           onEditAreaNode,
@@ -840,7 +982,7 @@ export function GraphCanvas({ snapshot, serverNowMs = Date.now(), serverNowClien
         position: { x: layout?.x ?? 80, y: layout?.y ?? 80 },
         style: {
           width: layout?.w ?? 360,
-          height: node.kind === 'area' ? (layout?.h ?? 220) : undefined,
+          height: layout?.h ?? (node.kind === 'constant' ? 40 : node.kind === 'organizer' ? 140 : node.kind === 'area' ? 220 : 220),
         },
         width: nodeDimensions[node.id]?.width,
         height: nodeDimensions[node.id]?.height,
@@ -850,7 +992,7 @@ export function GraphCanvas({ snapshot, serverNowMs = Date.now(), serverNowClien
         zIndex: node.kind === 'area' ? -1 : 0,
       }
     })
-  }, [snapshot, serverNowMs, serverNowClientAnchorMs, selectedNodeIds, activeRunNodeId, queuedRunNodeIds, completedRunNodeIds, activeEditorNodeIds, onNodeContextMenu, onPortContextMenu, onEditFileNode, onEditOrganizerNode, onEditAreaNode, onKillEditor, onNodeResize, onNodeSelect, onOpenArtifacts, onOpenEditor, onRunNode, nodeDimensions, organizerGhostByNodeId, pendingLayoutVersion])
+  }, [snapshot, serverNowMs, serverNowClientAnchorMs, selectedNodeIds, activeRunNodeId, queuedRunNodeIds, completedRunNodeIds, activeEditorNodeIds, onNodeContextMenu, onPortContextMenu, onEditConstantNode, onEditFileNode, onEditOrganizerNode, onEditAreaNode, onKillEditor, onNodeResize, onNodeSelect, onOpenArtifacts, onOpenEditor, onRunNode, nodeDimensions, organizerGhostByNodeId, pendingLayoutVersion])
 
   useEffect(() => {
     const currentNodeIds = new Set(snapshot.graph.nodes.map((node) => node.id))

@@ -37,6 +37,19 @@ class AddFileInputNodeOperation(StrictModel):
     ui: dict[str, Any] | None = None
 
 
+class AddConstantNodeOperation(StrictModel):
+    type: Literal['add_constant_node']
+    node_id: str
+    title: str = 'Constant'
+    x: int = 80
+    y: int = 80
+    w: int = 100
+    h: int = 40
+    data_type: str
+    value: Any | None = None
+    ui: dict[str, Any] | None = None
+
+
 class AddOrganizerNodeOperation(StrictModel):
     type: Literal['add_organizer_node']
     node_id: str
@@ -109,6 +122,12 @@ class UpdateAreaStyleOperation(StrictModel):
     filled: bool
 
 
+class UpdateConstantNodeOperation(StrictModel):
+    type: Literal['update_constant_node']
+    node_id: str
+    data_type: str
+
+
 class DeleteNodeOperation(StrictModel):
     type: Literal['delete_node']
     node_id: str
@@ -122,6 +141,7 @@ class UpdateNodeFrozenOperation(StrictModel):
 
 GraphOperation = Annotated[
     AddNotebookNodeOperation
+    | AddConstantNodeOperation
     | AddFileInputNodeOperation
     | AddOrganizerNodeOperation
     | AddAreaNodeOperation
@@ -130,6 +150,7 @@ GraphOperation = Annotated[
     | RemoveEdgeOperation
     | UpdateNodeLayoutOperation
     | UpdateNodeTitleOperation
+    | UpdateConstantNodeOperation
     | UpdateOrganizerPortsOperation
     | UpdateAreaStyleOperation
     | DeleteNodeOperation
@@ -164,6 +185,10 @@ class FileUploadResponse(StrictModel):
     node_id: str
     artifact_name: str = 'file'
     state: str
+
+
+class ConstantValueUpdateRequest(StrictModel):
+    value: Any
 
 
 class SnapshotResponse(StrictModel):

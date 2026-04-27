@@ -97,9 +97,9 @@ Minimal shape:
 
 Every node entry must define:
 
-- `id`: unique graph node id
+- `id`: unique template-local node key used by `layout` and `edges`
 - `title`: non-empty display title
-- `kind`: one of `notebook`, `file_input`, `organizer`, or `area`
+- `kind`: one of `notebook`, `constant`, `organizer`, or `area`
 
 Additional fields depend on `kind`.
 
@@ -116,20 +116,34 @@ Notebook nodes reference a notebook template:
 }
 ```
 
-#### File input node
+#### Constant node
 
-File input nodes expose a single file output. The artifact name defaults to `file`.
+Constant nodes expose a single synthetic output. Pipeline templates must define an explicit `artifact_name`, and `data_type` controls how the block is populated.
 
 ```json
 {
   "id": "source",
-  "kind": "file_input",
+  "kind": "constant",
   "title": "CSV upload",
-  "artifact_name": "csv"
+  "artifact_name": "csv",
+  "data_type": "file"
 }
 ```
 
-`artifact_name` may also be supplied as `ui.artifact_name`, but providers should prefer the top-level field.
+`artifact_name` and `data_type` may also be supplied as `ui.artifact_name` and `ui.data_type`, but providers should prefer the top-level fields. If both top-level and `ui` values are supplied, they must match.
+
+In pipeline templates, constant node `id` values are only used as internal wiring keys for `layout` and `edges`. When the pipeline is instantiated, the created graph node ID for each constant is generated automatically and may differ from the template-local `id`.
+
+Supported `data_type` values include:
+
+- `int`
+- `float`
+- `bool`
+- `str`
+- `list`
+- `dict`
+- `pandas.DataFrame`
+- `file`
 
 #### Organizer node
 
@@ -245,7 +259,7 @@ Edges connect provider-defined ports:
 Edge validation uses the effective interface for each node kind:
 
 - notebook: parsed from the referenced notebook template
-- file input: a single file output
+- constant: a single typed synthetic output
 - organizer: synthetic input/output pairs from `ui.organizer_ports`
 - area: no ports
 
@@ -267,9 +281,10 @@ Edge validation uses the effective interface for each node kind:
     },
     {
       "id": "source",
-      "kind": "file_input",
+      "kind": "constant",
       "title": "CSV upload",
-      "artifact_name": "csv"
+      "artifact_name": "csv",
+      "data_type": "file"
     },
     {
       "id": "fanout",

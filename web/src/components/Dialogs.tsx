@@ -1,9 +1,10 @@
 import type { ChangeEvent, DragEvent, FormEvent, ReactNode } from 'react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 
+import type { ConstantValueType } from '../appTypes'
 import { AREA_COLOR_KEYS, AREA_TITLE_POSITIONS, type AreaColorKey, type AreaTitlePosition } from '../lib/area'
 import { formatType } from '../lib/helpers'
-import { Info, Plus, X } from './Icons'
+import { X } from './Icons'
 
 type ModalProps = {
   title: string
@@ -353,6 +354,17 @@ export function CreateOrganizerPortDialog({ suggestedName, onClose, onCreate }: 
     void submit()
   }
 
+  function handleJsonKeyDown(event: React.KeyboardEvent<HTMLTextAreaElement>) {
+    if (event.key !== 'Enter') {
+      return
+    }
+    if (event.shiftKey || event.ctrlKey || event.metaKey) {
+      return
+    }
+    event.preventDefault()
+    void submit()
+  }
+
   return (
     <Modal title="Create Organizer Lane" onClose={onClose} contentClassName="organizer-lane-dialog-card">
       <form className="form-grid" onSubmit={handleSubmit}>
@@ -668,61 +680,52 @@ export function EditAreaDialog({
   )
 }
 
-type ConstantValueType = 'int' | 'float' | 'bool' | 'str' | 'list' | 'dict' | 'object'
-
-type ConstantValueOutput = {
-  key: string
-  name: string
-  dataType: ConstantValueType
-  value: string
-}
-
-type CreateConstantValueDialogProps = {
-  suggestedTitle: string
-  existingIds: string[]
+type EditConstantDialogProps = {
+  mode?: 'create' | 'edit'
+  initialDataType: ConstantValueType
+  allowTypeChange?: boolean
+  initialJsonValue?: string
+  initialJsonTooLarge?: boolean
+  uploadDisabledMessage?: string | null
   onClose: () => void
-  onCreate: (payload: { nodeId: string; title: string; outputs: Array<{ name: string; dataType: ConstantValueType; value: string }> }) => Promise<void>
+  onSave: (payload: { dataType: ConstantValueType; jsonText: string; uploadFile: File | null; jsonUploadFile: File | null }) => Promise<void>
 }
 
-export function CreateConstantValueDialog({ suggestedTitle, existingIds, onClose, onCreate }: CreateConstantValueDialogProps) {
-  const [title, setTitle] = useState(suggestedTitle)
-  const [nodeId, setNodeId] = useState(normalizeNodeId(suggestedTitle))
-  const [nodeIdTouched, setNodeIdTouched] = useState(false)
-  const [outputs, setOutputs] = useState<ConstantValueOutput[]>([makeDefaultOutput(0)])
+export function EditConstantDialog({ mode = 'create', initialDataType, allowTypeChange = true, initialJsonValue = '', initialJsonTooLarge = false, uploadDisabledMessage = null, onClose, onSave }: EditConstantDialogProps) {
+  const [dataType, setDataType] = useState<ConstantValueType>(initialDataType)
+  const [jsonText, setJsonText] = useState(initialJsonValue)
+  const [uploadFile, setUploadFile] = useState<File | null>(null)
+  const [jsonUploadFile, setJsonUploadFile] = useState<File | null>(null)
   const [busy, setBusy] = useState(false)
+  const [validationError, setValidationError] = useState<string | null>(null)
 
   useEffect(() => {
-    setTitle(suggestedTitle)
-    setNodeId(normalizeNodeId(suggestedTitle))
-    setNodeIdTouched(false)
-    setOutputs([makeDefaultOutput(0)])
+    setDataType(initialDataType)
+    setJsonText(initialJsonValue)
+    setUploadFile(null)
+    setJsonUploadFile(null)
     setBusy(false)
-  }, [suggestedTitle])
+    setValidationError(null)
+  }, [initialDataType, initialJsonValue])
 
-  const resolvedId = useMemo(() => normalizeNodeId(nodeId), [nodeId])
-  const duplicateId = existingIds.includes(resolvedId)
-  const invalidId = !resolvedId
-  const invalidTitle = !title.trim()
-  const hasInvalidOutput = outputs.some((output) => !normalizeNodeId(output.name))
-  const duplicateOutputNames = duplicateNames(outputs.map((output) => normalizeNodeId(output.name)))
+  const usesUpload = dataType === 'file' || dataType === 'pandas.DataFrame'
+  const supportsJsonUpload = dataType === 'list' || dataType === 'dict'
+  const usesSingleLineEditor = dataType === 'str' || dataType === 'int' || dataType === 'float' || dataType === 'bool'
+  const jsonRows = dataType === 'list' || dataType === 'dict' ? 10 : 4
 
   async function submit() {
-    const resolvedTitle = title.trim()
-    if (!resolvedTitle || !resolvedId || duplicateId || hasInvalidOutput) {
+    const validationMessage = await validateConstantInput({ dataType, jsonText, jsonUploadFile })
+    if (validationMessage) {
+      setValidationError(validationMessage)
       return
     }
     setBusy(true)
     try {
-      await onCreate({
-        nodeId: resolvedId,
-        title: resolvedTitle,
-        outputs: outputs.map((output) => ({
-          name: normalizeNodeId(output.name),
-          dataType: output.dataType,
-          value: output.value,
-        })),
-      })
+      setValidationError(null)
+      await onSave({ dataType, jsonText, uploadFile, jsonUploadFile })
       onClose()
+    } catch (error) {
+      setValidationError(error instanceof Error ? error.message : 'Invalid constant value.')
     } finally {
       setBusy(false)
     }
@@ -733,112 +736,147 @@ export function CreateConstantValueDialog({ suggestedTitle, existingIds, onClose
     void submit()
   }
 
+  function handleJsonKeyDown(event: React.KeyboardEvent<HTMLTextAreaElement>) {
+    if (event.key !== 'Enter') {
+      return
+    }
+    if (event.shiftKey || event.ctrlKey || event.metaKey) {
+      return
+    }
+    event.preventDefault()
+    void submit()
+  }
+
   return (
-    <Modal title="Create Constant Value" onClose={onClose}>
+    <Modal title={mode === 'edit' ? 'Edit Constant' : 'Create Constant'} onClose={onClose}>
       <form className="form-grid" onSubmit={handleSubmit}>
         <label>
-          <span>Name</span>
-          <input
-            value={title}
-            onChange={(event) => {
-              const nextTitle = event.target.value
-              setTitle(nextTitle)
-              if (!nodeIdTouched) {
-                setNodeId(normalizeNodeId(nextTitle))
+          <span>Type</span>
+          <select value={dataType} onChange={(event) => setDataType(event.target.value as ConstantValueType)} disabled={!allowTypeChange}>
+            <option value="pandas.DataFrame">DataFrame</option>
+            <option value="file">file</option>
+            <option value="int">int</option>
+            <option value="float">float</option>
+            <option value="dict">dict</option>
+            <option value="list">list</option>
+            <option value="str">str</option>
+            <option value="bool">bool</option>
+          </select>
+        </label>
+
+        {usesUpload ? (
+          <label>
+            <span>{dataType === 'pandas.DataFrame' ? 'Upload CSV' : 'Upload file'}</span>
+            <input
+              type="file"
+              accept={dataType === 'pandas.DataFrame' ? '.csv,text/csv' : undefined}
+              disabled={Boolean(uploadDisabledMessage)}
+              onChange={(event) => setUploadFile(event.target.files?.[0] ?? null)}
+            />
+            {uploadDisabledMessage ? (
+              <span className="field-note">{uploadDisabledMessage}</span>
+            ) : !uploadFile ? (
+              <span className="field-note">{mode === 'edit' ? 'Optional. Leave blank to keep the current value.' : 'Optional. Leave blank to create a pending constant.'}</span>
+            ) : (
+              <span className="field-note">{uploadFile.name}</span>
+            )}
+          </label>
+        ) : (
+          <label>
+            <span>JSON-formatted value</span>
+            {usesSingleLineEditor ? (
+              <input
+                className="constant-json-input"
+                value={jsonText}
+                onChange={(event) => {
+                  setJsonText(event.target.value)
+                  if (validationError) {
+                    setValidationError(null)
+                  }
+                }}
+                placeholder={placeholderForType(dataType)}
+                spellCheck={false}
+              />
+            ) : (
+              <textarea
+                className="constant-json-editor"
+                rows={jsonRows}
+                value={jsonText}
+                onChange={(event) => {
+                  setJsonText(event.target.value)
+                  if (validationError) {
+                    setValidationError(null)
+                  }
+                }}
+                onKeyDown={handleJsonKeyDown}
+                placeholder={placeholderForType(dataType)}
+                spellCheck={false}
+              />
+            )}
+            {initialJsonTooLarge && mode === 'edit' ? <span className="field-note">Existing value is larger than 10 kB, so the editor starts blank.</span> : null}
+            {!supportsJsonUpload ? <span className="field-note">Leave blank to keep this constant pending.</span> : null}
+          </label>
+        )}
+
+        {!usesUpload && supportsJsonUpload ? (
+          <label>
+            <span>Upload JSON</span>
+            <input type="file" accept="application/json,.json" onChange={(event) => {
+              setJsonUploadFile(event.target.files?.[0] ?? null)
+              if (validationError) {
+                setValidationError(null)
               }
-            }}
-            placeholder="User constants"
-          />
-        </label>
-        <label>
-          <span>Node ID</span>
-          <input
-            className={duplicateId || invalidId ? 'invalid' : ''}
-            value={nodeId}
-            onChange={(event) => {
-              setNodeIdTouched(true)
-              setNodeId(normalizeNodeId(event.target.value))
-            }}
-            placeholder="user_constants"
-            spellCheck={false}
-          />
-          {duplicateId ? <span className="field-note error">This ID is already used by another node.</span> : null}
-        </label>
-        <div className="constant-output-list inline-output-list">
-          <div className="panel-header-row compact-row">
-            <h4>Outputs</h4>
-          </div>
-          {outputs.map((output, index) => {
-            const normalizedName = normalizeNodeId(output.name)
-            const isOther = output.dataType === 'object'
-            const duplicateOutput = normalizedName && duplicateOutputNames.has(normalizedName)
-            return (
-              <div key={output.key} className="constant-output-card output-line-card">
-                <div className="output-line-index">
-                  <strong>{index + 1}</strong>
-                </div>
-                <label>
-                  <span>Output name</span>
-                  <input
-                    className={!normalizedName || duplicateOutput ? 'invalid' : ''}
-                    value={output.name}
-                    onChange={(event) => updateOutput(setOutputs, output.key, { name: normalizeFreeformSnakeCase(event.target.value) })}
-                    placeholder="value"
-                    spellCheck={false}
-                  />
-                  {duplicateOutput ? <span className="field-note error">Output names must be unique.</span> : null}
-                </label>
-                <label>
-                  <span>Type</span>
-                  <select
-                    value={output.dataType}
-                    onChange={(event) => handleOutputTypeChange(output.key, event, setOutputs)}
-                  >
-                    <option value="int">int</option>
-                    <option value="float">float</option>
-                    <option value="bool">bool</option>
-                    <option value="str">str</option>
-                    <option value="list">list</option>
-                    <option value="dict">dict</option>
-                    <option value="object">other</option>
-                  </select>
-                </label>
-                <label className="value-field-cell">
-                  <span>Value</span>
-                  <div className="value-input-row">
-                    <input
-                      value={output.value}
-                      disabled={isOther}
-                      onChange={(event) => updateOutput(setOutputs, output.key, { value: event.target.value })}
-                      placeholder={placeholderForType(output.dataType)}
-                      spellCheck={false}
-                    />
-                    {isOther ? <span className="field-icon-note" title="Edit the generated notebook to set a non-builtin value."><Info width={16} height={16} /></span> : null}
-                  </div>
-                  {isOther ? <span className="field-note">Edit the notebook after creation.</span> : null}
-                </label>
-                <div className="output-line-actions">
-                  {outputs.length > 1 ? (
-                    <button type="button" className="danger icon-pill small-icon-pill" onClick={() => setOutputs((current) => current.filter((item) => item.key !== output.key))} aria-label={`Delete output ${index + 1}`}>
-                      <X width={16} height={16} />
-                    </button>
-                  ) : null}
-                </div>
-              </div>
-            )
-          })}
-          <button type="button" className="secondary add-output-button" onClick={() => setOutputs((current) => [...current, makeDefaultOutput(current.length)])}>
-            <Plus width={16} height={16} />
-            Add output
-          </button>
-        </div>
+            }} />
+            {!jsonUploadFile ? <span className="field-note">Optional. Upload a `.json` file instead of typing the value.</span> : <span className="field-note">{jsonUploadFile.name}</span>}
+          </label>
+        ) : null}
+
+        {validationError ? <p className="field-note error">{validationError}</p> : null}
+
         <div className="dialog-actions">
           <button type="button" className="secondary" onClick={onClose}>Cancel</button>
-          <button type="submit" disabled={busy || invalidTitle || invalidId || duplicateId || hasInvalidOutput || duplicateOutputNames.size > 0}>{busy ? 'Creating...' : 'Create block'}</button>
+          <button type="submit" disabled={busy}>{busy ? (mode === 'edit' ? 'Saving...' : 'Creating...') : (mode === 'edit' ? 'Save changes' : 'Create constant')}</button>
         </div>
       </form>
     </Modal>
   )
+}
+
+async function validateConstantInput(payload: { dataType: ConstantValueType; jsonText: string; jsonUploadFile: File | null }): Promise<string | null> {
+  if (payload.dataType === 'file' || payload.dataType === 'pandas.DataFrame') {
+    return null
+  }
+  const sourceText = payload.jsonUploadFile
+    ? await payload.jsonUploadFile.text()
+    : payload.jsonText
+  const trimmed = sourceText.trim()
+  if (!trimmed) {
+    return null
+  }
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(trimmed)
+  } catch {
+    return 'Value must be valid JSON for the selected type.'
+  }
+  switch (payload.dataType) {
+    case 'bool':
+      return typeof parsed === 'boolean' ? null : 'Value must be a JSON boolean.'
+    case 'int':
+      return typeof parsed === 'number' && Number.isInteger(parsed) ? null : 'Value must be a JSON integer.'
+    case 'float':
+      return typeof parsed === 'number' && Number.isFinite(parsed) ? null : 'Value must be a JSON number.'
+    case 'str':
+      return typeof parsed === 'string' ? null : 'Value must be a JSON string.'
+    case 'list':
+      return Array.isArray(parsed) ? null : 'Value must be a JSON array.'
+    case 'dict':
+      return parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)
+        ? null
+        : 'Value must be a JSON object.'
+    default:
+      return null
+  }
 }
 
 type CreateFileDialogProps = {
@@ -986,16 +1024,6 @@ function normalizeFreeformSnakeCase(value: string): string {
 }
 
 
-function makeDefaultOutput(index: number): ConstantValueOutput {
-  return {
-    key: `output-${index}-${Math.random().toString(36).slice(2, 8)}`,
-    name: index === 0 ? 'value' : `value_${index + 1}`,
-    dataType: 'int',
-    value: literalValueForType('int'),
-  }
-}
-
-
 function placeholderForType(dataType: ConstantValueType): string {
   switch (dataType) {
     case 'int':
@@ -1003,59 +1031,18 @@ function placeholderForType(dataType: ConstantValueType): string {
     case 'float':
       return '3.14'
     case 'bool':
-      return 'True'
+      return 'true'
     case 'str':
-      return "'hello'"
+      return '"hello"'
     case 'list':
       return '[1, 2, 3]'
     case 'dict':
       return '{"key": "value"}'
-    case 'object':
-      return 'Edit notebook value'
+    case 'file':
+      return ''
+    case 'pandas.DataFrame':
+      return ''
   }
-}
-
-
-function literalValueForType(dataType: ConstantValueType): string {
-  switch (dataType) {
-    case 'int':
-      return '42'
-    case 'float':
-      return '3.14'
-    case 'bool':
-      return 'True'
-    case 'str':
-      return "'hello'"
-    case 'list':
-      return '[1, 2, 3]'
-    case 'dict':
-      return '{"key": "value"}'
-    case 'object':
-      return 'None'
-  }
-}
-
-
-function updateOutput(
-  setOutputs: (value: ConstantValueOutput[] | ((current: ConstantValueOutput[]) => ConstantValueOutput[])) => void,
-  key: string,
-  patch: Partial<ConstantValueOutput>,
-) {
-  setOutputs((current) => current.map((output) => (output.key === key ? { ...output, ...patch } : output)))
-}
-
-
-function handleOutputTypeChange(
-  key: string,
-  event: ChangeEvent<HTMLSelectElement>,
-  setOutputs: (value: ConstantValueOutput[] | ((current: ConstantValueOutput[]) => ConstantValueOutput[])) => void,
-) {
-  const dataType = event.target.value as ConstantValueType
-  setOutputs((current) => current.map((output) => (
-    output.key === key
-      ? { ...output, dataType, value: literalValueForType(dataType) }
-      : output
-  )))
 }
 
 

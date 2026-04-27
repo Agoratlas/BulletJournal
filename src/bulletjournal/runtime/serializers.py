@@ -36,7 +36,10 @@ def serialize_value(value: Any, data_type: str) -> dict[str, Any]:
             'data_type': data_type,
             'extension': '.json',
             'mime_type': 'application/json',
-            'preview': _simple_preview(value),
+            'preview': {
+                **_simple_preview(value),
+                **_json_preview_metadata(value),
+            },
         }
     if data_type == 'pandas.DataFrame':
         buffer = io.BytesIO()
@@ -51,11 +54,16 @@ def serialize_value(value: Any, data_type: str) -> dict[str, Any]:
     if data_type == 'pandas.Series':
         buffer = io.BytesIO()
         value.to_frame(name=value.name or 'value').to_parquet(buffer, index=False)
+        series_json = json.dumps(_json_safe_preview_value(value.tolist()), ensure_ascii=True, indent=2)
         return {
             'bytes': buffer.getvalue(),
             'storage_kind': StorageKind.PARQUET.value,
             'data_type': data_type,
-            'preview': _series_preview(value),
+            'preview': {
+                **_series_preview(value),
+                **_preview_text_metadata(_series_inspector_text(value)),
+                **({'editor_text': series_json} if len(series_json.encode('utf-8')) <= 10_000 else {}),
+            },
             'extension': '.parquet',
         }
     payload = gzip.compress(pickle.dumps(value))
@@ -63,7 +71,11 @@ def serialize_value(value: Any, data_type: str) -> dict[str, Any]:
         'bytes': payload,
         'storage_kind': StorageKind.PICKLE.value,
         'data_type': data_type,
-        'preview': {'kind': 'object', 'repr': repr(value)[:MAX_SIMPLE_PREVIEW_CHARS]},
+        'preview': {
+            'kind': 'object',
+            'repr': repr(value)[:MAX_SIMPLE_PREVIEW_CHARS],
+            **_preview_text_metadata(repr(value)),
+        },
         'extension': '.pkl.gz',
     }
 
@@ -95,6 +107,7 @@ def serialize_file(path: Path, *, extension: str | None = None) -> dict[str, Any
         'size_bytes': len(raw_bytes),
         'extension': suffix,
         'mime_type': mime_type,
+        **_preview_text_metadata(_file_inspector_text(path=path, mime_type=mime_type, size_bytes=len(raw_bytes))),
     }
     if mime_type and mime_type.startswith('image/') and len(raw_bytes) <= IMAGE_PREVIEW_MAX_BYTES:
         preview['image_inline'] = True
@@ -122,12 +135,47 @@ def _dataframe_preview(frame: pd.DataFrame) -> dict[str, Any]:
         'columns': int(frame.shape[1]),
         'column_names': list(map(str, frame.columns[:MAX_PREVIEW_COLS])),
         'sample': _json_safe_preview_value(sample.astype(object).where(sample.notna(), None).to_dict(orient='records')),
+        **_preview_text_metadata(_dataframe_inspector_text(frame)),
     }
 
 
 def _series_preview(series: pd.Series) -> dict[str, Any]:
     sample = series.iloc[:MAX_PREVIEW_ROWS].tolist()
     return {'kind': 'series', 'rows': int(series.shape[0]), 'sample': _json_safe_preview_value(sample)}
+
+
+def _json_preview_metadata(value: Any) -> dict[str, Any]:
+    inspector_text = json.dumps(value, ensure_ascii=True, indent=2, sort_keys=True)
+    metadata = _preview_text_metadata(inspector_text)
+    if len(inspector_text.encode('utf-8')) <= 10_000:
+        metadata['editor_text'] = inspector_text
+    return metadata
+
+
+def _preview_text_metadata(text: str) -> dict[str, Any]:
+    payload = text.encode('utf-8', errors='replace')
+    if len(payload) <= 10_000:
+        return {'inspector_text': text, 'inspector_truncated': False}
+    truncated = payload[:10_000].decode('utf-8', errors='ignore')
+    return {'inspector_text': truncated, 'inspector_truncated': True}
+
+
+def _dataframe_inspector_text(frame: pd.DataFrame) -> str:
+    return frame.to_string(max_rows=MAX_PREVIEW_ROWS * 4, max_cols=MAX_PREVIEW_COLS * 2)
+
+
+def _series_inspector_text(series: pd.Series) -> str:
+    return series.to_string(max_rows=MAX_PREVIEW_ROWS * 6)
+
+
+def _file_inspector_text(*, path: Path, mime_type: str | None, size_bytes: int) -> str:
+    details = {
+        'filename': path.name,
+        'mime_type': mime_type,
+        'extension': path.suffix or None,
+        'size_bytes': size_bytes,
+    }
+    return json.dumps(details, ensure_ascii=True, indent=2, sort_keys=True)
 
 
 def _json_safe_preview_value(value: Any) -> Any:

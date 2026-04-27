@@ -7,6 +7,7 @@ import pytest
 
 import bulletjournal.templates.validator as validator
 from bulletjournal.domain.enums import ArtifactRole, ValidationSeverity
+from bulletjournal.domain.errors import GraphValidationError
 from bulletjournal.domain.models import NotebookInterface, Port
 from bulletjournal.parser.validation import build_issue
 
@@ -80,15 +81,21 @@ def test_validate_pipeline_template_requires_object_root_and_lists(tmp_path: Pat
     assert 'nodes' in shape_issue[0]['message']
 
 
-def test_pipeline_file_input_name_prefers_explicit_then_ui_then_default() -> None:
-    assert validator._pipeline_file_input_name({'artifact_name': ' dataset '}) == 'dataset'
-    assert validator._pipeline_file_input_name({'ui': {'artifact_name': ' upload '}}) == 'upload'
-    assert validator._pipeline_file_input_name({}) == 'file'
+def test_pipeline_constant_name_prefers_explicit_and_requires_match() -> None:
+    assert validator._pipeline_constant_name({'artifact_name': ' dataset '}) == 'dataset'
+    assert validator._pipeline_constant_name({'ui': {'artifact_name': ' upload '}}) == 'upload'
+    assert (
+        validator._pipeline_constant_name({'artifact_name': 'dataset', 'ui': {'artifact_name': 'dataset'}}) == 'dataset'
+    )
+    with pytest.raises(GraphValidationError):
+        validator._pipeline_constant_name({})
+    with pytest.raises(GraphValidationError):
+        validator._pipeline_constant_name({'id': 'source', 'artifact_name': 'dataset', 'ui': {'artifact_name': 'file'}})
 
 
-def test_pipeline_node_interface_builds_file_input_output() -> None:
+def test_pipeline_node_interface_builds_constant_output() -> None:
     interface = validator._pipeline_node_interface(
-        {'id': 'upload', 'kind': 'file_input', 'ui': {'artifact_name': 'dataset'}},
+        {'id': 'upload', 'kind': 'constant', 'data_type': 'file', 'ui': {'artifact_name': 'dataset'}},
         notebook_paths_by_ref={},
     )
 
@@ -162,7 +169,7 @@ def test_validate_pipeline_template_reports_edge_port_and_type_errors(
     assert {'unknown_source_port', 'unknown_target_port', 'incompatible_edge_types'} <= codes
 
 
-def test_validate_pipeline_template_accepts_valid_file_input_pipeline(
+def test_validate_pipeline_template_accepts_valid_constant_pipeline(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -183,7 +190,13 @@ def test_validate_pipeline_template_accepts_valid_file_input_pipeline(
         template,
         {
             'nodes': [
-                {'id': 'upload', 'title': 'Upload', 'kind': 'file_input', 'artifact_name': 'dataset'},
+                {
+                    'id': 'upload',
+                    'title': 'Upload',
+                    'kind': 'constant',
+                    'artifact_name': 'dataset',
+                    'data_type': 'file',
+                },
                 {'id': 'consumer', 'title': 'Consumer', 'kind': 'notebook', 'template_ref': 'consumer.py'},
             ],
             'edges': [
@@ -202,6 +215,25 @@ def test_validate_pipeline_template_accepts_valid_file_input_pipeline(
     )
 
     assert validator.validate_pipeline_template(template, notebook_paths_by_ref={'consumer.py': consumer_path}) == []
+
+
+def test_validate_pipeline_template_rejects_constant_without_artifact_name(tmp_path: Path) -> None:
+    template = tmp_path / 'pipeline.json'
+    _write_json(
+        template,
+        {
+            'nodes': [
+                {'id': 'source', 'title': 'Source', 'kind': 'constant', 'data_type': 'int'},
+            ],
+            'edges': [],
+            'layout': [{'node_id': 'source', 'x': 0, 'y': 0, 'w': 1, 'h': 1}],
+        },
+    )
+
+    issues = validator.validate_pipeline_template(template)
+
+    assert any(issue['code'] == 'invalid_pipeline_node' for issue in issues)
+    assert any('must define `artifact_name`' in str(issue['message']) for issue in issues)
 
 
 def test_validate_pipeline_template_accepts_organizer_node(

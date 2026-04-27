@@ -7,6 +7,7 @@ from fastapi.responses import FileResponse, Response
 
 from bulletjournal.api.schemas import (
     ArtifactStateChangeRequest,
+    ConstantValueUpdateRequest,
     NodeOutputsStateChangeRequest,
 )
 
@@ -54,7 +55,34 @@ async def upload_file(node_id: str, request: Request):
     result = container.artifact_service.upload_file(node_id, filename, content, mime_type)
     return {
         'node_id': node_id,
-        'artifact_name': 'file',
+        'artifact_name': result['artifact_name'],
+        'state': result['state'],
+        'artifact_hash': result['artifact_hash'],
+    }
+
+
+@router.post('/constants/{node_id}/upload')
+async def upload_constant(node_id: str, request: Request):
+    container = request.app.state.container
+    content = await request.body()
+    filename = request.headers.get('x-filename', 'upload.bin')
+    mime_type = request.headers.get('content-type')
+    result = container.artifact_service.upload_file(node_id, filename, content, mime_type)
+    return {
+        'node_id': node_id,
+        'artifact_name': result['artifact_name'],
+        'state': result['state'],
+        'artifact_hash': result['artifact_hash'],
+    }
+
+
+@router.post('/constants/{node_id}/value')
+def set_constant_value(node_id: str, payload: ConstantValueUpdateRequest, request: Request):
+    container = request.app.state.container
+    result = container.artifact_service.set_constant_value(node_id, payload.value)
+    return {
+        'node_id': node_id,
+        'artifact_name': result['artifact_name'],
         'state': result['state'],
         'artifact_hash': result['artifact_hash'],
     }

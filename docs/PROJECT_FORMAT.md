@@ -45,9 +45,15 @@ project_root/
 The graph stored under `graph/` includes node records whose `kind` is currently one of:
 
 - `notebook`
-- `file_input`
+- `constant`
 - `organizer`
 - `area`
+
+`constant` nodes persist their synthetic output metadata in `node.ui`:
+
+```json
+{ "artifact_name": "value", "data_type": "int" }
+```
 
 `organizer` nodes persist their synthetic passthrough ports in `node.ui.organizer_ports`.
 

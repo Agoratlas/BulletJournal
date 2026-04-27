@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from bulletjournal.domain.enums import ArtifactRole, ArtifactState, LineageMode, ValidationSeverity
+from bulletjournal.domain.enums import ArtifactRole, ArtifactState, LineageMode, RunStatus, ValidationSeverity
 from bulletjournal.domain.models import ValidationIssue
 from bulletjournal.parser.validation import build_issue_id
 from bulletjournal.storage.project_fs import init_project_root
@@ -117,6 +117,16 @@ def test_state_db_delete_node_state_removes_all_visible_node_records(tmp_path) -
     paths = init_project_root(tmp_path / 'project')
     db = StateDB(paths.state_db_path)
 
+    db.record_run(
+        'run-1',
+        'project-1',
+        'run_stale',
+        {'node_id': 'node_a', 'node_ids': ['node_a'], 'plan': ['node_a']},
+        1,
+        {'started_at': '2026-03-26T00:00:00Z'},
+    )
+    db.update_run_status('run-1', RunStatus.FAILED, failure_json={'node_id': 'node_a', 'error': 'boom'})
+    db.record_run_input('run-1', 'node_a/output', 'hash-1', ArtifactState.READY.value)
     db.save_notebook_revision(
         'node_a',
         'source-a',
@@ -167,6 +177,10 @@ def test_state_db_delete_node_state_removes_all_visible_node_records(tmp_path) -
     assert any(issue['node_id'] == 'node_a' for issue in db.list_validation_issues())
     assert any(head['node_id'] == 'node_a' for head in db.list_artifact_heads())
     assert 'node_a' in db.list_orchestrator_execution_meta()
+    assert any(run['run_id'] == 'run-1' for run in db.list_run_records())
+    with db._connect() as connection:
+        assert connection.execute('SELECT COUNT(*) FROM run_inputs WHERE run_id = ?', ('run-1',)).fetchone()[0] == 1
+        assert connection.execute('SELECT COUNT(*) FROM run_outputs WHERE run_id = ?', ('run-1',)).fetchone()[0] == 1
 
     db.delete_node_state('node_a')
 
@@ -175,6 +189,10 @@ def test_state_db_delete_node_state_removes_all_visible_node_records(tmp_path) -
     assert all(head['node_id'] != 'node_a' for head in db.list_artifact_heads())
     assert 'node_a' not in db.list_orchestrator_execution_meta()
     assert 'node_a' not in db.list_state_node_ids()
+    assert all(run['run_id'] != 'run-1' for run in db.list_run_records())
+    with db._connect() as connection:
+        assert connection.execute('SELECT COUNT(*) FROM run_inputs WHERE run_id = ?', ('run-1',)).fetchone()[0] == 0
+        assert connection.execute('SELECT COUNT(*) FROM run_outputs WHERE run_id = ?', ('run-1',)).fetchone()[0] == 0
 
 
 def test_state_db_hides_dismissed_warning_but_keeps_active_errors(tmp_path) -> None:

@@ -18,7 +18,11 @@ from bulletjournal.templates.builtin_provider import (
 )
 from bulletjournal.templates.provider import TemplateAsset
 from bulletjournal.templates.registry import discover_template_providers
-from bulletjournal.templates.validator import _pipeline_node_interface, load_pipeline_template_definition_text
+from bulletjournal.templates.validator import (
+    _pipeline_node_interface,
+    load_pipeline_template_definition_text,
+    validate_pipeline_template_definition,
+)
 
 
 @dataclass(slots=True)
@@ -54,6 +58,7 @@ class TemplateService:
         )
         self._assets_by_ref = self._discover_assets()
         self._asset_aliases = self._discover_aliases(self._assets_by_ref)
+        self._validate_pipeline_assets()
 
     def list_templates(self) -> list[dict[str, Any]]:
         templates = [
@@ -114,6 +119,33 @@ class TemplateService:
                 continue
             interfaces[node_id] = _pipeline_node_interface(raw_node, notebook_paths_by_ref=notebook_paths_by_ref)
         return interfaces
+
+    def _validate_pipeline_assets(self) -> None:
+        notebook_assets: dict[str, TemplateAsset] = {}
+        for asset in self._assets_by_ref.values():
+            if asset.kind != 'notebook':
+                continue
+            notebook_assets[asset.ref] = asset
+            notebook_assets[asset.file_name] = asset
+            notebook_assets[asset.name] = asset
+            for alias in asset.aliases:
+                notebook_assets[alias] = asset
+        for asset in self._assets_by_ref.values():
+            if asset.kind != 'pipeline':
+                continue
+            try:
+                definition = load_pipeline_template_definition_text(asset.read_text())
+            except Exception as exc:
+                raise ValueError(f'Invalid pipeline template `{asset.ref}`: {exc}') from exc
+            issues = validate_pipeline_template_definition(
+                definition,
+                notebook_paths_by_ref=notebook_assets,
+                node_id=asset.ref,
+            )
+            errors = [issue for issue in issues if issue.get('severity') == 'error']
+            if errors:
+                summary = '; '.join(str(issue.get('message') or '').strip() for issue in errors[:3])
+                raise ValueError(f'Invalid pipeline template `{asset.ref}`: {summary}')
 
     def empty_notebook_source(self, *, title: str, node_id: str) -> str:
         template = self.resolve_template_source('builtin/empty_notebook')
