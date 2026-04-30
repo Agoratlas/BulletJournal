@@ -878,6 +878,97 @@ def test_pipeline_constants_do_not_force_prefix_collisions(tmp_path, monkeypatch
     assert {'constant', 'constant_2'} <= node_ids
 
 
+def test_pipeline_template_constant_value_is_ready_immediately(tmp_path, monkeypatch) -> None:
+    pipeline_source = json.dumps(
+        {
+            'title': 'Prepopulated Constant',
+            'nodes': [
+                {
+                    'id': 'threshold_source',
+                    'title': 'Threshold Source',
+                    'kind': 'constant',
+                    'artifact_name': 'sample_count',
+                    'data_type': 'int',
+                    'value': 7,
+                },
+                {
+                    'id': 'consumer',
+                    'title': 'Consumer',
+                    'kind': 'notebook',
+                    'template_ref': 'builtin/test_starter_notebook',
+                },
+            ],
+            'edges': [
+                {
+                    'source_node': 'threshold_source',
+                    'source_port': 'sample_count',
+                    'target_node': 'consumer',
+                    'target_port': 'sample_count',
+                }
+            ],
+            'layout': [
+                {'node_id': 'threshold_source', 'x': 80, 'y': 120, 'w': 100, 'h': 40},
+                {'node_id': 'consumer', 'x': 260, 'y': 120, 'w': 320, 'h': 200},
+            ],
+        }
+    )
+
+    class Provider:
+        provider_name = 'acme'
+        provider_revision = '0.1.0'
+
+        def list_notebook_templates(self):
+            return []
+
+        def list_pipeline_templates(self):
+            return [
+                {
+                    'name': 'prepopulated_constant',
+                    'ref': 'acme/prepopulated_constant',
+                    'title': 'Prepopulated Constant',
+                    'path': 'pipelines/prepopulated_constant.json',
+                    'hidden': False,
+                }
+            ]
+
+        def load_notebook_template(self, name: str) -> str:
+            return ''
+
+        def load_pipeline_template(self, name: str) -> str:
+            return pipeline_source if name == 'prepopulated_constant' else ''
+
+    monkeypatch.setattr('bulletjournal.services.template_service.discover_template_providers', lambda: [Provider()])
+
+    project_root = init_project_root(tmp_path / 'project').root
+    app = create_app(project_path=project_root)
+    client = TestClient(app)
+
+    opened = client.get('/api/v1/project/snapshot')
+    graph_version = opened.json()['graph']['meta']['graph_version']
+
+    created = client.patch(
+        '/api/v1/graph',
+        json={
+            'graph_version': graph_version,
+            'operations': [{'type': 'add_pipeline_template', 'template_ref': 'acme/prepopulated_constant'}],
+        },
+    )
+    assert created.status_code == 200
+
+    artifact = client.get('/api/v1/artifacts/constant/sample_count')
+    assert artifact.status_code == 200
+    assert artifact.json()['state'] == 'ready'
+    assert artifact.json()['preview']['repr'] == '7'
+
+    run = client.post('/api/v1/nodes/consumer/run', json={'mode': 'run_stale'})
+    assert run.status_code == 200
+    assert run.json()['status'] == 'succeeded'
+
+    output = client.get('/api/v1/artifacts/consumer/sample_df')
+    assert output.status_code == 200
+    assert output.json()['preview']['rows'] == 7
+
+
 def test_uploaded_constant_file_unblocks_downstream_notebook_run(tmp_path) -> None:
     project_root = init_project_root(tmp_path / 'project').root
     app = create_app(project_path=project_root)
@@ -1854,7 +1945,7 @@ def test_frozen_file_input_blocks_upload_and_shows_frozen_state(tmp_path) -> Non
 
     blocked = client.post(
         '/api/v1/file-inputs/source_file/upload',
-        data=b'hello world',
+        content=b'hello world',
         headers={
             'content-type': 'text/plain',
             'x-filename': 'hello.txt',

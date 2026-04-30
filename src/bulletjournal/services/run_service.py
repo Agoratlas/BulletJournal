@@ -203,8 +203,10 @@ class RunService:
         elif scope != 'node':
             raise InvalidRequestError(f'Unknown run scope `{scope}`.')
         if include_upstream:
+            requested_with_upstream = set(requested)
             for candidate in requested:
-                requested.update(upstream_closure(graph, candidate))
+                requested_with_upstream.update(upstream_closure(graph, candidate))
+            requested = requested_with_upstream
         ordered = run_plan_for_node(graph, node_id, upstream_node_ids=list(requested - {node_id}))
         return [
             candidate for candidate in ordered if self.project_service.get_node(candidate).kind == NodeKind.NOTEBOOK
@@ -215,8 +217,10 @@ class RunService:
         graph_node_ids = {node.id for node in graph.nodes}
         requested = {node_id for node_id in node_ids if node_id in graph_node_ids}
         if include_upstream:
-            for candidate in list(requested):
-                requested.update(upstream_closure(graph, candidate))
+            requested_with_upstream = set(requested)
+            for candidate in requested:
+                requested_with_upstream.update(upstream_closure(graph, candidate))
+            requested = requested_with_upstream
         ordered = topological_nodes(graph)
         return [
             candidate

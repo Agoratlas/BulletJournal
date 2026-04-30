@@ -217,6 +217,55 @@ def test_validate_pipeline_template_accepts_valid_constant_pipeline(
     assert validator.validate_pipeline_template(template, notebook_paths_by_ref={'consumer.py': consumer_path}) == []
 
 
+def test_validate_pipeline_template_accepts_prepopulated_json_constant(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    consumer_path = tmp_path / 'consumer.py'
+    consumer_path.write_text('', encoding='utf-8')
+    template = tmp_path / 'pipeline.json'
+
+    monkeypatch.setattr(
+        validator,
+        'parse_notebook_interface',
+        lambda path, node_id: _interface(
+            node_id,
+            inputs=[Port(name='threshold', data_type='int', direction='input')],
+        ),
+    )
+
+    _write_json(
+        template,
+        {
+            'nodes': [
+                {
+                    'id': 'threshold_source',
+                    'title': 'Threshold Source',
+                    'kind': 'constant',
+                    'artifact_name': 'threshold',
+                    'data_type': 'int',
+                    'value': 7,
+                },
+                {'id': 'consumer', 'title': 'Consumer', 'kind': 'notebook', 'template_ref': 'consumer.py'},
+            ],
+            'edges': [
+                {
+                    'source_node': 'threshold_source',
+                    'source_port': 'threshold',
+                    'target_node': 'consumer',
+                    'target_port': 'threshold',
+                },
+            ],
+            'layout': [
+                {'node_id': 'threshold_source', 'x': 0, 'y': 0, 'w': 1, 'h': 1},
+                {'node_id': 'consumer', 'x': 1, 'y': 0, 'w': 1, 'h': 1},
+            ],
+        },
+    )
+
+    assert validator.validate_pipeline_template(template, notebook_paths_by_ref={'consumer.py': consumer_path}) == []
+
+
 def test_validate_pipeline_template_rejects_constant_without_artifact_name(tmp_path: Path) -> None:
     template = tmp_path / 'pipeline.json'
     _write_json(
@@ -234,6 +283,35 @@ def test_validate_pipeline_template_rejects_constant_without_artifact_name(tmp_p
 
     assert any(issue['code'] == 'invalid_pipeline_node' for issue in issues)
     assert any('must define `artifact_name`' in str(issue['message']) for issue in issues)
+
+
+def test_validate_pipeline_template_rejects_prepopulated_non_json_constant_type(tmp_path: Path) -> None:
+    template = tmp_path / 'pipeline.json'
+    _write_json(
+        template,
+        {
+            'nodes': [
+                {
+                    'id': 'series_source',
+                    'title': 'Series Source',
+                    'kind': 'constant',
+                    'artifact_name': 'series',
+                    'data_type': 'pandas.Series',
+                    'value': [1, 2, 3],
+                },
+            ],
+            'edges': [],
+            'layout': [{'node_id': 'series_source', 'x': 0, 'y': 0, 'w': 1, 'h': 1}],
+        },
+    )
+
+    issues = validator.validate_pipeline_template(template)
+
+    assert any(issue['code'] == 'invalid_pipeline_node' for issue in issues)
+    assert any(
+        'only supports pre-populated `value` for JSON-serializable data types' in str(issue['message'])
+        for issue in issues
+    )
 
 
 def test_validate_pipeline_template_accepts_organizer_node(

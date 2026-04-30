@@ -132,6 +132,30 @@ Constant nodes expose a single synthetic output. Pipeline templates must define 
 
 `artifact_name` and `data_type` may also be supplied as `ui.artifact_name` and `ui.data_type`, but providers should prefer the top-level fields. If both top-level and `ui` values are supplied, they must match.
 
+Template providers may also pre-populate constant blocks with a `value` when the declared `data_type` is JSON-serializable:
+
+```json
+{
+  "id": "threshold",
+  "kind": "constant",
+  "title": "Threshold",
+  "artifact_name": "threshold",
+  "data_type": "int",
+  "value": 7
+}
+```
+
+Pre-populated constant values are only supported for these `data_type` values:
+
+- `int`
+- `float`
+- `bool`
+- `str`
+- `list`
+- `dict`
+
+The `value` must be valid JSON and must match the declared `data_type`. Pre-populated values are not supported for upload-backed or non-JSON types such as `file`, `pandas.DataFrame`, or `pandas.Series`.
+
 In pipeline templates, constant node `id` values are only used as internal wiring keys for `layout` and `edges`. When the pipeline is instantiated, the created graph node ID for each constant is generated automatically and may differ from the template-local `id`.
 
 Supported `data_type` values include:

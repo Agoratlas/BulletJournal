@@ -55,6 +55,8 @@ The graph stored under `graph/` includes node records whose `kind` is currently 
 { "artifact_name": "value", "data_type": "int" }
 ```
 
+If a pipeline template instantiates a constant with a pre-populated `value`, that value is stored as the constant block's managed artifact state, not in `node.ui`.
+
 `organizer` nodes persist their synthetic passthrough ports in `node.ui.organizer_ports`.
 
 Each organizer port is stored as:

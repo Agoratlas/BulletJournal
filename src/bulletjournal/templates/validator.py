@@ -18,11 +18,13 @@ from bulletjournal.domain.models import Edge, Node, Port
 from bulletjournal.domain.type_system import types_compatible
 from bulletjournal.parser.interface_parser import parse_notebook_interface
 from bulletjournal.parser.validation import build_issue
+from bulletjournal.runtime.serializers import validate_runtime_value_type
 from bulletjournal.templates.builtin_provider import BUILTIN_PROVIDER, EXAMPLES_PROVIDER
 from bulletjournal.templates.provider import TemplateAsset
 from bulletjournal.templates.registry import default_notebook_assets
 
 BUILTIN_NOTEBOOK_TEMPLATE_ROOT = Path(__file__).resolve().parent / 'builtin'
+JSON_SERIALIZABLE_CONSTANT_DATA_TYPES = frozenset({'int', 'float', 'bool', 'str', 'list', 'dict'})
 
 
 def validate_template(path: Path, *, notebook_paths_by_ref: dict[str, Path] | None = None) -> list[dict[str, object]]:
@@ -341,6 +343,7 @@ def _pipeline_node_interface(
     if kind_value == NodeKind.CONSTANT.value:
         artifact_name = _pipeline_constant_name(raw_node)
         data_type = _pipeline_constant_data_type(raw_node)
+        _validate_pipeline_constant_value(raw_node, data_type=data_type)
         output = Port(
             name=artifact_name,
             data_type=data_type,
@@ -409,6 +412,31 @@ def _pipeline_constant_data_type(raw_node: dict[str, Any]) -> str:
         if isinstance(candidate, str) and candidate.strip():
             return candidate.strip()
     return 'object'
+
+
+def _validate_pipeline_constant_value(raw_node: dict[str, Any], *, data_type: str) -> None:
+    if 'value' not in raw_node:
+        return
+    node_id = str(raw_node.get('id') or 'constant').strip()
+    if data_type not in JSON_SERIALIZABLE_CONSTANT_DATA_TYPES:
+        supported = ', '.join(f'`{item}`' for item in sorted(JSON_SERIALIZABLE_CONSTANT_DATA_TYPES))
+        raise GraphValidationError(
+            f'Constant node `{node_id}` only supports pre-populated `value` for JSON-serializable data types: '
+            f'{supported}.'
+        )
+    value = raw_node.get('value')
+    try:
+        json.dumps(value, ensure_ascii=True, sort_keys=True, allow_nan=False)
+    except (TypeError, ValueError) as exc:
+        raise GraphValidationError(
+            f'Constant node `{node_id}` defines a non-JSON-serializable `value`: {exc}.'
+        ) from exc
+    try:
+        validate_runtime_value_type(value, data_type, operation='template default')
+    except TypeError as exc:
+        raise GraphValidationError(
+            f'Constant node `{node_id}` defines an invalid pre-populated `value`: {exc}'
+        ) from exc
 
 
 def _port_data_type(ports: list[dict[str, Any]], name: str) -> str | None:
