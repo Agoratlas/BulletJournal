@@ -2,11 +2,11 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import type { Connection, EdgeChange, Node } from 'reactflow'
 
-import { appUrl, cancelRun, createCheckpoint, currentProject, dismissNotice, downloadNotebookSource, getSnapshot, listSessions, notebookDownloadUrl, patchGraph, restoreCheckpoint, runAll, runNode, runSelection, setArtifactState, setConstantValue, setNodeOutputsState, stopSession, uploadConstantFile, uploadFile } from './lib/api'
+import { appUrl, cancelRun, clearConstantValue, createCheckpoint, currentProject, dismissNotice, downloadNotebookSource, getSnapshot, listSessions, notebookDownloadUrl, patchGraph, restoreCheckpoint, runAll, runNode, runSelection, setArtifactState, setConstantValue, setNodeOutputsState, stopSession, uploadConstantFile, uploadFile } from './lib/api'
 import { CONSTANT_NODE_HEIGHT, CONSTANT_NODE_PORT_CENTER_OFFSET, CONSTANT_NODE_WIDTH, GRID_SIZE, PORT_ROW_HEIGHT, STANDARD_NODE_PORT_CENTER_OFFSET, activeRunNodeId, artifactFor, artifactsForDisplay, currentRun, formatTimestamp, globalArtifactCounts, inputState, inputsForNode, outputsForNode, queuedRunNodeIds, templateByRef } from './lib/helpers'
 import { areaSettings, type AreaColorKey, type AreaTitlePosition } from './lib/area'
 import type { ArtifactRecord, GraphPatchOperation, LayoutRecord, NodeRecord, ProjectSnapshot, SessionRecord, TemplateRecord } from './lib/types'
-import type { AppNotice, ClipboardGraph, ClipboardNodeRecord, ConstantValueType, GraphHistoryEntry, GraphMutationPlan, NodeActionItem, OptimisticGraphState, PaletteEntry, PalettePreviewBlock, PortActionMenuState } from './appTypes'
+import type { AppNotice, ClipboardGraph, ClipboardNodeRecord, ConstantValueType, CsvSeparator, GraphHistoryEntry, GraphMutationPlan, NodeActionItem, OptimisticGraphState, PaletteEntry, PalettePreviewBlock, PortActionMenuState } from './appTypes'
 import { applyOptimisticGraphOperations, areaAddOperationForNode, artifactTargetForPort, blockCreateMode, clampContextMenuPosition, cloneSnapshot, constantAddOperationForNode, copiedTitle, createClientNotice, edgeIdForPorts, edgeIdsForPort, editorSessionDetails, expandMutationPlan, fileInputAddOperationForNode, formatMarkdownCode, formatRunBlockedMessage, formatRunFailureMessage, freezeBlockMessage, frozenBlockBlockersForDelete, frozenBlockBlockersForRemovedEdges, frozenBlockBlockersForStaleRoots, isEditableTarget, isEditorOpenConflict, isFreezeConflict, isManagedRunFailure, mergeGraphIntoSnapshot, normalizeNodeId, notebookAddOperationForNode, organizerAddOperationForNode, pipelineTemplateNodeRecords, pipelineTopLeftForCenter, SNAPSHOT_REFRESH_EVENTS, SNAPSHOT_REFRESH_THROTTLE_MS, snapToGrid, uniqueCopiedNodeId } from './lib/appHelpers'
 import { ArtifactCard } from './components/ArtifactCard'
 import { ArtifactCounts } from './components/ArtifactCounts'
@@ -1445,7 +1445,7 @@ function App() {
       {
         key: 'empty',
         title: 'New notebook',
-        description: 'Generic notebook scaffold with one sample input and output.',
+        description: 'Generic notebook scaffold with commented sample input and output declarations.',
         kind: 'empty',
         previewBlocks: palettePreviewBlocks('New notebook', 'empty'),
       },
@@ -2155,7 +2155,16 @@ function App() {
     }
     const redo = {
       operations: [
-        { type: 'add_notebook_node', node_id: payload.nodeId, title: payload.title, x, y, w: NEW_NODE_WIDTH, h: NEW_NODE_HEIGHT } satisfies GraphPatchOperation,
+        {
+          type: 'add_notebook_node',
+          node_id: payload.nodeId,
+          title: payload.title,
+          template_ref: 'builtin/empty_notebook',
+          x,
+          y,
+          w: NEW_NODE_WIDTH,
+          h: NEW_NODE_HEIGHT,
+        } satisfies GraphPatchOperation,
       ],
     }
     await mutateGraph(redo.operations, {
@@ -2543,21 +2552,28 @@ function App() {
     return parsed
   }
 
-  async function saveConstantBlockValue(nodeId: string, payload: { dataType: ConstantValueType; jsonText: string; uploadFile: File | null; jsonUploadFile: File | null }) {
+  async function saveConstantBlockValue(
+    nodeId: string,
+    payload: { dataType: ConstantValueType; jsonText: string; uploadFile: File | null; jsonUploadFile: File | null; csvSeparator: CsvSeparator },
+    options: { clearBlankJsonValue?: boolean } = {},
+  ) {
     if (payload.dataType === 'file' || payload.dataType === 'pandas.DataFrame') {
       if (payload.uploadFile) {
-        await uploadConstantFile(nodeId, payload.uploadFile)
+        await uploadConstantFile(nodeId, payload.uploadFile, payload.csvSeparator)
       }
       return
     }
     const resolvedValue = await resolveConstantEditorValue(payload)
     if (resolvedValue === undefined) {
+      if (options.clearBlankJsonValue) {
+        await clearConstantValue(nodeId)
+      }
       return
     }
     await setConstantValue(nodeId, resolvedValue)
   }
 
-  async function resolveConstantEditorValue(payload: { dataType: ConstantValueType; jsonText: string; uploadFile: File | null; jsonUploadFile: File | null }): Promise<unknown | undefined> {
+  async function resolveConstantEditorValue(payload: { dataType: ConstantValueType; jsonText: string; uploadFile: File | null; jsonUploadFile: File | null; csvSeparator: CsvSeparator }): Promise<unknown | undefined> {
     if (payload.dataType === 'file' || payload.dataType === 'pandas.DataFrame') {
       return undefined
     }
@@ -2580,7 +2596,13 @@ function App() {
     await mutateGraph([...removeOperations, addOperation])
   }
 
-  async function handleCreateConstantBlock(payload: { dataType: ConstantValueType; jsonText: string; uploadFile: File | null; jsonUploadFile: File | null }) {
+  async function handleCreateConstantBlock(payload: {
+    dataType: ConstantValueType
+    jsonText: string
+    uploadFile: File | null
+    jsonUploadFile: File | null
+    csvSeparator: CsvSeparator
+  }) {
     if (!pendingBlockCreation || !projectId) {
       return
     }
@@ -3839,7 +3861,7 @@ function App() {
             if (!editing || !projectId) {
               return
             }
-            await saveConstantBlockValue(editing.nodeId, payload)
+            await saveConstantBlockValue(editing.nodeId, payload, { clearBlankJsonValue: true })
             await refreshSnapshot()
           }}
         />

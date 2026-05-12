@@ -1,7 +1,7 @@
 import type { ChangeEvent, DragEvent, FormEvent, ReactNode } from 'react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 
-import type { ConstantValueType } from '../appTypes'
+import type { ConstantValueType, CsvSeparator } from '../appTypes'
 import { AREA_COLOR_KEYS, AREA_TITLE_POSITIONS, type AreaColorKey, type AreaTitlePosition } from '../lib/area'
 import { formatType } from '../lib/helpers'
 import { X } from './Icons'
@@ -688,7 +688,13 @@ type EditConstantDialogProps = {
   initialJsonTooLarge?: boolean
   uploadDisabledMessage?: string | null
   onClose: () => void
-  onSave: (payload: { dataType: ConstantValueType; jsonText: string; uploadFile: File | null; jsonUploadFile: File | null }) => Promise<void>
+  onSave: (payload: {
+    dataType: ConstantValueType
+    jsonText: string
+    uploadFile: File | null
+    jsonUploadFile: File | null
+    csvSeparator: CsvSeparator
+  }) => Promise<void>
 }
 
 export function EditConstantDialog({ mode = 'create', initialDataType, allowTypeChange = true, initialJsonValue = '', initialJsonTooLarge = false, uploadDisabledMessage = null, onClose, onSave }: EditConstantDialogProps) {
@@ -696,6 +702,7 @@ export function EditConstantDialog({ mode = 'create', initialDataType, allowType
   const [jsonText, setJsonText] = useState(initialJsonValue)
   const [uploadFile, setUploadFile] = useState<File | null>(null)
   const [jsonUploadFile, setJsonUploadFile] = useState<File | null>(null)
+  const [csvSeparator, setCsvSeparator] = useState<CsvSeparator>(',')
   const [busy, setBusy] = useState(false)
   const [validationError, setValidationError] = useState<string | null>(null)
 
@@ -704,6 +711,7 @@ export function EditConstantDialog({ mode = 'create', initialDataType, allowType
     setJsonText(initialJsonValue)
     setUploadFile(null)
     setJsonUploadFile(null)
+    setCsvSeparator(',')
     setBusy(false)
     setValidationError(null)
   }, [initialDataType, initialJsonValue])
@@ -722,7 +730,7 @@ export function EditConstantDialog({ mode = 'create', initialDataType, allowType
     setBusy(true)
     try {
       setValidationError(null)
-      await onSave({ dataType, jsonText, uploadFile, jsonUploadFile })
+      await onSave({ dataType, jsonText, uploadFile, jsonUploadFile, csvSeparator })
       onClose()
     } catch (error) {
       setValidationError(error instanceof Error ? error.message : 'Invalid constant value.')
@@ -780,6 +788,16 @@ export function EditConstantDialog({ mode = 'create', initialDataType, allowType
             ) : (
               <span className="field-note">{uploadFile.name}</span>
             )}
+            {dataType === 'pandas.DataFrame' ? (
+              <>
+                <span>Separator</span>
+                <select value={csvSeparator} onChange={(event) => setCsvSeparator(event.target.value as CsvSeparator)}>
+                  <option value=",">Comma (,)</option>
+                  <option value=";">Semicolon (;)</option>
+                  <option value="\t">Tab</option>
+                </select>
+              </>
+            ) : null}
           </label>
         ) : (
           <label>
@@ -815,19 +833,22 @@ export function EditConstantDialog({ mode = 'create', initialDataType, allowType
             )}
             {initialJsonTooLarge && mode === 'edit' ? <span className="field-note">Existing value is larger than 10 kB, so the editor starts blank.</span> : null}
             {!supportsJsonUpload ? <span className="field-note">Leave blank to keep this constant pending.</span> : null}
+            {supportsJsonUpload && mode === 'edit' ? <span className="field-note">Leave the value blank to clear it and return this constant to a pending state.</span> : null}
           </label>
         )}
 
         {!usesUpload && supportsJsonUpload ? (
           <label>
-            <span>Upload JSON</span>
-            <input type="file" accept="application/json,.json" onChange={(event) => {
-              setJsonUploadFile(event.target.files?.[0] ?? null)
-              if (validationError) {
-                setValidationError(null)
-              }
-            }} />
-            {!jsonUploadFile ? <span className="field-note">Optional. Upload a `.json` file instead of typing the value.</span> : <span className="field-note">{jsonUploadFile.name}</span>}
+            <div className="inline-file-upload-row">
+              <span>or directly upload a JSON file:</span>
+              <input type="file" accept="application/json,.json" onChange={(event) => {
+                setJsonUploadFile(event.target.files?.[0] ?? null)
+                if (validationError) {
+                  setValidationError(null)
+                }
+              }} />
+            </div>
+            {jsonUploadFile ? <span className="field-note">{jsonUploadFile.name}</span> : null}
           </label>
         ) : null}
 

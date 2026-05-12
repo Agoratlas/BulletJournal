@@ -83,6 +83,65 @@ def _(second, first):
     assert [port.name for port in interface.assets] == []
 
 
+def test_parser_allows_matching_input_and_output_names(tmp_path) -> None:
+    notebook = tmp_path / 'same_name.py'
+    notebook.write_text(
+        """
+import marimo
+
+app = marimo.App()
+
+with app.setup:
+    from bulletjournal.runtime import artifacts
+
+@app.cell
+def _():
+    value = artifacts.pull(name='dataset', data_type=int)
+    artifacts.push(value, name='dataset', data_type=int)
+    return value
+""".strip()
+        + '\n',
+        encoding='utf-8',
+    )
+
+    interface = parse_notebook_interface(notebook, node_id='same_name')
+
+    assert [port.name for port in interface.inputs] == ['dataset']
+    assert [port.name for port in interface.outputs] == ['dataset']
+    assert not any(issue.code == 'duplicate_port' for issue in interface.issues)
+
+
+def test_parser_rejects_invalid_artifact_names(tmp_path) -> None:
+    notebook = tmp_path / 'invalid_names.py'
+    notebook.write_text(
+        """
+import marimo
+
+app = marimo.App()
+
+with app.setup:
+    from bulletjournal.runtime import artifacts
+
+@app.cell
+def _():
+    value = artifacts.pull(name='bad-name', data_type=int)
+    artifacts.push(value, name='also-bad', data_type=int)
+    return value
+""".strip()
+        + '\n',
+        encoding='utf-8',
+    )
+
+    interface = parse_notebook_interface(notebook, node_id='invalid_names')
+
+    invalid_name_issues = [issue for issue in interface.issues if issue.code == 'invalid_name']
+    assert len(invalid_name_issues) == 2
+    assert {issue.message for issue in invalid_name_issues} == {
+        'Invalid artifact name `bad-name`, must only contain lowercase letters, digits and underscores.',
+        'Invalid artifact name `also-bad`, must only contain lowercase letters, digits and underscores.',
+    }
+
+
 def test_parser_rejects_non_literal_pull_file_allow_missing(tmp_path) -> None:
     notebook = tmp_path / 'invalid_optional_file.py'
     notebook.write_text(

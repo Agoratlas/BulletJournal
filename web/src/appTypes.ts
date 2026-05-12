@@ -36,6 +36,8 @@ export type PortActionMenuState = {
 
 export type ConstantValueType = 'int' | 'float' | 'bool' | 'str' | 'list' | 'dict' | 'file' | 'pandas.DataFrame'
 
+export type CsvSeparator = ',' | ';' | '\t'
+
 export type AppNotice = NoticeRecord & {
   origin: 'snapshot' | 'client'
 }

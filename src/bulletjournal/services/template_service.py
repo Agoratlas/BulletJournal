@@ -16,6 +16,7 @@ from bulletjournal.templates.builtin_provider import (
     builtin_notebook_assets,
     builtin_pipeline_assets,
 )
+from bulletjournal.templates.notebook_source import rewrite_marimo_app_title, validate_rewritable_marimo_app_definition
 from bulletjournal.templates.provider import TemplateAsset
 from bulletjournal.templates.registry import discover_template_providers
 from bulletjournal.templates.validator import (
@@ -58,6 +59,7 @@ class TemplateService:
         )
         self._assets_by_ref = self._discover_assets()
         self._asset_aliases = self._discover_aliases(self._assets_by_ref)
+        self._validate_notebook_assets()
         self._validate_pipeline_assets()
 
     def list_templates(self) -> list[dict[str, Any]]:
@@ -147,13 +149,23 @@ class TemplateService:
                 summary = '; '.join(str(issue.get('message') or '').strip() for issue in errors[:3])
                 raise ValueError(f'Invalid pipeline template `{asset.ref}`: {summary}')
 
-    def empty_notebook_source(self, *, title: str, node_id: str) -> str:
-        template = self.resolve_template_source('builtin/empty_notebook')
-        return self.render_notebook_template_source(template.source_text, title=title, node_id=node_id)
-
     @staticmethod
-    def render_notebook_template_source(source_text: str, *, title: str, node_id: str) -> str:
-        return source_text.replace('{{TITLE}}', title).replace('{{NODE_ID}}', node_id)
+    def render_notebook_template_source(source_text: str, *, node_id: str) -> str:
+        return rewrite_marimo_app_title(source_text, node_id=node_id)
+
+    def _validate_notebook_assets(self) -> None:
+        for asset in self._assets_by_ref.values():
+            if asset.kind != 'notebook':
+                continue
+            source_text = asset.read_text()
+            error = validate_rewritable_marimo_app_definition(source_text)
+            if error is not None:
+                raise ValueError(f'Invalid notebook template `{asset.ref}`: {error}')
+            interface = parse_notebook_interface(asset, node_id=Path(asset.name).stem)
+            for issue in interface.issues:
+                if issue.code != 'invalid_name' or not issue.message.startswith('Invalid artifact name `'):
+                    continue
+                raise ValueError(f'Invalid notebook template `{asset.ref}`: {issue.message}')
 
     def template_ref(self, ref: str) -> TemplateRef:
         asset = self._require_asset(ref, kind='notebook', allow_inactive=False)

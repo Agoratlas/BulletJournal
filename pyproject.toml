@@ -7,7 +7,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "bulletjournal-editor"
-version = "1.2.1"
+version = "1.2.2"
 description = "Notebook editor and orchestrator for reproducible data science"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -28,6 +28,7 @@ dependencies = [
     "marimo>=0.20.4",
     "matplotlib>=3.9.0",
     "networkx>=3.2",
+    "openpyxl>=3.1.0",
     "pandas>=2.2.0",
     "pyarrow>=16.0.0",
     "pydantic>=2.8.0",

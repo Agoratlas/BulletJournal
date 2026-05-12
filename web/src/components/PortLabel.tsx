@@ -3,16 +3,16 @@ import { formatType } from '../lib/helpers'
 export const TYPE_COLORS: Record<string, string> = {
   int: '#facc15',
   float: '#facc15',
-  bool: '#14b8a6',
-  str: '#7dd3fc',
-  list: '#8b5cf6',
-  dict: '#a78bfa',
-  file: '#ef4444',
-  object: '#9ca3af',
+  bool: '#5eead4',
+  str: '#818cf8',
+  list: '#f472b6',
+  dict: '#c084fc',
+  file: '#f87171',
+  object: '#cbd5e1',
   'pandas.DataFrame': '#009dff',
-  'pandas.Series': '#9ca3af',
-  'networkx.Graph': '#ec4899',
-  'networkx.DiGraph': '#ec4899',
+  'pandas.Series': '#94a3b8',
+  'networkx.Graph': '#a78bfa',
+  'networkx.DiGraph': '#a78bfa',
 }
 
 type PortLabelProps = {

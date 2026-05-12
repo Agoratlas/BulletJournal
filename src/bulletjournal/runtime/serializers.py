@@ -29,17 +29,20 @@ def serialize_value(value: Any, data_type: str) -> dict[str, Any]:
         }
     validate_runtime_value_type(value, data_type, operation='export')
     if data_type in {'int', 'float', 'bool', 'str', 'list', 'dict'}:
-        payload = json.dumps(value, ensure_ascii=True, sort_keys=True).encode('utf-8')
+        payload = json.dumps(value, ensure_ascii=True).encode('utf-8')
+        preview = {
+            **_simple_preview(value),
+            **_json_preview_metadata(value),
+        }
+        if data_type in {'list', 'dict'}:
+            preview['compact_repr'] = json.dumps(value, ensure_ascii=True, separators=(',', ':'))
         return {
             'bytes': payload,
             'storage_kind': StorageKind.JSON.value,
             'data_type': data_type,
             'extension': '.json',
             'mime_type': 'application/json',
-            'preview': {
-                **_simple_preview(value),
-                **_json_preview_metadata(value),
-            },
+            'preview': preview,
         }
     if data_type == 'pandas.DataFrame':
         buffer = io.BytesIO()
@@ -65,6 +68,15 @@ def serialize_value(value: Any, data_type: str) -> dict[str, Any]:
                 **({'editor_text': series_json} if len(series_json.encode('utf-8')) <= 10_000 else {}),
             },
             'extension': '.parquet',
+        }
+    if data_type in {'networkx.Graph', 'networkx.DiGraph'}:
+        payload = gzip.compress(pickle.dumps(value))
+        return {
+            'bytes': payload,
+            'storage_kind': StorageKind.PICKLE.value,
+            'data_type': data_type,
+            'preview': _graph_preview(value, data_type=data_type),
+            'extension': '.pkl.gz',
         }
     payload = gzip.compress(pickle.dumps(value))
     return {
@@ -145,11 +157,34 @@ def _series_preview(series: pd.Series) -> dict[str, Any]:
 
 
 def _json_preview_metadata(value: Any) -> dict[str, Any]:
-    inspector_text = json.dumps(value, ensure_ascii=True, indent=2, sort_keys=True)
+    inspector_text = json.dumps(value, ensure_ascii=True, indent=2)
     metadata = _preview_text_metadata(inspector_text)
     if len(inspector_text.encode('utf-8')) <= 10_000:
         metadata['editor_text'] = inspector_text
     return metadata
+
+
+def _graph_preview(value: Any, *, data_type: str) -> dict[str, Any]:
+    node_count = int(value.number_of_nodes())
+    edge_count = int(value.number_of_edges())
+    return {
+        'kind': 'graph',
+        'directed': data_type == 'networkx.DiGraph',
+        'node_count': node_count,
+        'edge_count': edge_count,
+        **_preview_text_metadata(
+            json.dumps(
+                {
+                    'directed': data_type == 'networkx.DiGraph',
+                    'node_count': node_count,
+                    'edge_count': edge_count,
+                },
+                ensure_ascii=True,
+                indent=2,
+                sort_keys=True,
+            )
+        ),
+    }
 
 
 def _preview_text_metadata(text: str) -> dict[str, Any]:

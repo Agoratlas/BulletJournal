@@ -30,7 +30,15 @@ class ArtifactService:
             raise NotFoundError(f'Unknown artifact `{node_id}/{artifact_name}`.')
         return head
 
-    def upload_file(self, node_id: str, filename: str, content: bytes, mime_type: str | None = None) -> dict[str, Any]:
+    def upload_file(
+        self,
+        node_id: str,
+        filename: str,
+        content: bytes,
+        mime_type: str | None = None,
+        *,
+        csv_separator: str = ',',
+    ) -> dict[str, Any]:
         node = self.project_service.get_node(node_id)
         blockers = self.project_service.frozen_block_blockers_for_stale_roots([node_id])
         if blockers:
@@ -52,7 +60,11 @@ class ArtifactService:
         if data_type == 'file':
             persisted = self._persist_uploaded_file(filename=filename, content=content)
         elif data_type == 'pandas.DataFrame':
-            persisted = self._persist_uploaded_dataframe_csv(filename=filename, content=content)
+            persisted = self._persist_uploaded_dataframe_csv(
+                filename=filename,
+                content=content,
+                separator=csv_separator,
+            )
         else:
             raise InvalidRequestError(
                 f'Constant block `{node_id}` expects `{data_type}` and cannot accept uploaded files.'
@@ -97,6 +109,32 @@ class ArtifactService:
             interrupt_active_run=interrupt_active_run,
         )
 
+    def clear_constant_value(
+        self,
+        node_id: str,
+        *,
+        propagate_downstream_stale: bool = True,
+        interrupt_active_run: bool = True,
+    ) -> dict[str, Any]:
+        node = self.project_service.get_node(node_id)
+        if node.kind != NodeKind.CONSTANT:
+            raise InvalidRequestError(f'Node `{node_id}` is not a constant block.')
+        blockers = self.project_service.frozen_block_blockers_for_stale_roots([node_id])
+        if blockers:
+            raise InvalidRequestError(self.project_service.freeze_block_message(blockers))
+        artifact_name = constant_artifact_name(node)
+        project = self.project_service.require_project()
+        project.state_db.delete_artifact_state(node_id, artifact_name)
+        project.state_db.ensure_artifact_head(node_id, artifact_name, ArtifactState.PENDING)
+        if interrupt_active_run and self.project_service.run_service is not None:
+            self.project_service.run_service.interrupt_active_run_if_nodes_affected(
+                [node_id],
+                self.project_service.graph(),
+            )
+        if propagate_downstream_stale:
+            GraphService(self.project_service).mark_downstream_stale([node_id])
+        return self.get_artifact(node_id, artifact_name)
+
     def _persist_uploaded_file(self, *, filename: str, content: bytes) -> dict[str, Any]:
         project = self.project_service.require_project()
         temp_path = project.object_store.create_temp_file(Path(filename).suffix)
@@ -107,12 +145,14 @@ class ArtifactService:
             if temp_path.exists():
                 temp_path.unlink()
 
-    def _persist_uploaded_dataframe_csv(self, *, filename: str, content: bytes) -> dict[str, Any]:
+    def _persist_uploaded_dataframe_csv(self, *, filename: str, content: bytes, separator: str = ',') -> dict[str, Any]:
         suffix = Path(filename).suffix.lower()
         if suffix != '.csv':
             raise InvalidRequestError('DataFrame constants currently only support `.csv` uploads.')
+        if separator not in {',', ';', '\t'}:
+            raise InvalidRequestError('CSV separator must be a comma, semicolon, or tab.')
         try:
-            frame = pd.read_csv(io.BytesIO(content))
+            frame = pd.read_csv(io.BytesIO(content), sep=separator)
         except Exception as exc:  # pragma: no cover - pandas error surface varies by version
             raise InvalidRequestError(f'Failed to parse CSV upload for constant block: {exc}.') from exc
         return self.project_service.require_project().object_store.persist_value(frame, 'pandas.DataFrame')
@@ -287,6 +327,8 @@ class ArtifactService:
         project.state_db.touch_artifact_object(str(head['artifact_hash']))
         if download_format == 'csv':
             return self._download_dataframe_csv(project, head)
+        if download_format == 'xlsx':
+            return self._download_dataframe_xlsx(project, head)
         if download_format not in {None, 'parquet'}:
             raise InvalidRequestError(f'Unknown artifact download format `{download_format}`.')
         filename = self._download_filename(head)
@@ -300,9 +342,7 @@ class ArtifactService:
     def _download_dataframe_csv(self, project, head: dict[str, Any]) -> dict[str, Any]:
         if head.get('data_type') != 'pandas.DataFrame':
             raise InvalidRequestError('CSV downloads are only available for DataFrame artifacts.')
-        size_bytes = int(head.get('size_bytes') or 0)
-        if size_bytes > DATAFRAME_CSV_DOWNLOAD_MAX_BYTES:
-            raise InvalidRequestError('CSV downloads are limited to DataFrame artifacts no larger than 100 MB.')
+        self._validate_dataframe_download_size(head, label='CSV')
         frame = project.object_store.load_value(str(head['artifact_hash']), str(head['data_type']))
         csv_bytes = frame.to_csv(index=False).encode('utf-8')
         return {
@@ -311,6 +351,26 @@ class ArtifactService:
             'filename': f'{self._sanitize_filename_stem(str(head.get("artifact_name") or "artifact"))}.csv',
             'mime_type': 'text/csv; charset=utf-8',
         }
+
+    def _download_dataframe_xlsx(self, project, head: dict[str, Any]) -> dict[str, Any]:
+        if head.get('data_type') != 'pandas.DataFrame':
+            raise InvalidRequestError('XLSX downloads are only available for DataFrame artifacts.')
+        self._validate_dataframe_download_size(head, label='XLSX')
+        frame = project.object_store.load_value(str(head['artifact_hash']), str(head['data_type']))
+        buffer = io.BytesIO()
+        frame.to_excel(buffer, index=False, engine='openpyxl')
+        return {
+            'kind': 'bytes',
+            'content': buffer.getvalue(),
+            'filename': f'{self._sanitize_filename_stem(str(head.get("artifact_name") or "artifact"))}.xlsx',
+            'mime_type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        }
+
+    @staticmethod
+    def _validate_dataframe_download_size(head: dict[str, Any], *, label: str) -> None:
+        size_bytes = int(head.get('size_bytes') or 0)
+        if size_bytes > DATAFRAME_CSV_DOWNLOAD_MAX_BYTES:
+            raise InvalidRequestError(f'{label} downloads are limited to DataFrame artifacts no larger than 100 MB.')
 
     @staticmethod
     def _download_filename(head: dict[str, Any]) -> str:

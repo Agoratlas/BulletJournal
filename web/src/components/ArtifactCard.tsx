@@ -11,8 +11,9 @@ export function ArtifactCard({ artifact }: { artifact: ArtifactRecord }) {
     : null
   const isDataFrame = artifact.data_type === 'pandas.DataFrame'
   const canDownloadCsv = isDataFrame && (artifact.size_bytes ?? 0) <= DATAFRAME_CSV_DOWNLOAD_MAX_BYTES
-  const csvDisabledReason = canDownloadCsv ? null : 'CSV export is limited to DataFrame artifacts up to 100 MB.'
+  const csvDisabledReason = canDownloadCsv ? null : 'Tabular export is limited to DataFrame artifacts up to 100 MB.'
   const csvDownloadHref = `${downloadHref}?format=csv`
+  const xlsxDownloadHref = `${downloadHref}?format=xlsx`
   const defaultDownloadLabel = artifact.extension?.toLowerCase() ?? 'file'
 
   return (
@@ -45,6 +46,27 @@ export function ArtifactCard({ artifact }: { artifact: ArtifactRecord }) {
                 >
                   <Download width={16} height={16} />
                   .csv
+                </a>
+                {!canDownloadCsv ? (
+                  <span className="artifact-download-help" tabIndex={0} aria-label={csvDisabledReason ?? undefined}>
+                    <Info width={14} height={14} />
+                    <span className="artifact-tooltip">{csvDisabledReason}</span>
+                  </span>
+                ) : null}
+              </span>
+              <span className="artifact-download-tooltip-shell" title={csvDisabledReason ?? undefined}>
+                <a
+                  className={`secondary link-button artifact-download-button${canDownloadCsv ? '' : ' disabled'}`}
+                  href={canDownloadCsv ? xlsxDownloadHref : undefined}
+                  aria-disabled={!canDownloadCsv}
+                  onClick={(event) => {
+                    if (!canDownloadCsv) {
+                      event.preventDefault()
+                    }
+                  }}
+                >
+                  <Download width={16} height={16} />
+                  .xlsx
                 </a>
                 {!canDownloadCsv ? (
                   <span className="artifact-download-help" tabIndex={0} aria-label={csvDisabledReason ?? undefined}>

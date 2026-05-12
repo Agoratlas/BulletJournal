@@ -1,5 +1,7 @@
+import io
 import json
 
+import pandas as pd
 from fastapi.testclient import TestClient
 
 from bulletjournal.api.app import create_app
@@ -1015,6 +1017,45 @@ def test_uploaded_constant_file_unblocks_downstream_notebook_run(tmp_path) -> No
     assert dataframe.json()['preview']['rows'] == 1
 
 
+def test_uploaded_dataframe_constant_supports_semicolon_separator(tmp_path) -> None:
+    project_root = init_project_root(tmp_path / 'project').root
+    app = create_app(project_path=project_root)
+    client = TestClient(app)
+
+    opened = client.get('/api/v1/project/snapshot')
+    graph_version = opened.json()['graph']['meta']['graph_version']
+
+    created = client.patch(
+        '/api/v1/graph',
+        json={
+            'graph_version': graph_version,
+            'operations': [
+                {
+                    'type': 'add_constant_node',
+                    'node_id': 'frame_source',
+                    'title': 'Frame Source',
+                    'data_type': 'pandas.DataFrame',
+                }
+            ],
+        },
+    )
+    assert created.status_code == 200
+
+    upload = client.post(
+        '/api/v1/constants/frame_source/upload?csv_separator=semicolon',
+        content=b'name;value\nalpha;1\nbeta;2\n',
+        headers={'X-Filename': 'frame.csv', 'Content-Type': 'text/csv'},
+    )
+    assert upload.status_code == 200
+
+    artifact = client.get('/api/v1/artifacts/frame_source/value')
+    assert artifact.status_code == 200
+    preview = artifact.json()['preview']
+    assert preview['kind'] == 'dataframe'
+    assert preview['rows'] == 2
+    assert preview['column_names'] == ['name', 'value']
+
+
 def test_file_input_node_can_use_custom_artifact_name(tmp_path) -> None:
     project_root = init_project_root(tmp_path / 'project').root
     app = create_app(project_path=project_root)
@@ -1103,6 +1144,42 @@ def test_constant_node_can_populate_downstream_notebook(tmp_path) -> None:
     artifact = client.get('/api/v1/artifacts/table_sink/sample_df')
     assert artifact.status_code == 200
     assert artifact.json()['preview']['rows'] == 42
+
+
+def test_clearing_constant_value_returns_block_to_pending(tmp_path) -> None:
+    project_root = init_project_root(tmp_path / 'project').root
+    app = create_app(project_path=project_root)
+    client = TestClient(app)
+
+    opened = client.get('/api/v1/project/snapshot')
+    graph_version = opened.json()['graph']['meta']['graph_version']
+
+    created = client.patch(
+        '/api/v1/graph',
+        json={
+            'graph_version': graph_version,
+            'operations': [
+                {
+                    'type': 'add_constant_node',
+                    'node_id': 'value_source',
+                    'title': 'Value Source',
+                    'data_type': 'int',
+                    'value': 42,
+                }
+            ],
+        },
+    )
+    assert created.status_code == 200
+
+    cleared = client.post('/api/v1/constants/value_source/value', json={'clear': True})
+    assert cleared.status_code == 200
+
+    artifact = client.get('/api/v1/artifacts/value_source/value')
+    assert artifact.status_code == 200
+    payload = artifact.json()
+    assert payload['state'] == 'pending'
+    assert payload['current_version_id'] is None
+    assert payload['artifact_hash'] is None
 
 
 def test_constant_file_artifact_content_endpoint_renders_inline_image(tmp_path) -> None:
@@ -1279,6 +1356,122 @@ def test_dataframe_csv_download_rejects_large_artifacts(tmp_path, monkeypatch) -
 
     assert response.status_code == 400
     assert '100 MB' in response.text
+
+
+def test_dataframe_xlsx_download_preserves_unicode(tmp_path) -> None:
+    project_root = init_project_root(tmp_path / 'project').root
+    app = create_app(project_path=project_root)
+    client = TestClient(app)
+
+    opened = client.get('/api/v1/project/snapshot')
+    graph_version = opened.json()['graph']['meta']['graph_version']
+
+    created = client.patch(
+        '/api/v1/graph',
+        json={
+            'graph_version': graph_version,
+            'operations': [
+                {
+                    'type': 'add_notebook_node',
+                    'node_id': 'emoji_frame',
+                    'title': 'Emoji Frame',
+                    'source_text': (
+                        'import marimo\n\n'
+                        "app = marimo.App(app_title='Emoji Frame')\n\n"
+                        'with app.setup:\n'
+                        '    import pandas as pd\n'
+                        '    from bulletjournal.runtime import artifacts\n\n'
+                        '@app.cell\n'
+                        'def _():\n'
+                        "    frame = pd.DataFrame({'emoji': ['😀'], 'label': ['ok']})\n"
+                        "    artifacts.push(frame, name='emoji_frame', data_type=pd.DataFrame, description='Emoji frame')\n"
+                        '    return frame\n\n'
+                        "if __name__ == '__main__':\n"
+                        '    from bulletjournal.runtime.standalone import run_notebook_app\n\n'
+                        '    run_notebook_app(app, __file__)\n'
+                    ),
+                }
+            ],
+        },
+    )
+    assert created.status_code == 200
+
+    run = client.post('/api/v1/nodes/emoji_frame/run', json={'mode': 'run_stale', 'action': 'use_stale'})
+    assert run.status_code == 200
+    assert run.json()['status'] == 'succeeded'
+
+    response = client.get('/api/v1/artifacts/emoji_frame/emoji_frame/download?format=xlsx')
+
+    assert response.status_code == 200
+    assert response.headers['content-type'].startswith(
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    )
+    assert 'filename="emoji_frame.xlsx"' in response.headers['content-disposition']
+    frame = pd.read_excel(io.BytesIO(response.content))
+    assert frame.iloc[0]['emoji'] == '😀'
+
+
+def test_dict_constant_preview_preserves_key_order(tmp_path) -> None:
+    project_root = init_project_root(tmp_path / 'project').root
+    app = create_app(project_path=project_root)
+    client = TestClient(app)
+
+    opened = client.get('/api/v1/project/snapshot')
+    graph_version = opened.json()['graph']['meta']['graph_version']
+
+    created = client.patch(
+        '/api/v1/graph',
+        json={
+            'graph_version': graph_version,
+            'operations': [
+                {
+                    'type': 'add_constant_node',
+                    'node_id': 'ordered_dict',
+                    'title': 'Ordered Dict',
+                    'data_type': 'dict',
+                    'value': {'beta': 1, 'alpha': 2},
+                }
+            ],
+        },
+    )
+    assert created.status_code == 200
+
+    artifact = client.get('/api/v1/artifacts/ordered_dict/value')
+    assert artifact.status_code == 200
+    preview = artifact.json()['preview']
+    editor_text = preview['editor_text']
+    assert editor_text.index('"beta"') < editor_text.index('"alpha"')
+    assert preview['compact_repr'] == '{"beta":1,"alpha":2}'
+
+
+def test_dict_constant_compact_preview_preserves_spaces_inside_strings(tmp_path) -> None:
+    project_root = init_project_root(tmp_path / 'project').root
+    app = create_app(project_path=project_root)
+    client = TestClient(app)
+
+    opened = client.get('/api/v1/project/snapshot')
+    graph_version = opened.json()['graph']['meta']['graph_version']
+
+    created = client.patch(
+        '/api/v1/graph',
+        json={
+            'graph_version': graph_version,
+            'operations': [
+                {
+                    'type': 'add_constant_node',
+                    'node_id': 'stringy_dict',
+                    'title': 'Stringy Dict',
+                    'data_type': 'dict',
+                    'value': {'key 1': 'a b c'},
+                }
+            ],
+        },
+    )
+    assert created.status_code == 200
+
+    artifact = client.get('/api/v1/artifacts/stringy_dict/value')
+    assert artifact.status_code == 200
+    assert artifact.json()['preview']['compact_repr'] == '{"key 1":"a b c"}'
 
 
 def test_file_artifact_content_endpoint_renders_inline_image(tmp_path) -> None:
@@ -1860,6 +2053,8 @@ def test_freezing_downstream_block_also_freezes_upstream_file_blocks(tmp_path) -
         },
     )
     assert created.status_code == 200
+    notebook_source = (project_root / 'notebooks' / 'table_sink.py').read_text(encoding='utf-8')
+    assert "app = marimo.App(app_title='table_sink')" in notebook_source
 
     container.project_service.reparse_notebook_by_path(project_root / 'notebooks' / 'table_sink.py')
 

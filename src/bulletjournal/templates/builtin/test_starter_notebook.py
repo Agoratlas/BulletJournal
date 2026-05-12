@@ -1,7 +1,7 @@
 import marimo
 
 __generated_with = '0.20.4'
-app = marimo.App(width='medium', app_title='{{NODE_ID}}')
+app = marimo.App(width='medium', app_title='Starter BulletJournal notebook')
 
 with app.setup:
     import marimo as mo

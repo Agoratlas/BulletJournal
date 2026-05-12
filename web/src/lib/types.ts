@@ -111,9 +111,10 @@ export type LayoutRecord = {
 
 export type ArtifactPreview =
   | { kind: 'empty' }
-  | { kind: 'simple'; repr: string; truncated?: boolean }
+  | { kind: 'simple'; repr: string; truncated?: boolean; compact_repr?: string }
   | { kind: 'dataframe'; rows: number; columns: number; column_names: string[]; sample: Array<Record<string, unknown>> }
   | { kind: 'series'; rows: number; sample: unknown[] }
+  | { kind: 'graph'; directed: boolean; node_count: number; edge_count: number }
   | { kind: 'file'; filename?: string; size_bytes?: number; extension?: string | null; mime_type?: string | null; image_inline?: boolean; original_filename?: string }
   | { kind: 'object'; repr: string }
 

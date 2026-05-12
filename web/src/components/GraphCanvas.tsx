@@ -1,4 +1,4 @@
-import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import ReactFlow, {
   Background,
   ConnectionMode,
@@ -151,6 +151,10 @@ const STATE_COLORS: Record<ArtifactState | 'mixed', string> = {
 const EMPTY_OR_DEFAULT_COLOR = '#ffffff'
 const MISSING_REQUIRED_INPUT_COLOR = '#d64545'
 
+function handleBorderColor(fillColor: string): string {
+  return `color-mix(in srgb, ${fillColor} 72%, rgba(15, 23, 42, 0.58) 28%)`
+}
+
 function pointInRect(x: number, y: number, rect: { left: number; top: number; right: number; bottom: number }) {
   return x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom
 }
@@ -270,7 +274,7 @@ function PortRow({
           id={`in:${port.name}`}
           position={Position.Left}
           className={`rf-handle ${isConnectionStart ? 'connection-start' : ''} ${isConnecting ? 'connecting' : ''} ${isHighlighted ? 'connection-highlight' : ''}`}
-          style={{ color: typeColor, borderColor: stateColor, background: stateColor }}
+          style={{ color: typeColor, borderColor: handleBorderColor(stateColor), background: stateColor }}
           onContextMenu={handlePortCircleContextMenu}
         />
       ) : null}
@@ -281,7 +285,7 @@ function PortRow({
           id={`out:${port.name}`}
           position={Position.Right}
           className={`rf-handle ${isConnectionStart ? 'connection-start' : ''} ${isConnecting ? 'connecting' : ''} ${isHighlighted ? 'connection-highlight' : ''}`}
-          style={{ color: typeColor, borderColor: stateColor, background: stateColor }}
+          style={{ color: typeColor, borderColor: handleBorderColor(stateColor), background: stateColor }}
           onContextMenu={handlePortCircleContextMenu}
         />
       ) : null}
@@ -372,7 +376,11 @@ function OrganizerLaneRow({
         id={targetHandleId}
         position={Position.Left}
         className={`rf-handle ${targetStart ? 'connection-start' : ''} ${connecting ? 'connecting' : ''} ${highlightInput ? 'connection-highlight' : ''}`}
-        style={{ color: typeColor, borderColor: inputIsMissingRequired ? MISSING_REQUIRED_INPUT_COLOR : inputIsEmptyOrDefault ? EMPTY_OR_DEFAULT_COLOR : STATE_COLORS[inputArtifactState], background: inputIsMissingRequired ? MISSING_REQUIRED_INPUT_COLOR : inputIsEmptyOrDefault ? EMPTY_OR_DEFAULT_COLOR : STATE_COLORS[inputArtifactState] }}
+        style={{
+          color: typeColor,
+          borderColor: handleBorderColor(inputIsMissingRequired ? MISSING_REQUIRED_INPUT_COLOR : inputIsEmptyOrDefault ? EMPTY_OR_DEFAULT_COLOR : STATE_COLORS[inputArtifactState]),
+          background: inputIsMissingRequired ? MISSING_REQUIRED_INPUT_COLOR : inputIsEmptyOrDefault ? EMPTY_OR_DEFAULT_COLOR : STATE_COLORS[inputArtifactState],
+        }}
         onContextMenu={handleInputContextMenu}
       />
       <PortLabel name={port.name} label={port.label} dataType={port.data_type} className="rf-organizer-copy" showTypeDot />
@@ -381,7 +389,11 @@ function OrganizerLaneRow({
         id={sourceHandleId}
         position={Position.Right}
         className={`rf-handle ${sourceStart ? 'connection-start' : ''} ${connecting ? 'connecting' : ''} ${highlightOutput ? 'connection-highlight' : ''}`}
-        style={{ color: typeColor, borderColor: outputIsEmpty ? EMPTY_OR_DEFAULT_COLOR : STATE_COLORS[outputArtifactState], background: outputIsEmpty ? EMPTY_OR_DEFAULT_COLOR : STATE_COLORS[outputArtifactState] }}
+        style={{
+          color: typeColor,
+          borderColor: handleBorderColor(outputIsEmpty ? EMPTY_OR_DEFAULT_COLOR : STATE_COLORS[outputArtifactState]),
+          background: outputIsEmpty ? EMPTY_OR_DEFAULT_COLOR : STATE_COLORS[outputArtifactState],
+        }}
         onContextMenu={handleOutputContextMenu}
       />
     </div>
@@ -448,6 +460,9 @@ function compactConstantPreview(node: NodeRecord, snapshot: ProjectSnapshot): { 
     const inspectorText = 'inspector_text' in preview && typeof preview.inspector_text === 'string'
       ? preview.inspector_text
       : null
+    const compactRepr = 'compact_repr' in preview && typeof preview.compact_repr === 'string'
+      ? preview.compact_repr
+      : null
     if (dataType === 'str') {
       if (inspectorText) {
         try {
@@ -464,6 +479,9 @@ function compactConstantPreview(node: NodeRecord, snapshot: ProjectSnapshot): { 
         : raw
       return constantPreviewLayout(normalized.replace(/\\n/g, ' ').replace(/\\t/g, ' '))
     }
+    if ((dataType === 'dict' || dataType === 'list') && compactRepr) {
+      return constantPreviewLayout(compactRepr)
+    }
     if (inspectorText) {
       return constantPreviewLayout(inspectorText)
     }
@@ -478,6 +496,9 @@ function compactConstantPreview(node: NodeRecord, snapshot: ProjectSnapshot): { 
   if (preview.kind === 'series') {
     return constantPreviewLayout('[...]')
   }
+  if (preview.kind === 'graph') {
+    return constantPreviewLayout(`${preview.node_count}n ${preview.edge_count}e`)
+  }
   return constantPreviewLayout(node.ui?.data_type === 'list' ? '[...]' : '{...}')
 }
 
@@ -491,21 +512,18 @@ function truncateConstantPreview(value: string, maxLength: number): string {
 
 function constantPreviewLayout(value: string): { text: string; fontSize: number } {
   const collapsed = value.replace(/\s+/g, ' ').trim() || '-'
-  const text = truncateConstantPreview(collapsed, 8)
+  const text = truncateConstantPreview(collapsed, 12)
   const length = collapsed.length
   if (length <= 3) {
-    return { text, fontSize: 14 }
+    return { text, fontSize: 22 }
   }
   if (length <= 5) {
-    return { text, fontSize: 13 }
+    return { text, fontSize: 18 }
   }
   if (length <= 7) {
-    return { text, fontSize: 12 }
+    return { text, fontSize: 15 }
   }
-  if (length <= 8) {
-    return { text, fontSize: 11 }
-  }
-  return { text, fontSize: 10 }
+  return { text, fontSize: 11 }
 }
 
 const BulletJournalNodeCard = memo(({ data, selected }: NodeProps<BulletJournalNodeData>) => {
@@ -695,6 +713,7 @@ const BulletJournalNodeCard = memo(({ data, selected }: NodeProps<BulletJournalN
       <div
         className={`rf-node constant-node state-${node.state} ${node.ui?.frozen ? 'is-frozen' : ''} ${selected ? 'is-selected' : ''} ${hasBlockingValidationIssues ? 'has-validation-error' : ''}`}
         title={validationSummary || `${preview.text} (${outputPort?.data_type ?? node.ui?.data_type ?? 'object'})`}
+        style={{ '--constant-type-color': typeColor } as CSSProperties}
         onDoubleClick={(event) => {
           event.stopPropagation()
           onEditConstantNode(node.id)
@@ -707,7 +726,6 @@ const BulletJournalNodeCard = memo(({ data, selected }: NodeProps<BulletJournalN
       >
         <div className={`rf-constant-content ${isConnecting && !isConnectionStart && !matchesConnectionIntent ? 'incompatible' : ''}`}>
           <span className="rf-constant-preview" style={{ fontSize: `${preview.fontSize}px` }}>{preview.text}</span>
-          <span className="port-type-dot rf-constant-type-dot" style={{ backgroundColor: typeColor }} aria-hidden="true" />
           {outputPort ? (
             <Handle
               type="source"
@@ -716,7 +734,7 @@ const BulletJournalNodeCard = memo(({ data, selected }: NodeProps<BulletJournalN
               className={`rf-handle rf-constant-handle ${isConnectionStart ? 'connection-start' : ''} ${isConnecting && matchesConnectionIntent ? 'connection-highlight' : ''}`}
               style={{
                 color: typeColor,
-                borderColor: handleColor,
+                borderColor: handleBorderColor(handleColor),
                 background: handleColor,
               }}
               onContextMenu={handleOutputContextMenu}

@@ -383,14 +383,13 @@ class GraphService:
         source = (
             str(source_text)
             if source_text is not None
-            else self.project_service.template_service.render_notebook_template_source(
-                template.source_text,
-                title=title,
-                node_id=node_id,
-            )
+            else template.source_text
             if template is not None
-            else self.project_service.template_service.empty_notebook_source(title=title, node_id=node_id)
+            else self.project_service.template_service.resolve_template_source(
+                'builtin/test_starter_notebook'
+            ).source_text
         )
+        source = self.project_service.template_service.render_notebook_template_source(source, node_id=node_id)
         return node_id, source
 
     def _add_file_input_node(self, graph: GraphData, operation: dict[str, Any]) -> str:

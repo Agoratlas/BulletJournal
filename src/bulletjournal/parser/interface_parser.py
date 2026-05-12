@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ast
 import json
+import re
 from pathlib import Path
 from textwrap import dedent
 from typing import TYPE_CHECKING
@@ -23,6 +24,15 @@ else:
 
 
 ARTIFACT_CALLS = {'pull', 'pull_file', 'push', 'push_file'}
+ARTIFACT_NAME_PATTERN = re.compile(r'^[a-z0-9_]+$')
+
+
+def is_valid_artifact_name(value: str) -> bool:
+    return bool(ARTIFACT_NAME_PATTERN.fullmatch(value))
+
+
+def _invalid_artifact_name_message(name: str) -> str:
+    return f'Invalid artifact name `{name}`, must only contain lowercase letters, digits and underscores.'
 
 
 def parse_notebook_interface(path: NotebookSource, node_id: str) -> NotebookInterface:
@@ -77,7 +87,8 @@ def parse_notebook_interface(path: NotebookSource, node_id: str) -> NotebookInte
     inputs: list[Port] = []
     outputs: list[Port] = []
     assets: list[Port] = []
-    seen_names: set[str] = set()
+    seen_input_names: set[str] = set()
+    seen_output_names: set[str] = set()
     exported_names: dict[str, int] = {}
     declaration_index = 0
     for cell in iter_app_cells(module):
@@ -102,22 +113,44 @@ def parse_notebook_interface(path: NotebookSource, node_id: str) -> NotebookInte
             for port in ports:
                 port.declaration_index = declaration_index
                 declaration_index += 1
-                if port.name in seen_names:
-                    issues.append(
-                        build_issue(
-                            node_id=node_id,
-                            severity=ValidationSeverity.ERROR,
-                            code='duplicate_port',
-                            message=f'Duplicate artifact name `{port.name}`.',
-                        )
-                    )
-                    continue
-                seen_names.add(port.name)
                 if port.direction == 'input':
+                    if port.name in seen_input_names:
+                        issues.append(
+                            build_issue(
+                                node_id=node_id,
+                                severity=ValidationSeverity.ERROR,
+                                code='duplicate_port',
+                                message=f'Duplicate input name `{port.name}`.',
+                            )
+                        )
+                        continue
+                    seen_input_names.add(port.name)
                     inputs.append(port)
                 elif port.role == ArtifactRole.OUTPUT:
+                    if port.name in seen_output_names:
+                        issues.append(
+                            build_issue(
+                                node_id=node_id,
+                                severity=ValidationSeverity.ERROR,
+                                code='duplicate_port',
+                                message=f'Duplicate artifact name `{port.name}`.',
+                            )
+                        )
+                        continue
+                    seen_output_names.add(port.name)
                     outputs.append(port)
                 else:
+                    if port.name in seen_output_names:
+                        issues.append(
+                            build_issue(
+                                node_id=node_id,
+                                severity=ValidationSeverity.ERROR,
+                                code='duplicate_port',
+                                message=f'Duplicate artifact name `{port.name}`.',
+                            )
+                        )
+                        continue
+                    seen_output_names.add(port.name)
                     assets.append(port)
         _collect_duplicate_export_issues(cell, node_id=node_id, exported_names=exported_names, issues=issues)
 
@@ -399,6 +432,8 @@ def _parse_pull(call: ast.Call, *, node_id: str) -> tuple[Port | None, list[Vali
     if name is None:
         issues.append(_literal_issue(node_id, 'name', 'Input name must be a literal string.'))
         return None, issues
+    if not is_valid_artifact_name(name):
+        issues.append(_literal_issue(node_id, 'name', _invalid_artifact_name_message(name)))
     data_type, type_warning = normalize_type_expr(kwargs.get('data_type'))
     if type_warning:
         issues.append(_type_warning(node_id, name))
@@ -430,6 +465,8 @@ def _parse_pull_file(call: ast.Call, *, node_id: str) -> tuple[Port | None, list
         return None, [_literal_issue(node_id, 'name', 'File input name must be a literal string.')]
     description = _literal_string(kwargs.get('description')) if 'description' in kwargs else None
     issues: list[ValidationIssue] = []
+    if not is_valid_artifact_name(name):
+        issues.append(_literal_issue(node_id, 'name', _invalid_artifact_name_message(name)))
     if 'description' in kwargs and description is None:
         issues.append(_literal_issue(node_id, 'description', 'Description must be a literal string.'))
     allow_missing_value = _literal_bool(kwargs.get('allow_missing')) if 'allow_missing' in kwargs else False
@@ -459,6 +496,8 @@ def _parse_push(call: ast.Call, *, node_id: str) -> tuple[Port | None, list[Vali
         return None, [_literal_issue(node_id, 'name', 'Output name must be a literal string.')]
     data_type, type_warning = normalize_type_expr(kwargs.get('data_type'))
     issues: list[ValidationIssue] = []
+    if not is_valid_artifact_name(name):
+        issues.append(_literal_issue(node_id, 'name', _invalid_artifact_name_message(name)))
     if type_warning:
         issues.append(_type_warning(node_id, name))
     description = _literal_string(kwargs.get('description')) if 'description' in kwargs else None
@@ -480,6 +519,8 @@ def _parse_push_file(call: ast.Call, *, node_id: str) -> tuple[Port | None, list
         return None, [_literal_issue(node_id, 'name', 'File output name must be a literal string.')]
     description = _literal_string(kwargs.get('description')) if 'description' in kwargs else None
     issues: list[ValidationIssue] = []
+    if not is_valid_artifact_name(name):
+        issues.append(_literal_issue(node_id, 'name', _invalid_artifact_name_message(name)))
     if 'description' in kwargs and description is None:
         issues.append(_literal_issue(node_id, 'description', 'Description must be a literal string.'))
     return Port(name=name, data_type='file', role=ArtifactRole.OUTPUT, description=description, kind='file'), issues

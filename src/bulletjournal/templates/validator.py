@@ -16,10 +16,11 @@ from bulletjournal.domain.graph_rules import (
 )
 from bulletjournal.domain.models import Edge, Node, Port
 from bulletjournal.domain.type_system import types_compatible
-from bulletjournal.parser.interface_parser import parse_notebook_interface
+from bulletjournal.parser.interface_parser import is_valid_artifact_name, parse_notebook_interface
 from bulletjournal.parser.validation import build_issue
 from bulletjournal.runtime.serializers import validate_runtime_value_type
 from bulletjournal.templates.builtin_provider import BUILTIN_PROVIDER, EXAMPLES_PROVIDER
+from bulletjournal.templates.notebook_source import validate_rewritable_marimo_app_definition
 from bulletjournal.templates.provider import TemplateAsset
 from bulletjournal.templates.registry import default_notebook_assets
 
@@ -29,8 +30,20 @@ JSON_SERIALIZABLE_CONSTANT_DATA_TYPES = frozenset({'int', 'float', 'bool', 'str'
 
 def validate_template(path: Path, *, notebook_paths_by_ref: dict[str, Path] | None = None) -> list[dict[str, object]]:
     if path.suffix == '.py':
+        issues: list[dict[str, object]] = []
+        error = validate_rewritable_marimo_app_definition(path.read_text(encoding='utf-8'))
+        if error is not None:
+            issues.append(
+                build_issue(
+                    node_id=path.stem,
+                    severity=ValidationSeverity.ERROR,
+                    code='invalid_notebook_template_app_definition',
+                    message=error,
+                ).to_dict()
+            )
         interface = parse_notebook_interface(path, node_id=path.stem)
-        return [issue.to_dict() for issue in interface.issues]
+        issues.extend(issue.to_dict() for issue in interface.issues)
+        return issues
     if path.suffix == '.json':
         return validate_pipeline_template(path, notebook_paths_by_ref=notebook_paths_by_ref)
     return [
@@ -379,7 +392,11 @@ def _pipeline_file_input_name(raw_node: dict[str, Any]) -> str:
         candidate = ui.get('artifact_name')
         if isinstance(candidate, str) and candidate.strip():
             return candidate.strip()
-    return 'file'
+    resolved = 'file'
+    if not is_valid_artifact_name(resolved):
+        node_id = str(raw_node.get('id') or 'file_input').strip()
+        raise GraphValidationError(f'File input node `{node_id}` must define an artifact name matching `[a-z0-9_]+`.')
+    return resolved
 
 
 def _pipeline_constant_name(raw_node: dict[str, Any]) -> str:
@@ -399,6 +416,8 @@ def _pipeline_constant_name(raw_node: dict[str, Any]) -> str:
     resolved = explicit_name or ui_name
     if resolved is None:
         raise GraphValidationError(f'Constant node `{node_id}` must define `artifact_name`.')
+    if not is_valid_artifact_name(resolved):
+        raise GraphValidationError(f'Constant node `{node_id}` must define an artifact name matching `[a-z0-9_]+`.')
     return resolved
 
 

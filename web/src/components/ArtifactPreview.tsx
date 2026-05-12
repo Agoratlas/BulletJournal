@@ -32,6 +32,16 @@ export function ArtifactPreviewPanel({ preview, imageSrc = null }: ArtifactPrevi
     )
   }
 
+  if (preview.kind === 'graph') {
+    return (
+      <div className="artifact-preview meta-preview">
+        <div>{preview.directed ? 'Directed graph' : 'Undirected graph'}</div>
+        <div>{preview.node_count} nodes</div>
+        <div>{preview.edge_count} edges</div>
+      </div>
+    )
+  }
+
   if (preview.kind === 'dataframe') {
     return (
       <div className="artifact-preview">

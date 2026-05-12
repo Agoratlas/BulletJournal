@@ -188,7 +188,8 @@ class FileUploadResponse(StrictModel):
 
 
 class ConstantValueUpdateRequest(StrictModel):
-    value: Any
+    value: Any | None = None
+    clear: bool = False
 
 
 class SnapshotResponse(StrictModel):

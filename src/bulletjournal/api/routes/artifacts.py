@@ -62,12 +62,18 @@ async def upload_file(node_id: str, request: Request):
 
 
 @router.post('/constants/{node_id}/upload')
-async def upload_constant(node_id: str, request: Request):
+async def upload_constant(node_id: str, request: Request, csv_separator: str = 'comma'):
     container = request.app.state.container
     content = await request.body()
     filename = request.headers.get('x-filename', 'upload.bin')
     mime_type = request.headers.get('content-type')
-    result = container.artifact_service.upload_file(node_id, filename, content, mime_type)
+    result = container.artifact_service.upload_file(
+        node_id,
+        filename,
+        content,
+        mime_type,
+        csv_separator=_resolve_csv_separator(csv_separator),
+    )
     return {
         'node_id': node_id,
         'artifact_name': result['artifact_name'],
@@ -79,7 +85,11 @@ async def upload_constant(node_id: str, request: Request):
 @router.post('/constants/{node_id}/value')
 def set_constant_value(node_id: str, payload: ConstantValueUpdateRequest, request: Request):
     container = request.app.state.container
-    result = container.artifact_service.set_constant_value(node_id, payload.value)
+    result = (
+        container.artifact_service.clear_constant_value(node_id)
+        if payload.clear
+        else container.artifact_service.set_constant_value(node_id, payload.value)
+    )
     return {
         'node_id': node_id,
         'artifact_name': result['artifact_name'],
@@ -172,3 +182,14 @@ def _resolve_execution_log_path(*, node_id: str, stream: str, request: Request) 
     if not log_path.exists() or not log_path.is_file():
         raise HTTPException(status_code=404, detail=f'No `{stream}` execution log found for node `{node_id}`.')
     return log_path
+
+
+def _resolve_csv_separator(value: str) -> str:
+    separators = {
+        'comma': ',',
+        'semicolon': ';',
+        'tab': '\t',
+    }
+    if value not in separators:
+        raise HTTPException(status_code=400, detail='Invalid CSV separator. Expected `comma`, `semicolon`, or `tab`.')
+    return separators[value]

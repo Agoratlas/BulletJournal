@@ -243,8 +243,18 @@ export async function uploadFile(nodeId: string, file: File) {
   return response.json() as Promise<Record<string, unknown>>
 }
 
-export async function uploadConstantFile(nodeId: string, file: File) {
-  const response = await fetch(appUrl(`/api/v1/constants/${nodeId}/upload`), {
+function encodeCsvSeparator(separator: ',' | ';' | '\t'): 'comma' | 'semicolon' | 'tab' {
+  if (separator === ';') {
+    return 'semicolon'
+  }
+  if (separator === '\t') {
+    return 'tab'
+  }
+  return 'comma'
+}
+
+export async function uploadConstantFile(nodeId: string, file: File, csvSeparator: ',' | ';' | '\t' = ',') {
+  const response = await fetch(appUrl(`/api/v1/constants/${nodeId}/upload?csv_separator=${encodeCsvSeparator(csvSeparator)}`), {
     method: 'POST',
     headers: {
       'X-Filename': file.name,
@@ -263,6 +273,13 @@ export async function setConstantValue(nodeId: string, value: unknown) {
   return request<Record<string, unknown>>(`/api/v1/constants/${encodeURIComponent(nodeId)}/value`, {
     method: 'POST',
     body: JSON.stringify({ value }),
+  })
+}
+
+export async function clearConstantValue(nodeId: string) {
+  return request<Record<string, unknown>>(`/api/v1/constants/${encodeURIComponent(nodeId)}/value`, {
+    method: 'POST',
+    body: JSON.stringify({ clear: true }),
   })
 }
 

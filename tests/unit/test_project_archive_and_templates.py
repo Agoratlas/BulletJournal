@@ -304,14 +304,78 @@ def test_template_service_supports_provider_loaders_without_files(monkeypatch) -
     assert listed['agoratlas/iris_pipeline']['documentation'] == 'Pipeline docs.'
 
 
-def test_template_service_renders_notebook_template_placeholders() -> None:
+def test_template_service_rewrites_notebook_app_title_from_node_id() -> None:
     rendered = TemplateService.render_notebook_template_source(
-        "app = marimo.App(width='medium', app_title='{{NODE_ID}} / {{TITLE}}')\n",
-        title='Sample Node',
+        "app = marimo.App(width='medium', app_title='Visible Title')\n",
         node_id='sample_node',
     )
 
-    assert rendered == "app = marimo.App(width='medium', app_title='sample_node / Sample Node')\n"
+    assert rendered == "app = marimo.App(width='medium', app_title='sample_node')\n"
+
+
+def test_template_service_preserves_other_marimo_app_arguments() -> None:
+    rendered = TemplateService.render_notebook_template_source(
+        "app = marimo.App(width='medium', layout_file='layout.json', app_title='Visible Title')  # keep\n",
+        node_id='sample_node',
+    )
+
+    assert rendered == "app = marimo.App(width='medium', layout_file='layout.json', app_title='sample_node')  # keep\n"
+
+
+def test_template_service_rejects_invalid_provider_notebook_app_definition(monkeypatch: pytest.MonkeyPatch) -> None:
+    provider = SimpleNamespace(
+        provider_name='acme',
+        provider_revision='0.1.0',
+        list_notebook_templates=lambda: [
+            {
+                'name': 'broken_notebook',
+                'ref': 'acme/broken_notebook',
+                'title': 'Broken Notebook',
+                'path': 'notebooks/broken_notebook.py',
+                'hidden': False,
+            }
+        ],
+        list_pipeline_templates=lambda: [],
+        load_notebook_template=lambda name: (
+            "import marimo\n\napp = marimo.App(\n    width='medium',\n    app_title='Broken Notebook',\n)\n"
+            if name == 'broken_notebook'
+            else ''
+        ),
+        load_pipeline_template=lambda name: '',
+    )
+
+    monkeypatch.setattr('bulletjournal.services.template_service.discover_template_providers', lambda: [provider])
+
+    with pytest.raises(ValueError, match='Invalid notebook template `acme/broken_notebook`'):
+        TemplateService()
+
+
+def test_template_service_rejects_invalid_provider_notebook_artifact_names(monkeypatch: pytest.MonkeyPatch) -> None:
+    provider = SimpleNamespace(
+        provider_name='acme',
+        provider_revision='0.1.0',
+        list_notebook_templates=lambda: [
+            {
+                'name': 'broken_notebook',
+                'ref': 'acme/broken_notebook',
+                'title': 'Broken Notebook',
+                'path': 'notebooks/broken_notebook.py',
+                'hidden': False,
+            }
+        ],
+        list_pipeline_templates=lambda: [],
+        load_notebook_template=lambda name: (
+            "import marimo\n\napp = marimo.App()\n\nwith app.setup:\n    from bulletjournal.runtime import artifacts\n\n@app.cell\ndef _():\n    artifacts.push(1, name='bad-name', data_type=int)\n    return\n"
+            if name == 'broken_notebook'
+            else ''
+        ),
+        load_pipeline_template=lambda name: '',
+    )
+
+    monkeypatch.setattr('bulletjournal.services.template_service.discover_template_providers', lambda: [provider])
+
+    with pytest.raises(ValueError, match='Invalid artifact name `bad-name`'):
+        TemplateService()
 
 
 def test_template_service_rejects_invalid_provider_pipeline(monkeypatch: pytest.MonkeyPatch) -> None:

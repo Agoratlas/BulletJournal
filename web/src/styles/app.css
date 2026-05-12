@@ -1462,31 +1462,34 @@ label span,
 .rf-node.constant-node {
   --rf-node-radius: 16px;
   --constant-row-height: 40px;
+  --constant-type-color: #9ca3af;
   width: 100px;
   min-width: 100px;
   max-width: 100px;
   height: 40px;
   overflow: visible;
+  background: var(--constant-type-color);
+  color: #111827;
+}
+
+.rf-node.constant-node::after {
+  display: none;
 }
 
 .rf-constant-content {
   position: relative;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr);
   align-items: center;
-  gap: 8px;
+  gap: 0;
   height: 100%;
-  padding: 0 18px 0 8px;
+  padding: 0 14px 0 8px;
   cursor: context-menu;
+  color: #111827;
 }
 
 .rf-constant-content.incompatible {
   opacity: 0.42;
-}
-
-.rf-constant-type-dot {
-  width: 7px;
-  height: 7px;
 }
 
 .rf-constant-preview {
@@ -1500,6 +1503,7 @@ label span,
   font-size: 13px;
   line-height: var(--constant-row-height);
   font-weight: 500;
+  color: #111827;
 }
 
 .constant-json-input,
@@ -3120,6 +3124,18 @@ label span,
 
 .field-note.error {
   color: var(--bad);
+}
+
+.inline-file-upload-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: nowrap;
+}
+
+.inline-file-upload-row > span {
+  color: var(--muted);
+  white-space: nowrap;
 }
 
 .field-icon-note {
