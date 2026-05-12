@@ -485,7 +485,10 @@ if __name__ == '__main__':
 
     assert created.status_code == 200
     notebook_path = project_root / 'notebooks' / 'inline_source.py'
-    assert notebook_path.read_text(encoding='utf-8') == notebook_source
+    assert notebook_path.read_text(encoding='utf-8') == notebook_source.replace(
+        'app = marimo.App()',
+        "app = marimo.App(app_title='inline_source')",
+    )
 
 
 def test_snapshot_includes_pipeline_templates(tmp_path) -> None:

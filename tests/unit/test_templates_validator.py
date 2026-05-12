@@ -50,6 +50,7 @@ def test_validate_template_handles_python_templates_and_unknown_suffix(
     monkeypatch.setattr(
         validator, 'parse_notebook_interface', lambda path, node_id: _interface(node_id, issues=[issue])
     )
+    monkeypatch.setattr(validator, 'validate_rewritable_marimo_app_definition', lambda source_text: None)
 
     assert validator.validate_template(notebook) == [issue.to_dict()]
 
