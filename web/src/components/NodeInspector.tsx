@@ -2,12 +2,12 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 
 import { executionLogDownloadUrl, getExecutionLogs } from '../lib/api'
 import { artifactCounts, artifactFor, artifactIsEmpty, assetsForNode, badgeForNode, formatBytes, formatDurationSeconds, formatTimestamp, inputBindingSource, inputState, templateByRef } from '../lib/helpers'
-import { formatIssueDetails, frozenFileBlockMessage, nodeRunFailures, validationIssuesForNode } from '../lib/appHelpers'
+import { formatIssueDetails, frozenFileBlockMessage, normalizeNodeId, validationIssuesForNode } from '../lib/appHelpers'
 import type { NodeActionItem } from '../appTypes'
 import type { ExecutionLogSummary, NodeRecord, ProjectSnapshot } from '../lib/types'
 import { ArtifactCounts } from './ArtifactCounts'
 import { ActionButtons } from './ActionButtons'
-import { Download } from './Icons'
+import { Check, Download, Pencil } from './Icons'
 import { PortPill } from './PortPill'
 import { SimpleMarkdown } from './SimpleMarkdown'
 
@@ -92,6 +92,9 @@ export function NodeInspector({
   nodeActions,
   onUploadFile,
   onOpenTemplate,
+  existingNodeIds,
+  onRenameNode,
+  nodeIdEditDisabledReason = null,
 }: {
   snapshot: ProjectSnapshot
   node: NodeRecord
@@ -103,6 +106,9 @@ export function NodeInspector({
   nodeActions: NodeActionItem[]
   onUploadFile: (nodeId: string, file: File) => Promise<void>
   onOpenTemplate: (templateRef: string) => void
+  existingNodeIds: string[]
+  onRenameNode: (nodeId: string, payload: { nodeId: string; title: string }) => Promise<void>
+  nodeIdEditDisabledReason?: string | null
 }) {
   const badge = badgeForNode(snapshot, node)
   const counts = artifactCounts(snapshot, node.id)
@@ -110,12 +116,18 @@ export function NodeInspector({
   const template = templateByRef(snapshot, node.template?.ref)
   const validationIssues = validationIssuesForNode(snapshot, node.id)
   const blockingValidationIssues = validationIssues.filter((issue) => issue.severity === 'error')
-  const runFailures = nodeRunFailures(snapshot, node.id)
   const [now, setNow] = useState(() => Date.now())
   const [stdoutLog, setStdoutLog] = useState<ExecutionLogSummary | null>(() => node.execution_meta?.stdout ?? null)
   const [stderrLog, setStderrLog] = useState<ExecutionLogSummary | null>(() => node.execution_meta?.stderr ?? null)
+  const [activeIdentityField, setActiveIdentityField] = useState<'title' | 'nodeId' | null>(null)
+  const [draftTitle, setDraftTitle] = useState(node.title)
+  const [draftNodeId, setDraftNodeId] = useState(node.id)
+  const [renameBusy, setRenameBusy] = useState(false)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   const isExecutionRunning = node.execution_meta?.status === 'running'
+  const resolvedNodeId = useMemo(() => normalizeNodeId(draftNodeId), [draftNodeId])
+  const titleError = !draftTitle.trim()
+  const duplicateId = resolvedNodeId !== node.id && existingNodeIds.includes(resolvedNodeId)
 
   useEffect(() => {
     if (!isExecutionRunning) {
@@ -129,6 +141,13 @@ export function NodeInspector({
     setStdoutLog(node.execution_meta?.stdout ?? null)
     setStderrLog(node.execution_meta?.stderr ?? null)
   }, [node.execution_meta?.stderr, node.execution_meta?.stdout, node.id])
+
+  useEffect(() => {
+    setActiveIdentityField(null)
+    setDraftTitle(node.title)
+    setDraftNodeId(node.id)
+    setRenameBusy(false)
+  }, [node.id, node.title])
 
   useEffect(() => {
     if (!isExecutionRunning) {
@@ -188,14 +207,142 @@ export function NodeInspector({
     return node.state
   }, [activeRunNodeId, queuedRunNodeIds, completedRunNodeIds, node.id, node.state, node.orchestrator_state])
 
+  async function commitRename(field: 'title' | 'nodeId') {
+    if (renameBusy || (field === 'nodeId' && nodeIdEditDisabledReason)) {
+      return
+    }
+    if (field === 'title' && titleError) {
+      return
+    }
+    if (field === 'nodeId' && (!resolvedNodeId || duplicateId)) {
+      return
+    }
+    const nextTitle = field === 'title' ? draftTitle.trim() : node.title
+    const nextNodeId = field === 'nodeId' ? resolvedNodeId : node.id
+    const unchanged = nextNodeId === node.id && nextTitle === node.title
+    if (unchanged) {
+      setActiveIdentityField(null)
+      return
+    }
+    setRenameBusy(true)
+    try {
+      await onRenameNode(node.id, { nodeId: nextNodeId, title: nextTitle })
+      setActiveIdentityField(null)
+    } finally {
+      setRenameBusy(false)
+    }
+  }
+
+  function cancelRename(field?: 'title' | 'nodeId') {
+    setActiveIdentityField(null)
+    if (!field || field === 'title') {
+      setDraftTitle(node.title)
+    }
+    if (!field || field === 'nodeId') {
+      setDraftNodeId(node.id)
+    }
+    setRenameBusy(false)
+  }
+
+  function activateIdentityField(field: 'title' | 'nodeId') {
+    if (renameBusy || (field === 'nodeId' && nodeIdEditDisabledReason)) {
+      return
+    }
+    setActiveIdentityField(field)
+    if (field === 'title') {
+      setDraftTitle(node.title)
+      return
+    }
+    setDraftTitle(node.title)
+    setDraftNodeId(node.id)
+  }
+
+  function handleIdentityKeyDown(event: React.KeyboardEvent<HTMLInputElement>) {
+    if (event.key === 'Enter') {
+      event.preventDefault()
+      if (activeIdentityField) {
+        void commitRename(activeIdentityField)
+      }
+    }
+    if (event.key === 'Escape') {
+      event.preventDefault()
+      cancelRename(activeIdentityField ?? undefined)
+    }
+  }
+
   return (
     <div className="inspector-stack">
       <div className="badge-line">
         <span className="rf-badge static" title={badge.title}>{badge.label}</span>
-        <strong>{node.title}</strong>
       </div>
       <div className="stack-list subtle">
-        <div><span>Node ID</span><strong>{node.id}</strong></div>
+        <div>
+          <span>Name</span>
+          <strong className="inspector-inline-edit">
+            {activeIdentityField === 'title' ? (
+              <input
+                value={draftTitle}
+                onChange={(event) => setDraftTitle(event.target.value)}
+                onKeyDown={handleIdentityKeyDown}
+                placeholder="Block name"
+              />
+            ) : (
+              node.title
+            )}
+            <button
+              type="button"
+              className="secondary small-icon-pill"
+              onClick={() => {
+                if (activeIdentityField === 'title') {
+                  void commitRename('title')
+                  return
+                }
+                activateIdentityField('title')
+              }}
+              disabled={renameBusy}
+              aria-label={activeIdentityField === 'title' ? 'Save name' : 'Edit name'}
+            >
+              {activeIdentityField === 'title' ? <Check width={16} height={16} /> : <Pencil width={16} height={16} />}
+            </button>
+          </strong>
+          {activeIdentityField === 'title' && titleError ? <span className="field-note error inspector-inline-note">Name is required.</span> : null}
+        </div>
+        <div>
+          <span>Node ID</span>
+          <strong className="inspector-inline-edit">
+            {activeIdentityField === 'nodeId' ? (
+              <input
+                className={duplicateId || !resolvedNodeId ? 'invalid' : ''}
+                value={draftNodeId}
+                onChange={(event) => setDraftNodeId(normalizeNodeId(event.target.value))}
+                onKeyDown={handleIdentityKeyDown}
+                placeholder="notebook_id"
+                spellCheck={false}
+                disabled={Boolean(nodeIdEditDisabledReason)}
+              />
+            ) : (
+              node.id
+            )}
+            <button
+              type="button"
+              className="secondary small-icon-pill"
+              title={nodeIdEditDisabledReason ?? undefined}
+              onClick={() => {
+                if (activeIdentityField === 'nodeId') {
+                  void commitRename('nodeId')
+                  return
+                }
+                activateIdentityField('nodeId')
+              }}
+              disabled={renameBusy || Boolean(nodeIdEditDisabledReason)}
+              aria-label={activeIdentityField === 'nodeId' ? 'Save node ID' : 'Edit node ID'}
+            >
+              {activeIdentityField === 'nodeId' ? <Check width={16} height={16} /> : <Pencil width={16} height={16} />}
+            </button>
+          </strong>
+          {duplicateId && activeIdentityField === 'nodeId' ? <span className="field-note error inspector-inline-note">This ID is already used by another node.</span> : null}
+          {!duplicateId && activeIdentityField === 'nodeId' && !resolvedNodeId ? <span className="field-note error inspector-inline-note">Node ID is required.</span> : null}
+        </div>
         <div><span>Kind</span><strong>{node.kind}</strong></div>
         <div><span>Frozen</span><strong>{node.ui?.frozen ? 'yes' : 'no'}</strong></div>
         <div><span>State</span><strong>{displayedState}</strong></div>
@@ -336,27 +483,6 @@ export function NodeInspector({
             )
           })}
           {!snapshot.notices.some((issue) => issue.node_id === node.id) ? <p className="muted-copy">No active validation issues.</p> : null}
-        </div>
-      </div>
-
-      <div className="inspector-block">
-        <h3>Runtime errors</h3>
-        <div className="warning-list">
-          {runFailures.map((run) => {
-            const failure = run.failure_json as Record<string, unknown>
-            const traceback = typeof failure.traceback === 'string' ? failure.traceback : null
-            const stderr = typeof failure.stderr === 'string' ? failure.stderr : null
-            const errorMessage = typeof failure.error === 'string' ? failure.error : 'Run failed.'
-            return (
-              <div key={run.run_id} className="warning-chip error">
-                <strong>{errorMessage}</strong>
-                <span>{formatTimestamp(run.ended_at ?? run.started_at)}</span>
-                {traceback ? <pre className="warning-details">{traceback}</pre> : null}
-                {!traceback && stderr ? <pre className="warning-details">{stderr}</pre> : null}
-              </div>
-            )
-          })}
-          {!runFailures.length ? <p className="muted-copy">No recorded runtime errors.</p> : null}
         </div>
       </div>
 

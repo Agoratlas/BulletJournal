@@ -1019,6 +1019,19 @@ label span,
   gap: 8px;
 }
 
+.inspector-inline-edit {
+  min-width: 0;
+}
+
+.inspector-inline-edit input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.inspector-inline-note {
+  display: block;
+}
+
 .canvas-panel {
   position: fixed;
   inset: 0;
@@ -1080,6 +1093,10 @@ label span,
   --node-corner-inset: 12px;
   --rf-node-radius: 24px;
   --rf-node-border-color: rgba(152, 162, 163, 0.44);
+  --rf-node-outline-color: var(--rf-node-border-color);
+  --rf-node-outline-width: 2px;
+  --rf-node-notice-glow-color: transparent;
+  --rf-node-notice-glow-size: 0px;
   width: 360px;
   border-radius: var(--rf-node-radius);
   overflow: visible;
@@ -1094,10 +1111,12 @@ label span,
   content: '';
   position: absolute;
   inset: -1px;
-  border: 2px solid var(--rf-node-border-color);
+  border: var(--rf-node-outline-width) solid var(--rf-node-outline-color);
   border-radius: calc(var(--rf-node-radius) + 1px);
+  box-shadow: 0 0 var(--rf-node-notice-glow-size) var(--rf-node-notice-glow-color);
   pointer-events: none;
   z-index: 0;
+  transition: border-color 140ms ease, border-width 140ms ease, box-shadow 140ms ease;
 }
 
 .rf-node > * {
@@ -1210,6 +1229,34 @@ label span,
     0 0 0 3px color-mix(in srgb, var(--freeze-edge) 14%, transparent),
     0 16px 36px rgba(0, 0, 0, 0.28),
     0 12px 28px var(--freeze-glow);
+}
+
+.rf-node.has-active-notice-error {
+  --rf-node-outline-color: rgba(197, 48, 48, 0.9);
+  --rf-node-notice-glow-color: rgba(197, 48, 48, 0.5);
+  --rf-node-notice-glow-size: 28px;
+}
+
+.rf-node.has-active-notice-warning {
+  --rf-node-outline-color: rgba(201, 124, 0, 0.9);
+  --rf-node-notice-glow-color: rgba(201, 124, 0, 0.46);
+  --rf-node-notice-glow-size: 24px;
+}
+
+.rf-node.notice-hovered {
+  --rf-node-outline-width: 4px;
+  --rf-node-notice-glow-color: color-mix(in srgb, var(--rf-node-outline-color) 84%, transparent);
+  --rf-node-notice-glow-size: 56px;
+}
+
+:root[data-theme='dark'] .rf-node.has-active-notice-error {
+  --rf-node-outline-color: rgba(242, 117, 117, 0.92);
+  --rf-node-notice-glow-color: rgba(242, 117, 117, 0.48);
+}
+
+:root[data-theme='dark'] .rf-node.has-active-notice-warning {
+  --rf-node-outline-color: rgba(230, 171, 59, 0.9);
+  --rf-node-notice-glow-color: rgba(230, 171, 59, 0.42);
 }
 
 @keyframes pulse-border {
@@ -3300,6 +3347,14 @@ input.invalid {
   pointer-events: auto;
 }
 
+.notice-card.linked-to-node {
+  cursor: pointer;
+}
+
+.notice-card.linked-to-node:hover {
+  border-color: color-mix(in srgb, var(--accent) 30%, currentColor 12%);
+}
+
 .notice-card.error {
   background: linear-gradient(180deg, rgba(255, 233, 228, 0.96), rgba(255, 245, 241, 0.96));
   border-color: rgba(197, 48, 48, 0.35);
@@ -3532,18 +3587,6 @@ input.invalid {
     width: 48px;
     height: 48px;
     min-height: 48px;
-  }
-
-  .rf-node {
-    width: 320px;
-  }
-
-  .rf-node-body {
-    grid-template-columns: 1fr;
-  }
-
-  .rf-node-footer {
-    flex-direction: column;
   }
 
   .artifact-grid {

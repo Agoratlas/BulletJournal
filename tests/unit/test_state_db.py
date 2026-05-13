@@ -273,6 +273,150 @@ def test_state_db_preserves_persistent_notice_dismissal_across_updates(tmp_path)
     assert persisted['details']['current_node'] == 'sample'
 
 
+def test_state_db_rename_node_state_updates_all_node_id_indexes_and_payloads(tmp_path) -> None:
+    paths = init_project_root(tmp_path / 'project')
+    db = StateDB(paths.state_db_path)
+
+    db.record_run(
+        'run-1',
+        'project-1',
+        'run_stale',
+        {'node_id': 'node_a', 'node_ids': ['node_a'], 'plan': ['node_a']},
+        1,
+        {
+            'graph': {
+                'nodes': [{'id': 'node_a', 'kind': 'notebook', 'title': 'Node A'}],
+                'layout': [{'node_id': 'node_a'}],
+                'edges': [
+                    {
+                        'id': 'node_a.output__node_a.input',
+                        'source_node': 'node_a',
+                        'source_port': 'output',
+                        'target_node': 'node_a',
+                        'target_port': 'input',
+                    }
+                ],
+            }
+        },
+    )
+    db.update_run_status('run-1', RunStatus.FAILED, failure_json={'node_id': 'node_a', 'error': 'boom'})
+    db.record_run_input('run-1', 'node_a/output', 'hash-1', ArtifactState.READY.value)
+    db.save_notebook_revision(
+        'node_a',
+        'source-a',
+        'docs',
+        {'node_id': 'node_a', 'source_hash': 'source-a', 'inputs': [], 'outputs': [], 'assets': [], 'issues': []},
+    )
+    db.replace_validation_issues(
+        'node_a',
+        [
+            ValidationIssue(
+                issue_id='issue-1',
+                node_id='node_a',
+                severity=ValidationSeverity.ERROR,
+                code='bad',
+                message='broken',
+            )
+        ],
+    )
+    db.save_persistent_notice(
+        issue_id='notice-1',
+        node_id='node_a',
+        severity=ValidationSeverity.ERROR,
+        code='run_failed',
+        message='Run failed.',
+        details={'node_id': 'node_a', 'node_ids': ['node_a'], 'plan': ['node_a'], 'source': 'node_a/output'},
+    )
+    db.upsert_artifact_object(
+        'hash-1', 'json', 'int', 2, None, None, {'kind': 'simple', 'repr': '1', 'truncated': False}
+    )
+    db.create_artifact_version(
+        node_id='node_a',
+        artifact_name='output',
+        role=ArtifactRole.OUTPUT,
+        artifact_hash='hash-1',
+        source_hash='source-a',
+        upstream_code_hash='code-hash',
+        upstream_data_hash='data-hash',
+        run_id='run-1',
+        lineage_mode=LineageMode.MANAGED,
+        warnings=[],
+    )
+    db.upsert_orchestrator_execution_meta(
+        node_id='node_a',
+        run_id='run-1',
+        status='queued',
+        started_at='2026-03-26T00:00:00Z',
+    )
+
+    db.rename_node_state('node_a', 'node_b')
+
+    assert db.latest_interface_json('node_a') is None
+    assert db.latest_interface_json('node_b') is not None
+    assert all(issue['node_id'] != 'node_a' for issue in db.list_validation_issues(include_dismissed=True))
+    assert any(issue['node_id'] == 'node_b' for issue in db.list_validation_issues(include_dismissed=True))
+    assert all(head['node_id'] != 'node_a' for head in db.list_artifact_heads())
+    assert any(head['node_id'] == 'node_b' for head in db.list_artifact_heads())
+    assert 'node_a' not in db.list_orchestrator_execution_meta()
+    assert 'node_b' in db.list_orchestrator_execution_meta()
+    assert 'node_a' not in db.list_state_node_ids()
+    assert 'node_b' in db.list_state_node_ids()
+
+    runs = db.list_run_records()
+    assert runs[0]['target_json']['node_id'] == 'node_b'
+    assert runs[0]['target_json']['node_ids'] == ['node_b']
+    assert runs[0]['target_json']['plan'] == ['node_b']
+    assert runs[0]['source_snapshot_json']['graph']['nodes'][0]['id'] == 'node_b'
+    assert runs[0]['source_snapshot_json']['graph']['layout'][0]['node_id'] == 'node_b'
+    assert runs[0]['source_snapshot_json']['graph']['edges'][0]['id'] == 'node_b.output__node_b.input'
+    assert runs[0]['source_snapshot_json']['graph']['edges'][0]['source_node'] == 'node_b'
+    assert runs[0]['source_snapshot_json']['graph']['edges'][0]['target_node'] == 'node_b'
+    assert runs[0]['failure_json']['node_id'] == 'node_b'
+
+    persisted = db.get_persistent_notice('notice-1')
+    assert persisted is not None
+    assert persisted['node_id'] == 'node_b'
+    assert persisted['details']['node_id'] == 'node_b'
+    assert persisted['details']['node_ids'] == ['node_b']
+    assert persisted['details']['plan'] == ['node_b']
+    assert persisted['details']['source'] == 'node_b/output'
+
+    with db._connect() as connection:
+        assert (
+            connection.execute('SELECT COUNT(*) FROM notebook_revisions WHERE node_id = ?', ('node_a',)).fetchone()[0]
+            == 0
+        )
+        assert (
+            connection.execute('SELECT COUNT(*) FROM notebook_revisions WHERE node_id = ?', ('node_b',)).fetchone()[0]
+            == 1
+        )
+        assert (
+            connection.execute('SELECT COUNT(*) FROM artifact_versions WHERE node_id = ?', ('node_a',)).fetchone()[0]
+            == 0
+        )
+        assert (
+            connection.execute('SELECT COUNT(*) FROM artifact_versions WHERE node_id = ?', ('node_b',)).fetchone()[0]
+            == 1
+        )
+        assert (
+            connection.execute('SELECT COUNT(*) FROM artifact_heads WHERE node_id = ?', ('node_a',)).fetchone()[0] == 0
+        )
+        assert (
+            connection.execute('SELECT COUNT(*) FROM artifact_heads WHERE node_id = ?', ('node_b',)).fetchone()[0] == 1
+        )
+        assert connection.execute('SELECT COUNT(*) FROM cache_index WHERE node_id = ?', ('node_a',)).fetchone()[0] == 0
+        assert connection.execute('SELECT COUNT(*) FROM cache_index WHERE node_id = ?', ('node_b',)).fetchone()[0] == 1
+        assert connection.execute('SELECT COUNT(*) FROM run_outputs WHERE node_id = ?', ('node_a',)).fetchone()[0] == 0
+        assert connection.execute('SELECT COUNT(*) FROM run_outputs WHERE node_id = ?', ('node_b',)).fetchone()[0] == 1
+        assert (
+            connection.execute(
+                'SELECT logical_artifact_id FROM run_inputs WHERE run_id = ?',
+                ('run-1',),
+            ).fetchone()[0]
+            == 'node_b/output'
+        )
+
+
 def test_state_db_persists_execution_logs(tmp_path) -> None:
     paths = init_project_root(tmp_path / 'project')
     db = StateDB(paths.state_db_path)

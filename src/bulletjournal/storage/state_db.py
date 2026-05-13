@@ -265,6 +265,17 @@ class StateDB:
             )
             connection.commit()
 
+    def dismiss_persistent_notices_for_node(self, node_id: str, codes: list[str]) -> None:
+        if not codes:
+            return
+        now = utc_now_iso()
+        with self._connect() as connection:
+            connection.executemany(
+                'UPDATE persistent_notices SET dismissed_at = ? WHERE node_id = ? AND code = ?',
+                [(now, node_id, code) for code in codes],
+            )
+            connection.commit()
+
     def list_state_node_ids(self) -> list[str]:
         with self._connect() as connection:
             rows = connection.execute(
@@ -311,6 +322,36 @@ class StateDB:
             connection.execute('DELETE FROM validation_issues WHERE node_id = ?', (node_id,))
             connection.execute('DELETE FROM persistent_notices WHERE node_id = ?', (node_id,))
             connection.execute('DELETE FROM notebook_revisions WHERE node_id = ?', (node_id,))
+            self._prune_stale_validation_issue_dismissals(connection)
+            connection.commit()
+
+    def rename_node_state(self, old_node_id: str, new_node_id: str) -> None:
+        if old_node_id == new_node_id:
+            return
+        with self._connect() as connection:
+            connection.execute(
+                'UPDATE notebook_revisions SET node_id = ? WHERE node_id = ?', (new_node_id, old_node_id)
+            )
+            connection.execute('UPDATE validation_issues SET node_id = ? WHERE node_id = ?', (new_node_id, old_node_id))
+            connection.execute(
+                'UPDATE persistent_notices SET node_id = ? WHERE node_id = ?', (new_node_id, old_node_id)
+            )
+            connection.execute('UPDATE artifact_versions SET node_id = ? WHERE node_id = ?', (new_node_id, old_node_id))
+            connection.execute('UPDATE artifact_heads SET node_id = ? WHERE node_id = ?', (new_node_id, old_node_id))
+            connection.execute('UPDATE cache_index SET node_id = ? WHERE node_id = ?', (new_node_id, old_node_id))
+            connection.execute(
+                'UPDATE orchestrator_execution_meta SET node_id = ? WHERE node_id = ?',
+                (new_node_id, old_node_id),
+            )
+            connection.execute('UPDATE run_outputs SET node_id = ? WHERE node_id = ?', (new_node_id, old_node_id))
+            connection.execute(
+                'UPDATE run_inputs SET logical_artifact_id = ? || substr(logical_artifact_id, ?) '
+                'WHERE logical_artifact_id LIKE ?',
+                (new_node_id, len(old_node_id) + 1, f'{old_node_id}/%'),
+            )
+            self._rename_issue_detail_refs(connection, 'validation_issues', old_node_id, new_node_id)
+            self._rename_issue_detail_refs(connection, 'persistent_notices', old_node_id, new_node_id)
+            self._rename_run_record_node_refs(connection, old_node_id, new_node_id)
             self._prune_stale_validation_issue_dismissals(connection)
             connection.commit()
 
@@ -699,6 +740,65 @@ class StateDB:
         connection.executemany('DELETE FROM run_records WHERE run_id = ?', run_id_rows)
 
     @classmethod
+    def _rename_run_record_node_refs(
+        cls,
+        connection: sqlite3.Connection,
+        old_node_id: str,
+        new_node_id: str,
+    ) -> None:
+        rows = connection.execute(
+            'SELECT run_id, target_json, source_snapshot_json, failure_json FROM run_records'
+        ).fetchall()
+        for row in rows:
+            target = cls._load_json_dict(row['target_json'])
+            source_snapshot = cls._load_json_dict(row['source_snapshot_json'])
+            failure = cls._load_json_dict(row['failure_json'])
+            changed = False
+            if cls._rename_node_refs_in_json(target, old_node_id, new_node_id):
+                changed = True
+            if cls._rename_node_refs_in_json(source_snapshot, old_node_id, new_node_id):
+                changed = True
+            if cls._rename_node_refs_in_json(failure, old_node_id, new_node_id):
+                changed = True
+            if not changed:
+                continue
+            connection.execute(
+                'UPDATE run_records SET target_json = ?, source_snapshot_json = ?, failure_json = ? WHERE run_id = ?',
+                (
+                    json_dumps(target or {}),
+                    json_dumps(source_snapshot or {}),
+                    None if failure is None else json_dumps(failure),
+                    row['run_id'],
+                ),
+            )
+
+    @classmethod
+    def _rename_issue_detail_refs(
+        cls,
+        connection: sqlite3.Connection,
+        table_name: str,
+        old_node_id: str,
+        new_node_id: str,
+    ) -> None:
+        if table_name == 'validation_issues':
+            select_query = 'SELECT issue_id, details_json FROM validation_issues'
+            update_query = 'UPDATE validation_issues SET details_json = ? WHERE issue_id = ?'
+        elif table_name == 'persistent_notices':
+            select_query = 'SELECT issue_id, details_json FROM persistent_notices'
+            update_query = 'UPDATE persistent_notices SET details_json = ? WHERE issue_id = ?'
+        else:
+            raise ValueError(f'Unsupported issue detail table `{table_name}`.')
+        rows = connection.execute(select_query).fetchall()
+        for row in rows:
+            details = cls._load_json_dict(row['details_json'])
+            if not cls._rename_node_refs_in_json(details, old_node_id, new_node_id):
+                continue
+            connection.execute(
+                update_query,
+                (json_dumps(details or {}), row['issue_id']),
+            )
+
+    @classmethod
     def _run_record_references_node(cls, row: sqlite3.Row, node_id: str) -> bool:
         target = cls._load_json_dict(row['target_json'])
         if cls._run_target_references_node(target, node_id):
@@ -712,6 +812,70 @@ class StateDB:
             return None
         decoded = json.loads(str(raw))
         return decoded if isinstance(decoded, dict) else None
+
+    @classmethod
+    def _rename_node_refs_in_json(
+        cls,
+        payload: Any,
+        old_node_id: str,
+        new_node_id: str,
+    ) -> bool:
+        if isinstance(payload, dict):
+            changed = False
+            for key, value in payload.items():
+                if key == 'node_id' and value == old_node_id:
+                    payload[key] = new_node_id
+                    changed = True
+                    continue
+                if key in {'source_node', 'target_node', 'current_node'} and value == old_node_id:
+                    payload[key] = new_node_id
+                    changed = True
+                    continue
+                if key in {'node_ids', 'plan'} and isinstance(value, list):
+                    next_values = [new_node_id if item == old_node_id else item for item in value]
+                    if next_values != value:
+                        payload[key] = next_values
+                        changed = True
+                    continue
+                if (
+                    key in {'logical_artifact_id', 'artifact', 'source'}
+                    and isinstance(value, str)
+                    and value.startswith(f'{old_node_id}/')
+                ):
+                    payload[key] = f'{new_node_id}{value[len(old_node_id) :]}'
+                    changed = True
+                    continue
+                if key == 'id' and cls._dict_represents_node_payload(payload) and value == old_node_id:
+                    payload[key] = new_node_id
+                    changed = True
+                    continue
+                if cls._rename_node_refs_in_json(value, old_node_id, new_node_id):
+                    changed = True
+            if cls._dict_represents_edge_payload(payload):
+                next_edge_id = (
+                    f'{payload["source_node"]}.{payload["source_port"]}'
+                    f'__{payload["target_node"]}.{payload["target_port"]}'
+                )
+                if payload.get('id') != next_edge_id:
+                    payload['id'] = next_edge_id
+                    changed = True
+            return changed
+        if isinstance(payload, list):
+            changed = False
+            for item in payload:
+                if cls._rename_node_refs_in_json(item, old_node_id, new_node_id):
+                    changed = True
+            return changed
+        return False
+
+    @staticmethod
+    def _dict_represents_node_payload(payload: dict[str, Any]) -> bool:
+        return 'kind' in payload and 'title' in payload
+
+    @staticmethod
+    def _dict_represents_edge_payload(payload: dict[str, Any]) -> bool:
+        required = {'source_node', 'source_port', 'target_node', 'target_port'}
+        return required.issubset(payload)
 
     @staticmethod
     def _run_target_references_node(target: dict[str, Any] | None, node_id: str) -> bool:

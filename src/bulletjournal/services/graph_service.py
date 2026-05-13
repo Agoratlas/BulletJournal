@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 from typing import Any
 
 from bulletjournal.domain.enums import ArtifactState, NodeKind
@@ -29,6 +30,17 @@ from bulletjournal.domain.models import (
 )
 from bulletjournal.domain.type_system import types_compatible
 from bulletjournal.execution.planner import downstream_closure, topological_nodes, visible_edge_id
+from bulletjournal.parser.interface_parser import parse_notebook_interface
+
+
+@dataclass(slots=True)
+class _InlineNotebookSource:
+    source_text: str
+    ref: str
+    path: str | None = None
+
+    def read_text(self) -> str:
+        return self.source_text
 
 
 class GraphService:
@@ -55,16 +67,20 @@ class GraphService:
         interruption_roots: set[str] = set()
         pending_notebook_creates: list[tuple[str, str]] = []
         pending_notebook_deletes: list[str] = []
+        pending_notebook_renames: list[tuple[str, str, str | None]] = []
         pending_editor_stops: list[str] = []
         pending_input_heads: list[tuple[str, str]] = []
         pending_constant_values: list[tuple[str, Any]] = []
         pending_artifact_state_resets: list[tuple[str, str]] = []
         pending_state_deletes: list[str] = []
+        pending_state_renames: list[tuple[str, str]] = []
+        pending_notebook_interfaces: dict[str, dict[str, Any]] = {}
         for operation in operations:
             op_type = operation['type']
             if op_type == 'add_notebook_node':
-                node_id, source = self._add_notebook_node(graph, operation)
+                node_id, source, interface = self._add_notebook_node(graph, operation)
                 pending_notebook_creates.append((node_id, source))
+                pending_notebook_interfaces[node_id] = interface
                 reparse_all = True
                 interruption_roots.add(node_id)
             elif op_type == 'add_constant_node':
@@ -92,7 +108,7 @@ class GraphService:
                 interruption_roots.update(node_id for node_id, _ in created['notebook_creates'])
                 interruption_roots.update(node_id for node_id, _ in created['input_heads'])
             elif op_type == 'add_edge':
-                self._add_edge(graph, operation)
+                self._add_edge(graph, operation, pending_interfaces_by_node=pending_notebook_interfaces)
                 stale_roots.add(str(operation['target_node']))
                 interruption_roots.add(str(operation['target_node']))
             elif op_type == 'remove_edge':
@@ -104,6 +120,26 @@ class GraphService:
                 self._update_layout(graph, operation)
             elif op_type == 'update_node_title':
                 self._update_title(graph, operation)
+            elif op_type == 'rename_node':
+                renamed = self._rename_node(graph, operation)
+                pending_state_renames.append((renamed['old_node_id'], renamed['new_node_id']))
+                if renamed['interface'] is not None:
+                    pending_notebook_interfaces.pop(renamed['old_node_id'], None)
+                    pending_notebook_interfaces[renamed['new_node_id']] = renamed['interface']
+                if renamed['rename_notebook_file']:
+                    pending_notebook_renames.append(
+                        (
+                            renamed['old_node_id'],
+                            renamed['new_node_id'],
+                            self._renamed_notebook_source(
+                                old_node_id=renamed['old_node_id'],
+                                new_node_id=renamed['new_node_id'],
+                            ),
+                        )
+                    )
+                    pending_editor_stops.append(renamed['old_node_id'])
+                    reparse_all = True
+                interruption_roots.add(renamed['new_node_id'])
             elif op_type == 'update_constant_node':
                 updated = self._update_constant_node(graph, operation)
                 if not updated['changed']:
@@ -165,6 +201,19 @@ class GraphService:
             path = self.project_service.require_project().paths.notebook_path(node_id)
             if path.exists():
                 path.unlink()
+        for old_node_id, new_node_id, rewritten_source in pending_notebook_renames:
+            old_path = self.project_service.require_project().paths.notebook_path(old_node_id)
+            new_path = self.project_service.require_project().paths.notebook_path(new_node_id)
+            if new_path.exists():
+                raise GraphValidationError(f'Notebook file `{new_path.name}` already exists.')
+            if old_path.exists():
+                if rewritten_source is None:
+                    old_path.rename(new_path)
+                    continue
+                new_path.write_text(rewritten_source, encoding='utf-8')
+                old_path.unlink()
+        for old_node_id, new_node_id in pending_state_renames:
+            self.project_service.require_project().state_db.rename_node_state(old_node_id, new_node_id)
         for node_id in pending_state_deletes:
             self.project_service.require_project().state_db.delete_node_state(node_id)
             self._delete_execution_logs(node_id)
@@ -355,7 +404,7 @@ class GraphService:
             'upstream_code_hash': upstream_code_hash,
         }
 
-    def _add_notebook_node(self, graph: GraphData, operation: dict[str, Any]) -> tuple[str, str]:
+    def _add_notebook_node(self, graph: GraphData, operation: dict[str, Any]) -> tuple[str, str, dict[str, Any]]:
         node_id = str(operation['node_id'])
         title = str(operation['title'])
         if any(node.id == node_id for node in graph.nodes):
@@ -390,7 +439,8 @@ class GraphService:
             ).source_text
         )
         source = self.project_service.template_service.render_notebook_template_source(source, node_id=node_id)
-        return node_id, source
+        interface = self._inline_notebook_interface(source_text=source, node_id=node_id)
+        return node_id, source, interface
 
     def _add_file_input_node(self, graph: GraphData, operation: dict[str, Any]) -> str:
         node_id = str(operation['node_id'])
@@ -548,7 +598,7 @@ class GraphService:
                     'w': int(layout.get('w', 320)),
                     'h': int(layout.get('h', 220)),
                 }
-                node_id, source = self._add_notebook_node(graph, add_operation)
+                node_id, source, _interface = self._add_notebook_node(graph, add_operation)
                 notebook_creates.append((node_id, source))
             elif kind == NodeKind.CONSTANT.value:
                 artifact_name = _pipeline_constant_artifact_name(raw_node)
@@ -645,14 +695,28 @@ class GraphService:
             'constant_values': constant_values,
         }
 
-    def _add_edge(self, graph: GraphData, operation: dict[str, Any]) -> None:
+    def _add_edge(
+        self,
+        graph: GraphData,
+        operation: dict[str, Any],
+        *,
+        pending_interfaces_by_node: dict[str, dict[str, Any]] | None = None,
+    ) -> None:
         source_node = str(operation['source_node'])
         target_node = str(operation['target_node'])
         node_ids = {node.id for node in graph.nodes}
         assert_node_exists(node_ids, source_node)
         assert_node_exists(node_ids, target_node)
-        source_interface = self._interface_for_graph_node(graph, source_node)
-        target_interface = self._interface_for_graph_node(graph, target_node)
+        source_interface = self._interface_for_graph_node(
+            graph,
+            source_node,
+            pending_interfaces_by_node=pending_interfaces_by_node,
+        )
+        target_interface = self._interface_for_graph_node(
+            graph,
+            target_node,
+            pending_interfaces_by_node=pending_interfaces_by_node,
+        )
         if source_interface is None or target_interface is None:
             raise GraphValidationError('Cannot connect nodes without parsed interfaces.')
         self._add_edge_from_interfaces(
@@ -662,7 +726,15 @@ class GraphService:
             target_interface=target_interface,
         )
 
-    def _interface_for_graph_node(self, graph: GraphData, node_id: str) -> dict[str, Any] | None:
+    def _interface_for_graph_node(
+        self,
+        graph: GraphData,
+        node_id: str,
+        *,
+        pending_interfaces_by_node: dict[str, dict[str, Any]] | None = None,
+    ) -> dict[str, Any] | None:
+        if pending_interfaces_by_node is not None and node_id in pending_interfaces_by_node:
+            return pending_interfaces_by_node[node_id]
         node = next((item for item in graph.nodes if item.id == node_id), None)
         if node is None:
             return None
@@ -675,6 +747,12 @@ class GraphService:
         if node.kind == NodeKind.AREA:
             return {'inputs': [], 'outputs': [], 'assets': []}
         return self.project_service.latest_interface(node_id)
+
+    def _inline_notebook_interface(self, *, source_text: str, node_id: str) -> dict[str, Any]:
+        return parse_notebook_interface(
+            _InlineNotebookSource(source_text=source_text, ref=f'inline:{node_id}', path=f'{node_id}.py'),
+            node_id=node_id,
+        ).to_dict()
 
     def _update_constant_node(self, graph: GraphData, operation: dict[str, Any]) -> dict[str, Any]:
         node_id = str(operation['node_id'])
@@ -787,6 +865,91 @@ class GraphService:
                 return
         raise GraphValidationError(f'Unknown node `{node_id}`.')
 
+    def _rename_node(self, graph: GraphData, operation: dict[str, Any]) -> dict[str, Any]:
+        old_node_id = str(operation['node_id'])
+        new_node_id = str(operation.get('new_node_id') or '').strip()
+        title = str(operation.get('title') or '').strip()
+        node = next((entry for entry in graph.nodes if entry.id == old_node_id), None)
+        if node is None:
+            raise GraphValidationError(f'Unknown node `{old_node_id}`.')
+        if not new_node_id:
+            raise GraphValidationError('Node ID is required.')
+        if not title:
+            raise GraphValidationError('Node title is required.')
+        if new_node_id != old_node_id:
+            self._assert_notebook_node_id_change_allowed(node)
+        if new_node_id != old_node_id and any(entry.id == new_node_id for entry in graph.nodes):
+            raise GraphValidationError(f'Node `{new_node_id}` already exists.')
+        if node.kind == NodeKind.NOTEBOOK and new_node_id != old_node_id:
+            next_path = self.project_service.require_project().paths.notebook_path(new_node_id)
+            if next_path.exists():
+                raise GraphValidationError(f'Notebook file `{next_path.name}` already exists.')
+        if new_node_id == old_node_id:
+            node.title = title
+            return {
+                'old_node_id': old_node_id,
+                'new_node_id': new_node_id,
+                'rename_notebook_file': False,
+                'interface': self._interface_for_graph_node(graph, new_node_id),
+            }
+        node.id = new_node_id
+        node.title = title
+        if node.kind == NodeKind.NOTEBOOK:
+            node.path = self.project_service.require_project().paths.notebook_relpath(new_node_id)
+        for layout in graph.layout:
+            if layout.node_id == old_node_id:
+                layout.node_id = new_node_id
+        for edge in graph.edges:
+            if edge.source_node == old_node_id:
+                edge.source_node = new_node_id
+            if edge.target_node == old_node_id:
+                edge.target_node = new_node_id
+            edge.id = visible_edge_id(edge)
+        return {
+            'old_node_id': old_node_id,
+            'new_node_id': new_node_id,
+            'rename_notebook_file': node.kind == NodeKind.NOTEBOOK,
+            'interface': self._renamed_notebook_interface(node=node, old_node_id=old_node_id),
+        }
+
+    def _renamed_notebook_interface(self, *, node: Node, old_node_id: str) -> dict[str, Any] | None:
+        if node.kind != NodeKind.NOTEBOOK:
+            return None
+        existing = self.project_service.latest_interface(old_node_id)
+        if existing is None:
+            return None
+        return {
+            **existing,
+            'node_id': node.id,
+        }
+
+    def _renamed_notebook_source(self, *, old_node_id: str, new_node_id: str) -> str | None:
+        old_path = self.project_service.require_project().paths.notebook_path(old_node_id)
+        if not old_path.exists():
+            return None
+        source_text = old_path.read_text(encoding='utf-8')
+        return self.project_service.template_service.render_notebook_template_source(
+            source_text,
+            node_id=new_node_id,
+        )
+
+    def _assert_notebook_node_id_change_allowed(self, node: Node) -> None:
+        if node.kind != NodeKind.NOTEBOOK or self.project_service.run_service is None:
+            return
+        if self.project_service.run_service.session_manager.get_by_node(node.id) is None:
+            orchestrator_state = self.project_service.run_service.orchestrator_state().get(node.id)
+            if orchestrator_state is None or orchestrator_state.get('status') not in {'queued', 'running'}:
+                return
+            if orchestrator_state.get('status') == 'running':
+                raise GraphValidationError(
+                    'This notebook ID cannot be changed while it is running. Wait for it to finish first.'
+                )
+            raise GraphValidationError(
+                'This notebook ID cannot be changed while it is queued for execution. '
+                'Wait for it to start or finish first.'
+            )
+        raise GraphValidationError('This notebook ID cannot be changed while an editor is open. Close it first.')
+
     def _update_organizer_ports(self, graph: GraphData, operation: dict[str, Any]) -> list[str]:
         node_id = str(operation['node_id'])
         ports = _coerce_organizer_ports(operation.get('ports', []))
@@ -890,6 +1053,9 @@ class GraphService:
             node_id = str(operation['node_id'])
             return self.project_service.frozen_block_blockers_for_node_edit(node_id, graph=graph)
         if op_type == 'update_constant_node':
+            node_id = str(operation['node_id'])
+            return self.project_service.frozen_block_blockers_for_node_edit(node_id, graph=graph)
+        if op_type == 'rename_node':
             node_id = str(operation['node_id'])
             return self.project_service.frozen_block_blockers_for_node_edit(node_id, graph=graph)
         if op_type == 'update_area_style':

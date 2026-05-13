@@ -115,6 +115,11 @@ type PlacementRect = {
 type ArtifactMutationState = 'ready' | 'stale'
 type NotebookRunScope = 'node' | 'ancestors' | 'descendants'
 
+type NoticeFocusRequest = {
+  nodeId: string
+  token: number
+}
+
 type ConfirmationState =
   | {
       kind: 'run-upstream'
@@ -209,6 +214,8 @@ function App() {
   }))
   const [pasteSequence, setPasteSequence] = useState(0)
   const [activeEditorNodeIds, setActiveEditorNodeIds] = useState<string[]>([])
+  const [hoveredNoticeNodeId, setHoveredNoticeNodeId] = useState<string | null>(null)
+  const [noticeFocusRequest, setNoticeFocusRequest] = useState<NoticeFocusRequest | null>(null)
   const [themeMode, setThemeMode] = useState<ThemeMode>(() => {
     const stored = window.localStorage.getItem('bulletjournal-theme')
     if (stored === 'light' || stored === 'dark' || stored === 'system') {
@@ -435,6 +442,21 @@ function App() {
       return left.issue_id.localeCompare(right.issue_id)
     })
   }, [clientNotices, liveSnapshot])
+
+  const nodeNoticeSeverityById = useMemo<Record<string, 'error' | 'warning'>>(() => {
+    const severityByNodeId: Record<string, 'error' | 'warning'> = {}
+    for (const notice of overlayNotices) {
+      if (!notice.node_id) {
+        continue
+      }
+      const current = severityByNodeId[notice.node_id]
+      if (current === 'error') {
+        continue
+      }
+      severityByNodeId[notice.node_id] = notice.severity === 'error' ? 'error' : 'warning'
+    }
+    return severityByNodeId
+  }, [overlayNotices])
 
   useEffect(() => {
     if (!serverSnapshot) {
@@ -1640,6 +1662,19 @@ function App() {
           undoOperations.push({ type: 'update_node_title', node_id: operation.node_id, title: node.title })
           break
         }
+        case 'rename_node': {
+          const node = snapshotData.graph.nodes.find((entry) => entry.id === operation.node_id)
+          if (!node) {
+            return null
+          }
+          undoOperations.push({
+            type: 'rename_node',
+            node_id: String(operation.new_node_id),
+            new_node_id: node.id,
+            title: node.title,
+          })
+          break
+        }
         case 'update_organizer_ports': {
           const node = snapshotData.graph.nodes.find((entry) => entry.id === operation.node_id)
           if (!node) {
@@ -1735,19 +1770,22 @@ function App() {
     }
     const sourceByNodeId = await notebookSourceByNodeIds(nodeIds)
     const layoutByNodeId = new Map(layouts.map((entry) => [entry.node_id, entry]))
-      const undoNodeOperations: GraphPatchOperation[] = nodes.map((node) => {
-        const layout = layoutByNodeId.get(node.id) as LayoutRecord
-        if (node.kind === 'notebook') {
-          return notebookAddOperationForNode(node, layout, sourceByNodeId.get(node.id) ?? null, node.id, node.title)
-        }
+    const undoNodeOperations: GraphPatchOperation[] = nodes.map((node) => {
+      const layout = layoutByNodeId.get(node.id) as LayoutRecord
+      if (node.kind === 'notebook') {
+        return notebookAddOperationForNode(node, layout, sourceByNodeId.get(node.id) ?? null, node.id, node.title)
+      }
+      if (node.kind === 'constant') {
+        return constantAddOperationForNode(node, layout, node.id, node.title)
+      }
       if (node.kind === 'organizer') {
         return organizerAddOperationForNode(node, layout, node.id, node.title)
       }
       if (node.kind === 'area') {
         return areaAddOperationForNode(node, layout, node.id, node.title)
       }
-        return fileInputAddOperationForNode(node, layout, node.id, node.title)
-      })
+      return fileInputAddOperationForNode(node, layout, node.id, node.title)
+    })
     const restoredEdges = liveSnapshot.graph.edges.filter(
       (edge) => deletedNodeIdSet.has(edge.source_node) || deletedNodeIdSet.has(edge.target_node),
     )
@@ -2672,6 +2710,7 @@ function App() {
     if (!projectId) {
       return
     }
+    await clearNodeRuntimeNotices(nodeId)
     const initialAction = mode === 'edit_run'
       ? null
       : scope === 'ancestors'
@@ -3137,6 +3176,59 @@ function App() {
     await mutateGraph(redo.operations, { history: liveSnapshot ? simpleHistoryEntryForPlan(liveSnapshot, redo) : null })
   }
 
+  async function handleRenameNode(currentNodeId: string, payload: { nodeId: string; title: string }) {
+    if (!liveSnapshot) {
+      return
+    }
+    const node = liveSnapshot.graph.nodes.find((entry) => entry.id === currentNodeId)
+    if (!node) {
+      return
+    }
+    const nextNodeId = normalizeNodeId(payload.nodeId)
+    const nextTitle = payload.title.trim()
+    if (!nextNodeId || !nextTitle) {
+      return
+    }
+    const renameChangesId = nextNodeId !== currentNodeId
+    const titleChanged = nextTitle !== node.title
+    if (!renameChangesId && !titleChanged) {
+      return
+    }
+    const redo = renameChangesId
+      ? {
+          operations: [
+            {
+              type: 'rename_node',
+              node_id: currentNodeId,
+              new_node_id: nextNodeId,
+              title: nextTitle,
+            } satisfies GraphPatchOperation,
+          ],
+        }
+      : {
+          operations: [
+            {
+              type: 'update_node_title',
+              node_id: currentNodeId,
+              title: nextTitle,
+            } satisfies GraphPatchOperation,
+          ],
+        }
+    const success = await mutateGraph(redo.operations, {
+      history: simpleHistoryEntryForPlan(liveSnapshot, redo),
+      onSuccess: () => {
+        selectSingleNode(nextNodeId)
+        setArtifactNodeId((current) => current === currentNodeId ? nextNodeId : current)
+        setActiveEditorNodeIds((current) => current.filter((nodeId) => nodeId !== currentNodeId))
+        setNodeActionMenu(null)
+        setPortActionMenu(null)
+      },
+    })
+    if (success && node.kind === 'notebook') {
+      await refreshActiveEditorNodeIds()
+    }
+  }
+
   function handleNodesDelete(nodes: Node[]) {
     requestDeleteSelection(nodes.map((node) => node.id), [])
   }
@@ -3216,12 +3308,46 @@ function App() {
   }
 
   async function handleDismissNotice(notice: AppNotice) {
+    setHoveredNoticeNodeId((current) => current === notice.node_id ? null : current)
     if (notice.origin === 'client' || !projectId) {
       dismissClientNotice(notice.issue_id)
       return
     }
     await dismissNotice(notice.issue_id)
     await refreshSnapshot()
+  }
+
+  function handleFocusNotice(notice: AppNotice) {
+    if (!notice.node_id) {
+      return
+    }
+    selectSingleNode(notice.node_id)
+    setNoticeFocusRequest({
+      nodeId: notice.node_id,
+      token: Date.now(),
+    })
+  }
+
+  async function clearNodeRuntimeNotices(nodeId: string) {
+    setHoveredNoticeNodeId((current) => current === nodeId ? null : current)
+    setClientNotices((current) => current.filter((notice) => {
+      return !(notice.node_id === nodeId && (notice.code === 'run_failed' || notice.code === 'run_warning'))
+    }))
+    if (!liveSnapshot || !projectId) {
+      return
+    }
+    const persistedNotices = liveSnapshot.notices.filter((notice) => {
+      return notice.node_id === nodeId && (notice.code === 'run_failed' || notice.code === 'run_warning')
+    })
+    if (!persistedNotices.length) {
+      return
+    }
+    try {
+      await Promise.all(persistedNotices.map((notice) => dismissNotice(notice.issue_id)))
+      await refreshSnapshot()
+    } catch {
+      // A stale runtime notice should not block the next run or editor open.
+    }
   }
 
   async function handleOpenEditorNotice(notice: AppNotice) {
@@ -3582,11 +3708,14 @@ function App() {
                   setPortActionMenu(null)
                 }}
                 onNodeMove={handleNodeMove}
-                onNodeResize={handleNodeResize}
-                onNodesDelete={handleNodesDelete}
-                draggedBlock={draggedPaletteEntry ? { title: draggedPaletteEntry.title, kind: draggedPaletteEntry.kind } : null}
-                onBlockDrop={handleBlockDrop}
-                onViewportChange={handlePaletteViewportChange}
+              onNodeResize={handleNodeResize}
+              onNodesDelete={handleNodesDelete}
+              draggedBlock={draggedPaletteEntry ? { title: draggedPaletteEntry.title, kind: draggedPaletteEntry.kind } : null}
+              onBlockDrop={handleBlockDrop}
+              onViewportChange={handlePaletteViewportChange}
+              nodeNoticeSeverityById={nodeNoticeSeverityById}
+              hoveredNoticeNodeId={hoveredNoticeNodeId}
+              focusedNotice={noticeFocusRequest}
               />
           ) : (
             <div className="empty-state">
@@ -3616,6 +3745,17 @@ function App() {
                 nodeActions={nodeActionsForNode(selectedNode)}
                 onUploadFile={handleUploadFile}
                 onOpenTemplate={openTemplateInfo}
+                existingNodeIds={existingNodeIds.filter((nodeId) => nodeId !== selectedNode.id)}
+                onRenameNode={handleRenameNode}
+                nodeIdEditDisabledReason={selectedNode.kind === 'notebook'
+                  ? activeEditorNodeIds.includes(selectedNode.id)
+                    ? 'Close the open editor before changing this notebook ID.'
+                    : selectedNode.orchestrator_state?.status === 'running' || runningNodeId === selectedNode.id
+                      ? 'Wait for this running notebook to finish before changing its ID.'
+                    : queuedNodeIds.includes(selectedNode.id)
+                      ? 'Wait for this queued notebook to start or finish before changing its ID.'
+                      : null
+                  : null}
               />
             ) : null}
           </div>
@@ -4097,7 +4237,8 @@ function App() {
       <NoticeOverlay
         notices={overlayNotices}
         onDismiss={(notice) => void handleDismissNotice(notice)}
-        onOpenNode={(nodeId) => selectSingleNode(nodeId)}
+        onFocusNotice={handleFocusNotice}
+        onHoverNoticeNode={setHoveredNoticeNodeId}
         onOpenEditor={(notice) => void handleOpenEditorNotice(notice)}
         onKillEditor={(notice) => void handleKillEditorNotice(notice)}
       />

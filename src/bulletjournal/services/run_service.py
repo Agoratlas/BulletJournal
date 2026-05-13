@@ -60,6 +60,9 @@ def _describe_node_label(title: str, node_id: str) -> str:
     return f'{_format_markdown_code(title)} ({_format_markdown_code(node_id)})'
 
 
+RUNTIME_NOTICE_CODES = ['run_failed', 'run_warning']
+
+
 class RunService:
     def __init__(self, project_service) -> None:
         self.project_service = project_service
@@ -521,6 +524,7 @@ class RunService:
                 active.current_node = current_node_id
                 active.current_node_started_at = utc_now_iso()
                 active.current_node_started_monotonic = time.monotonic()
+                self._clear_runtime_notices(current_node_id)
                 stdout_path, stderr_path = self._prepare_execution_log_files(run_id=run_id, node_id=current_node_id)
                 with self._lock:
                     self._orchestrator_node_states[current_node_id] = OrchestratorNodeState(
@@ -551,6 +555,7 @@ class RunService:
                     },
                 )
                 result = self._run_single_node(run_id, current_node_id, active)
+                self._record_run_warning_notices(run_id=run_id, node_id=current_node_id, result=result)
                 progress = result.get('progress') if isinstance(result.get('progress'), dict) else None
                 total_cells = progress.get('total_cells') if isinstance(progress, dict) else None
                 current_cell_number = progress.get('cell_number') if isinstance(progress, dict) else None
@@ -687,20 +692,45 @@ class RunService:
             'run_id': run_id,
             **result,
         }
-        issue_id = build_issue_id(
-            node_id=node_id,
-            severity=ValidationSeverity.ERROR,
-            code='run_failed',
-            message=message,
-            details=details,
-        )
         self.project_service.record_notice(
-            issue_id=issue_id,
+            issue_id=f'run_failed:{node_id}:{run_id}',
             node_id=None if node_id == 'project' else node_id,
             severity=ValidationSeverity.ERROR,
             code='run_failed',
             message=message,
             details=details,
+        )
+
+    def _record_run_warning_notices(self, *, run_id: str, node_id: str, result: dict[str, Any]) -> None:
+        raw_warnings = result.get('warnings')
+        if not isinstance(raw_warnings, list):
+            return
+        graph = self.project_service.graph()
+        node = next((entry for entry in graph.nodes if entry.id == node_id), None)
+        node_label = _describe_node_label(node.title, node.id) if node is not None else _format_markdown_code(node_id)
+        for index, warning in enumerate(raw_warnings, start=1):
+            if not isinstance(warning, dict):
+                continue
+            warning_message = str(warning.get('message') or 'Notebook emitted a runtime warning.')
+            details = {
+                'run_id': run_id,
+                'node_id': node_id,
+                'warning': warning,
+                'index': index,
+            }
+            self.project_service.record_notice(
+                issue_id=f'run_warning:{node_id}:{run_id}:{index}',
+                node_id=node_id,
+                severity=ValidationSeverity.WARNING,
+                code='run_warning',
+                message=f'Warning in {node_label}. {warning_message}',
+                details=details,
+            )
+
+    def _clear_runtime_notices(self, node_id: str) -> None:
+        self.project_service.require_project().state_db.dismiss_persistent_notices_for_node(
+            node_id,
+            RUNTIME_NOTICE_CODES,
         )
 
     def _bindings_for_node(self, node_id: str) -> dict[str, dict[str, Any]]:
@@ -773,6 +803,7 @@ class RunService:
         blockers = self.project_service.frozen_block_blockers_for_node_edit(node_id)
         if blockers:
             raise InvalidRequestError(self.project_service.freeze_block_message(blockers))
+        self._clear_runtime_notices(node_id)
         notebook_path = project.paths.notebook_path(node_id)
         source_hash = compute_source_hash(notebook_path)
         run_id = f'edit-{uuid.uuid4()}'

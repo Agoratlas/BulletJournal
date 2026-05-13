@@ -72,6 +72,14 @@ export function Pencil(props: SVGProps<SVGSVGElement>) {
   )
 }
 
+export function Check(props: SVGProps<SVGSVGElement>) {
+  return (
+    <IconBase {...props}>
+      <path d="m5 12 4.5 4.5L19 7" />
+    </IconBase>
+  )
+}
+
 export function X(props: SVGProps<SVGSVGElement>) {
   return (
     <IconBase {...props}>

@@ -274,6 +274,7 @@ export type GraphPatchOperation =
   | { type: 'remove_edge'; edge_id: string }
   | { type: 'update_node_layout'; node_id: string; x: number; y: number; w?: number; h?: number }
   | { type: 'update_node_title'; node_id: string; title: string }
+  | { type: 'rename_node'; node_id: string; new_node_id: string; title: string }
   | { type: 'update_constant_node'; node_id: string; data_type: string }
   | { type: 'update_organizer_ports'; node_id: string; ports: Array<{ key: string; name: string; data_type: string }> }
   | { type: 'update_area_style'; node_id: string; title_position: string; color: string; filled: boolean }

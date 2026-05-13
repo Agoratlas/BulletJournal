@@ -31,8 +31,8 @@ export function normalizeNodeId(value: string): string {
   return value
     .trim()
     .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '_')
-    .replace(/^_+|_+$/g, '')
+    .replace(/[^a-z0-9_]+/g, '_')
+    .replace(/_+/g, '_')
 }
 
 export function edgeIdForPorts(sourceNode: string, sourcePort: string, targetNode: string, targetPort: string): string {
@@ -597,6 +597,55 @@ export function applyOptimisticGraphOperations(snapshot: ProjectSnapshot, operat
       }
       continue
     }
+    if (type === 'rename_node') {
+      const nodeId = String(operation.node_id)
+      const newNodeId = String(operation.new_node_id ?? '').trim()
+      const title = String(operation.title ?? '').trim()
+      const node = next.graph.nodes.find((entry) => entry.id === nodeId)
+      if (node && newNodeId && title) {
+        node.id = newNodeId
+        node.title = title
+        if (node.kind === 'notebook') {
+          node.path = `${newNodeId}.py`
+        }
+        next.graph.layout.forEach((entry) => {
+          if (entry.node_id === nodeId) {
+            entry.node_id = newNodeId
+          }
+        })
+        next.graph.edges.forEach((edge) => {
+          if (edge.source_node === nodeId) {
+            edge.source_node = newNodeId
+          }
+          if (edge.target_node === nodeId) {
+            edge.target_node = newNodeId
+          }
+          edge.id = edgeIdForPorts(edge.source_node, edge.source_port, edge.target_node, edge.target_port)
+        })
+        next.artifacts.forEach((artifact) => {
+          if (artifact.node_id === nodeId) {
+            artifact.node_id = newNodeId
+          }
+        })
+        next.validation_issues.forEach((issue) => {
+          if (issue.node_id === nodeId) {
+            issue.node_id = newNodeId
+          }
+        })
+        next.notices.forEach((notice) => {
+          if (notice.node_id === nodeId) {
+            notice.node_id = newNodeId
+          }
+        })
+        next.runs.forEach((run) => {
+          renameNodeRefsInObject(run.target_json, nodeId, newNodeId)
+          renameNodeRefsInObject(run.source_snapshot_json, nodeId, newNodeId)
+          renameNodeRefsInObject(run.failure_json, nodeId, newNodeId)
+        })
+        changed = true
+      }
+      continue
+    }
     if (type === 'delete_node') {
       const nodeId = String(operation.node_id)
       next.graph.nodes = next.graph.nodes.filter((node) => node.id !== nodeId)
@@ -727,6 +776,48 @@ function cloneUiState(ui: NodeRecord['ui'] | undefined): NodeRecord['ui'] | unde
   }
 }
 
+function renameNodeRefsInObject(payload: unknown, oldNodeId: string, newNodeId: string): void {
+  if (!payload || typeof payload !== 'object') {
+    return
+  }
+  if (Array.isArray(payload)) {
+    payload.forEach((item) => renameNodeRefsInObject(item, oldNodeId, newNodeId))
+    return
+  }
+  const record = payload as Record<string, unknown>
+  for (const [key, value] of Object.entries(record)) {
+    if (key === 'node_id' && value === oldNodeId) {
+      record[key] = newNodeId
+      continue
+    }
+    if ((key === 'source_node' || key === 'target_node' || key === 'current_node') && value === oldNodeId) {
+      record[key] = newNodeId
+      continue
+    }
+    if ((key === 'node_ids' || key === 'plan') && Array.isArray(value)) {
+      record[key] = value.map((item) => item === oldNodeId ? newNodeId : item)
+      continue
+    }
+    if ((key === 'logical_artifact_id' || key === 'artifact' || key === 'source') && typeof value === 'string' && value.startsWith(`${oldNodeId}/`)) {
+      record[key] = `${newNodeId}${value.slice(oldNodeId.length)}`
+      continue
+    }
+    if (key === 'id' && value === oldNodeId && 'kind' in record && 'title' in record) {
+      record[key] = newNodeId
+      continue
+    }
+    renameNodeRefsInObject(value, oldNodeId, newNodeId)
+  }
+  if (
+    typeof record.source_node === 'string'
+    && typeof record.source_port === 'string'
+    && typeof record.target_node === 'string'
+    && typeof record.target_port === 'string'
+  ) {
+    record.id = edgeIdForPorts(record.source_node, record.source_port, record.target_node, record.target_port)
+  }
+}
+
 export const SNAPSHOT_REFRESH_EVENTS = [
   'artifact.state_changed',
   'checkpoint.created',
@@ -774,26 +865,29 @@ export function formatIssueDetails(details: Record<string, unknown>): string | n
   return JSON.stringify(details, null, 2)
 }
 
-export function nodeRunFailures(snapshot: ProjectSnapshot, nodeId: string) {
-  return snapshot.runs.filter((run) => {
-    if (run.status !== 'failed' || !run.failure_json) {
-      return false
-    }
-    if (typeof run.failure_json.node_id === 'string') {
-      return run.failure_json.node_id === nodeId
-    }
-    const target = run.target_json
-    if (typeof target.node_id === 'string') {
-      return target.node_id === nodeId
-    }
-    if (Array.isArray(target.plan)) {
-      return target.plan.includes(nodeId)
-    }
-    if (Array.isArray(target.node_ids)) {
-      return target.node_ids.includes(nodeId)
-    }
-    return false
-  })
+function runTargetsNode(run: ProjectSnapshot['runs'][number], nodeId: string) {
+  if (run.failure_json && typeof run.failure_json.node_id === 'string') {
+    return run.failure_json.node_id === nodeId
+  }
+  const target = run.target_json
+  if (typeof target.node_id === 'string') {
+    return target.node_id === nodeId
+  }
+  if (Array.isArray(target.plan)) {
+    return target.plan.includes(nodeId)
+  }
+  if (Array.isArray(target.node_ids)) {
+    return target.node_ids.includes(nodeId)
+  }
+  return false
+}
+
+export function latestNodeRunFailure(snapshot: ProjectSnapshot, nodeId: string) {
+  const run = snapshot.runs.find((entry) => runTargetsNode(entry, nodeId))
+  if (!run || run.status !== 'failed' || !run.failure_json) {
+    return null
+  }
+  return run
 }
 
 export function pipelineTopLeftForCenter(template: TemplateRecord, center: { x: number; y: number }): { x: number; y: number } {

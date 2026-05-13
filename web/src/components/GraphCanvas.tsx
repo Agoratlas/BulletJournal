@@ -66,6 +66,9 @@ type GraphCanvasProps = {
   draggedBlock: { title: string; kind: string } | null
   onBlockDrop: (x: number, y: number) => void
   onViewportChange: (viewport: { center: { x: number; y: number }; zoom: number }) => void
+  nodeNoticeSeverityById?: Record<string, 'error' | 'warning'>
+  hoveredNoticeNodeId?: string | null
+  focusedNotice?: { nodeId: string; token: number } | null
 }
 
 const NON_RUNNABLE_NODE_KINDS = new Set(['constant', 'file_input', 'organizer', 'area'])
@@ -101,6 +104,8 @@ type BulletJournalNodeData = {
   organizerGhostInsertIndex: number | null
   onNodeResizePreview: (nodeId: string, x: number, y: number, w: number, h: number) => void
   onNodeResize: (nodeId: string, x: number, y: number, w: number, h: number) => void
+  activeNoticeSeverity: 'error' | 'warning' | null
+  hoveredNotice: boolean
 }
 
 type ConnectionIntent = {
@@ -554,6 +559,8 @@ const BulletJournalNodeCard = memo(({ data, selected }: NodeProps<BulletJournalN
   const [runMenuOpen, setRunMenuOpen] = useState(false)
   const menuRef = useRef<HTMLDivElement | null>(null)
   const connectionIntent = useConnectionIntent()
+  const noticeClassName = data.activeNoticeSeverity ? `has-active-notice-${data.activeNoticeSeverity}` : ''
+  const hoveredNoticeClassName = data.hoveredNotice ? 'notice-hovered' : ''
 
   useEffect(() => {
     if (!isExecutionActive) {
@@ -614,9 +621,9 @@ const BulletJournalNodeCard = memo(({ data, selected }: NodeProps<BulletJournalN
     const organizerSlotCount = Math.max(1, outputsForNode(node).length + 1)
     const visibleGhostInsertIndex = data.organizerGhostInsertIndex ?? (outputs.length === 0 ? 0 : null)
     return (
-      <div
-        className={`rf-node organizer-node state-${node.state} ${node.ui?.frozen ? 'is-frozen' : ''} ${selected ? 'is-selected' : ''} ${hasBlockingValidationIssues ? 'has-validation-error' : ''}`}
-        title={validationSummary || undefined}
+        <div
+          className={`rf-node organizer-node state-${node.state} ${node.ui?.frozen ? 'is-frozen' : ''} ${selected ? 'is-selected' : ''} ${hasBlockingValidationIssues ? 'has-validation-error' : ''} ${noticeClassName} ${hoveredNoticeClassName}`}
+          title={validationSummary || undefined}
         onDoubleClick={(event) => {
           event.stopPropagation()
           onEditOrganizerNode(node.id)
@@ -711,7 +718,7 @@ const BulletJournalNodeCard = memo(({ data, selected }: NodeProps<BulletJournalN
 
     return (
       <div
-        className={`rf-node constant-node state-${node.state} ${node.ui?.frozen ? 'is-frozen' : ''} ${selected ? 'is-selected' : ''} ${hasBlockingValidationIssues ? 'has-validation-error' : ''}`}
+        className={`rf-node constant-node state-${node.state} ${node.ui?.frozen ? 'is-frozen' : ''} ${selected ? 'is-selected' : ''} ${hasBlockingValidationIssues ? 'has-validation-error' : ''} ${noticeClassName} ${hoveredNoticeClassName}`}
         title={validationSummary || `${preview.text} (${outputPort?.data_type ?? node.ui?.data_type ?? 'object'})`}
         style={{ '--constant-type-color': typeColor } as CSSProperties}
         onDoubleClick={(event) => {
@@ -747,7 +754,7 @@ const BulletJournalNodeCard = memo(({ data, selected }: NodeProps<BulletJournalN
 
   return (
     <div
-      className={`rf-node state-${node.state} ${node.ui?.frozen ? 'is-frozen' : ''} ${selected ? 'is-selected' : ''} ${hasBlockingValidationIssues ? 'has-validation-error' : ''} ${isExecutionActive ? 'execution-active' : ''} ${isExecutionQueued ? 'execution-queued' : ''} ${isExecutionComplete ? 'execution-complete' : ''}`}
+      className={`rf-node state-${node.state} ${node.ui?.frozen ? 'is-frozen' : ''} ${selected ? 'is-selected' : ''} ${hasBlockingValidationIssues ? 'has-validation-error' : ''} ${isExecutionActive ? 'execution-active' : ''} ${isExecutionQueued ? 'execution-queued' : ''} ${isExecutionComplete ? 'execution-complete' : ''} ${noticeClassName} ${hoveredNoticeClassName}`}
       title={validationSummary || undefined}
       onDoubleClick={(event) => {
         event.stopPropagation()
@@ -911,8 +918,8 @@ function isGhostHandle(handleId: string | null | undefined): boolean {
   return Boolean(handleId && (handleId.startsWith('ghost-in:') || handleId.startsWith('ghost-out:')))
 }
 
-export function GraphCanvas({ snapshot, serverNowMs = Date.now(), serverNowClientAnchorMs = Date.now(), selectedNodeIds, selectedEdgeIds, activeRunNodeId = null, queuedRunNodeIds = [], completedRunNodeIds = [], activeEditorNodeIds = [], onConnect, onEdgesChange, onSelectionChange, onNodeSelect, onEdgeSelect, onNodeContextMenu, onSelectionContextMenu, onPortContextMenu, onEditConstantNode, onEditFileNode, onEditOrganizerNode, onEditAreaNode, onOpenEditor, onKillEditor, onRunNode, onOpenArtifacts, onCanvasInteract, onCanvasClear, onNodeMove, onNodeResize, onNodesDelete, draggedBlock, onBlockDrop, onViewportChange }: GraphCanvasProps) {
-  const { screenToFlowPosition, setViewport } = useReactFlow()
+export function GraphCanvas({ snapshot, serverNowMs = Date.now(), serverNowClientAnchorMs = Date.now(), selectedNodeIds, selectedEdgeIds, activeRunNodeId = null, queuedRunNodeIds = [], completedRunNodeIds = [], activeEditorNodeIds = [], onConnect, onEdgesChange, onSelectionChange, onNodeSelect, onEdgeSelect, onNodeContextMenu, onSelectionContextMenu, onPortContextMenu, onEditConstantNode, onEditFileNode, onEditOrganizerNode, onEditAreaNode, onOpenEditor, onKillEditor, onRunNode, onOpenArtifacts, onCanvasInteract, onCanvasClear, onNodeMove, onNodeResize, onNodesDelete, draggedBlock, onBlockDrop, onViewportChange, nodeNoticeSeverityById = {}, hoveredNoticeNodeId = null, focusedNotice = null }: GraphCanvasProps) {
+  const { screenToFlowPosition, setCenter, setViewport } = useReactFlow()
   const store = useStoreApi()
   const updateNodeInternals = useUpdateNodeInternals()
   const shellRef = useRef<HTMLDivElement | null>(null)
@@ -927,6 +934,7 @@ export function GraphCanvas({ snapshot, serverNowMs = Date.now(), serverNowClien
   const [pendingLayoutVersion, setPendingLayoutVersion] = useState(0)
   const [nodeDimensions, setNodeDimensions] = useState<Record<string, { width: number; height: number }>>({})
   const lastHandleSignatureRef = useRef<Record<string, string>>({})
+  const lastFocusedNoticeTokenRef = useRef<number | null>(null)
 
   const organizerGhostByNodeId = useMemo(() => {
     const previews: Record<string, number | null> = {}
@@ -996,6 +1004,8 @@ export function GraphCanvas({ snapshot, serverNowMs = Date.now(), serverNowClien
           organizerGhostInsertIndex: organizerGhostByNodeId[node.id] ?? null,
           onNodeResizePreview: previewNodeResize,
           onNodeResize,
+          activeNoticeSeverity: nodeNoticeSeverityById[node.id] ?? null,
+          hoveredNotice: hoveredNoticeNodeId === node.id,
         },
         position: { x: layout?.x ?? 80, y: layout?.y ?? 80 },
         style: {
@@ -1010,7 +1020,7 @@ export function GraphCanvas({ snapshot, serverNowMs = Date.now(), serverNowClien
         zIndex: node.kind === 'area' ? -1 : 0,
       }
     })
-  }, [snapshot, serverNowMs, serverNowClientAnchorMs, selectedNodeIds, activeRunNodeId, queuedRunNodeIds, completedRunNodeIds, activeEditorNodeIds, onNodeContextMenu, onPortContextMenu, onEditConstantNode, onEditFileNode, onEditOrganizerNode, onEditAreaNode, onKillEditor, onNodeResize, onNodeSelect, onOpenArtifacts, onOpenEditor, onRunNode, nodeDimensions, organizerGhostByNodeId, pendingLayoutVersion])
+  }, [snapshot, serverNowMs, serverNowClientAnchorMs, selectedNodeIds, activeRunNodeId, queuedRunNodeIds, completedRunNodeIds, activeEditorNodeIds, onNodeContextMenu, onPortContextMenu, onEditConstantNode, onEditFileNode, onEditOrganizerNode, onEditAreaNode, onKillEditor, onNodeResize, onNodeSelect, onOpenArtifacts, onOpenEditor, onRunNode, nodeDimensions, organizerGhostByNodeId, pendingLayoutVersion, nodeNoticeSeverityById, hoveredNoticeNodeId])
 
   useEffect(() => {
     const currentNodeIds = new Set(snapshot.graph.nodes.map((node) => node.id))
@@ -1243,6 +1253,30 @@ export function GraphCanvas({ snapshot, serverNowMs = Date.now(), serverNowClien
       zoom: transform[2] ?? 1,
     })
   }, [onViewportChange, screenToFlowPosition, transform])
+
+  useEffect(() => {
+    if (!focusedNotice) {
+      return
+    }
+    if (lastFocusedNoticeTokenRef.current === focusedNotice.token) {
+      return
+    }
+    const layout = snapshot.graph.layout.find((entry) => entry.node_id === focusedNotice.nodeId)
+    if (!layout) {
+      return
+    }
+    lastFocusedNoticeTokenRef.current = focusedNotice.token
+    const width = nodeDimensions[focusedNotice.nodeId]?.width ?? layout.w ?? 360
+    const height = nodeDimensions[focusedNotice.nodeId]?.height ?? layout.h ?? 220
+    void setCenter(
+      layout.x + width / 2,
+      layout.y + height / 2,
+      {
+        zoom: GRAPH_DEFAULT_ZOOM,
+        duration: 220,
+      },
+    )
+  }, [focusedNotice, nodeDimensions, setCenter, snapshot.graph.layout])
 
   return (
     <div

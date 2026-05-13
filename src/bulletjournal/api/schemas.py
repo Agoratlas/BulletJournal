@@ -108,6 +108,13 @@ class UpdateNodeTitleOperation(StrictModel):
     title: str
 
 
+class RenameNodeOperation(StrictModel):
+    type: Literal['rename_node']
+    node_id: str
+    new_node_id: str
+    title: str
+
+
 class UpdateOrganizerPortsOperation(StrictModel):
     type: Literal['update_organizer_ports']
     node_id: str
@@ -150,6 +157,7 @@ GraphOperation = Annotated[
     | RemoveEdgeOperation
     | UpdateNodeLayoutOperation
     | UpdateNodeTitleOperation
+    | RenameNodeOperation
     | UpdateConstantNodeOperation
     | UpdateOrganizerPortsOperation
     | UpdateAreaStyleOperation

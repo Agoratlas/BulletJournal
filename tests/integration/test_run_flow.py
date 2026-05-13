@@ -1600,6 +1600,79 @@ if __name__ == '__main__':
     assert consumer['state'] == 'error'
 
 
+def test_run_failure_notice_keeps_node_in_error_until_dismissed(tmp_path) -> None:
+    project_root = init_project_root(tmp_path / 'project').root
+    app = create_app(project_path=project_root)
+    client = TestClient(app)
+    container = app.state.container
+
+    opened = client.get('/api/v1/project/snapshot')
+    graph_version = opened.json()['graph']['meta']['graph_version']
+
+    patch = client.patch(
+        '/api/v1/graph',
+        json={
+            'graph_version': graph_version,
+            'operations': [
+                {
+                    'type': 'add_notebook_node',
+                    'node_id': 'broken_node',
+                    'title': 'Broken Node',
+                }
+            ],
+        },
+    )
+    assert patch.status_code == 200
+
+    notebook_path = project_root / 'notebooks' / 'broken_node.py'
+    notebook_path.write_text(
+        """
+import marimo
+
+app = marimo.App()
+
+with app.setup:
+    from bulletjournal.runtime import artifacts
+
+@app.cell
+def _():
+    artifacts.push(1, name='value', data_type=int)
+    raise RuntimeError('boom')
+
+if __name__ == '__main__':
+    from bulletjournal.runtime.standalone import run_notebook_app
+
+    run_notebook_app(app, __file__)
+""".strip()
+        + '\n',
+        encoding='utf-8',
+    )
+    container.project_service.reparse_notebook_by_path(notebook_path)
+
+    run = client.post(
+        '/api/v1/nodes/broken_node/run',
+        json={'mode': 'run_stale', 'action': 'use_stale'},
+    )
+    assert run.status_code == 200
+    assert run.json()['status'] == 'failed'
+
+    snapshot = client.get('/api/v1/project/snapshot').json()
+    notice = next(notice for notice in snapshot['notices'] if notice['code'] == 'run_failed')
+    node = next(node for node in snapshot['graph']['nodes'] if node['id'] == 'broken_node')
+
+    assert node['state'] == 'error'
+    assert notice['node_id'] == 'broken_node'
+
+    dismissed = client.post(f'/api/v1/notices/{notice["issue_id"]}/dismiss')
+    assert dismissed.status_code == 200
+
+    snapshot = client.get('/api/v1/project/snapshot').json()
+    node = next(node for node in snapshot['graph']['nodes'] if node['id'] == 'broken_node')
+
+    assert all(entry['issue_id'] != notice['issue_id'] for entry in snapshot['notices'])
+    assert node['state'] == 'ready'
+
+
 def test_run_all_is_blocked_by_pending_file_input(tmp_path) -> None:
     project_root = init_project_root(tmp_path / 'project').root
     app = create_app(project_path=project_root)

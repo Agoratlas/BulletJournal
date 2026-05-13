@@ -367,6 +367,12 @@ class ProjectService:
             if issue.get('severity') == ValidationSeverity.ERROR.value:
                 validation_errors_by_node[str(issue['node_id'])] = True
         notices = self.notices()
+        runtime_error_notice_by_node: dict[str, bool] = {}
+        for notice in notices:
+            node_id = notice.get('node_id')
+            if notice.get('code') != 'run_failed' or not isinstance(node_id, str) or not node_id:
+                continue
+            runtime_error_notice_by_node[node_id] = True
         artifacts = project.state_db.list_artifact_heads()
         artifact_states_by_node: dict[str, list[str]] = {}
         for artifact in artifacts:
@@ -375,36 +381,6 @@ class ProjectService:
         execution_meta_by_node = project.state_db.list_orchestrator_execution_meta()
         orchestrator_state_by_node = self.run_service.orchestrator_state() if self.run_service is not None else {}
         node_payload = []
-        last_run_by_node: dict[str, bool] = {}
-        for run in runs:
-            raw_target = run.get('target_json')
-            target = raw_target if isinstance(raw_target, dict) else {}
-            target_node_ids: list[str] = []
-            failure = run.get('failure_json') if isinstance(run.get('failure_json'), dict) else None
-            failed_node_id = (
-                str(failure.get('node_id')).strip()
-                if isinstance(failure, dict) and failure.get('node_id') is not None
-                else ''
-            )
-            if run['status'] == 'failed' and failed_node_id:
-                target_node_ids.append(failed_node_id)
-            if isinstance(target, dict):
-                if not target_node_ids:
-                    node_id_value = target.get('node_id')
-                    if node_id_value is not None:
-                        target_node_ids.append(str(node_id_value))
-                if not target_node_ids:
-                    raw_node_ids = target.get('node_ids')
-                    if isinstance(raw_node_ids, list):
-                        target_node_ids.extend(str(node_id) for node_id in raw_node_ids)
-                if not target_node_ids:
-                    raw_plan = target.get('plan')
-                    if isinstance(raw_plan, list):
-                        target_node_ids.extend(str(node_id) for node_id in raw_plan)
-            deduped_target_node_ids = list(dict.fromkeys(target_node_ids))
-            for node_key in deduped_target_node_ids:
-                if node_key not in last_run_by_node:
-                    last_run_by_node[node_key] = run['status'] == 'failed'
         for node in graph.nodes:
             interface = interfaces.get(node.id)
             template_status = None
@@ -430,7 +406,7 @@ class ProjectService:
                     'orchestrator_state': orchestrator_state,
                     'state': derive_node_state(
                         artifact_states_by_node.get(node.id, []),
-                        run_failed=last_run_by_node.get(node.id, False),
+                        run_failed=runtime_error_notice_by_node.get(node.id, False),
                         running=orchestrator_state is not None and orchestrator_state.get('status') == 'running',
                         queued=orchestrator_state is not None and orchestrator_state.get('status') == 'queued',
                         validation_failed=validation_errors_by_node.get(node.id, False),

@@ -5,6 +5,7 @@ import io
 import json
 import sys
 import traceback
+import warnings
 from collections import deque
 from pathlib import Path
 
@@ -143,6 +144,7 @@ def main(argv: list[str] | None = None) -> int:
     context: RuntimeContext | None = None
     captured_stdout = io.StringIO()
     captured_stderr = io.StringIO()
+    captured_warnings: list[dict[str, object]] = []
     stdout_log_handle = None
     stderr_log_handle = None
     try:
@@ -194,8 +196,19 @@ def main(argv: list[str] | None = None) -> int:
                 notebook_path=Path(manifest.notebook_path),
                 progress_path=progress_path,
             )
-            with activate_runtime_context(context):
-                execute_notebook(Path(manifest.notebook_path), progress_path=progress_path)
+            with warnings.catch_warnings(record=True) as runtime_warnings:
+                warnings.simplefilter('always')
+                with activate_runtime_context(context):
+                    execute_notebook(Path(manifest.notebook_path), progress_path=progress_path)
+                captured_warnings = [
+                    {
+                        'message': str(item.message),
+                        'category': item.category.__name__,
+                        'filename': item.filename,
+                        'lineno': item.lineno,
+                    }
+                    for item in runtime_warnings
+                ]
     except Exception as exc:
         payload = {
             'status': 'error',
@@ -203,6 +216,8 @@ def main(argv: list[str] | None = None) -> int:
             'traceback': traceback.format_exc(),
             'outputs': [] if context is None else context.pushed_outputs,
         }
+        if captured_warnings:
+            payload['warnings'] = captured_warnings
         stdout_text = captured_stdout.getvalue()
         stderr_text = captured_stderr.getvalue()
         if stdout_text.strip():
@@ -217,6 +232,8 @@ def main(argv: list[str] | None = None) -> int:
         if stderr_log_handle is not None:
             stderr_log_handle.close()
     payload = {'status': 'ok', 'outputs': context.pushed_outputs}
+    if captured_warnings:
+        payload['warnings'] = captured_warnings
     stdout_text = captured_stdout.getvalue()
     stderr_text = captured_stderr.getvalue()
     if stdout_text.strip():
