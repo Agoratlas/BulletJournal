@@ -26,7 +26,7 @@ import ReactFlow, {
 } from 'reactflow'
 
 import { areaSettings } from '../lib/area'
-import { CONSTANT_NODE_PORT_CENTER_OFFSET, CONSTANT_NODE_WIDTH, ORGANIZER_NODE_PORT_CENTER_OFFSET, PORT_ROW_HEIGHT, STANDARD_NODE_PORT_CENTER_OFFSET, artifactCounts, artifactFor, artifactIsEmpty, assetsForNode, badgeForNode, formatDurationSeconds, inputBindingSource, inputState, inputsForNode, outputsForNode } from '../lib/helpers'
+import { CONSTANT_NODE_PORT_CENTER_OFFSET, CONSTANT_NODE_WIDTH, ORGANIZER_NODE_PORT_CENTER_OFFSET, PORT_ROW_HEIGHT, STANDARD_NODE_PORT_CENTER_OFFSET, artifactCounts, artifactFor, artifactIsEmpty, badgeForNode, formatDurationSeconds, inputBindingSource, inputState, inputsForNode, outputsForNode } from '../lib/helpers'
 import type { ArtifactState, NodeRecord, Port, ProjectSnapshot } from '../lib/types'
 import { ArtifactCounts } from './ArtifactCounts'
 import { Pencil, Play } from './Icons'
@@ -535,7 +535,6 @@ const BulletJournalNodeCard = memo(({ data, selected }: NodeProps<BulletJournalN
   const { node, snapshot, onSelect, onNodeContextMenu, onPortContextMenu, onEditConstantNode, onEditFileNode, onEditOrganizerNode, onEditAreaNode, onOpenEditor, onKillEditor, onRunNode, onOpenArtifacts } = data
   const inputs = inputsForNode(node)
   const outputs = outputsForNode(node)
-  const assets = assetsForNode(node)
   const counts = artifactCounts(snapshot, node.id)
   const badge = badgeForNode(snapshot, node)
   const validationIssues = validationIssuesForNode(snapshot, node.id)
@@ -817,7 +816,6 @@ const BulletJournalNodeCard = memo(({ data, selected }: NodeProps<BulletJournalN
           {outputs.map((port, index) => (
             <PortRow key={`out-${port.name}`} node={node} snapshot={snapshot} port={port} side="output" connectionIntent={connectionIntent} index={index} onPortContextMenu={onPortContextMenu} />
           ))}
-          {assets.length ? <div className="rf-asset-note">+ {assets.length} asset{assets.length === 1 ? '' : 's'}</div> : null}
         </div>
       </div>
       <div className="rf-node-footer">
@@ -902,7 +900,6 @@ function isCompatibleWithIntent(snapshot: ProjectSnapshot, node: NodeRecord, por
     const sourcePortName = intent.handleId.replace('out:', '')
     const sourceNode = snapshot.graph.nodes.find((item) => item.id === intent.nodeId)
     const sourcePort = outputsForNode(sourceNode ?? node).find((item) => item.name === sourcePortName)
-      ?? assetsForNode(sourceNode ?? node).find((item) => item.name === sourcePortName)
     return sourcePort?.data_type === port.data_type
   }
   if (side !== 'output' || intent.nodeId === node.id) {
@@ -1101,7 +1098,6 @@ export function GraphCanvas({ snapshot, serverNowMs = Date.now(), serverNowClien
         JSON.stringify({
           inputs: (node.interface?.inputs ?? []).map((port) => [port.name, port.data_type, port.declaration_index ?? null]),
           outputs: (node.interface?.outputs ?? []).map((port) => [port.name, port.data_type, port.declaration_index ?? null]),
-          assets: (node.interface?.assets ?? []).map((port) => [port.name, port.data_type, port.declaration_index ?? null]),
           organizerGhostInsertIndex: node.kind === 'organizer' ? (organizerGhostByNodeId[node.id] ?? null) : null,
         }),
       ]),
@@ -1399,9 +1395,9 @@ export function GraphCanvas({ snapshot, serverNowMs = Date.now(), serverNowClien
           const targetPortName = connection.targetHandle.replace('in:', '')
           const sourcePort = sourceGhost
             ? inputsForNode(targetNode).find((item) => item.name === targetPortName)
-            : [...outputsForNode(sourceNode), ...assetsForNode(sourceNode)].find((item) => item.name === sourcePortName)
+            : outputsForNode(sourceNode).find((item) => item.name === sourcePortName)
           const targetPort = targetGhost
-            ? [...outputsForNode(sourceNode), ...assetsForNode(sourceNode)].find((item) => item.name === sourcePortName)
+            ? outputsForNode(sourceNode).find((item) => item.name === sourcePortName)
             : inputsForNode(targetNode).find((item) => item.name === targetPortName)
           return Boolean(sourcePort && targetPort && sourcePort.data_type === targetPort.data_type)
         }}

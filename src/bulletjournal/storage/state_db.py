@@ -397,7 +397,7 @@ class StateDB:
         now = utc_now_iso()
         with self._connect() as connection:
             connection.execute(
-                'INSERT OR IGNORE INTO artifact_objects '
+                'INSERT OR IGNORE INTO objects '
                 '(artifact_hash, storage_kind, data_type, size_bytes, extension, mime_type, preview_json, created_at, '
                 'last_accessed_at, nondeterministic) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)',
                 (
@@ -417,7 +417,7 @@ class StateDB:
     def touch_artifact_object(self, artifact_hash: str) -> None:
         with self._connect() as connection:
             connection.execute(
-                'UPDATE artifact_objects SET last_accessed_at = ? WHERE artifact_hash = ?',
+                'UPDATE objects SET last_accessed_at = ? WHERE artifact_hash = ?',
                 (utc_now_iso(), artifact_hash),
             )
             connection.commit()
@@ -499,7 +499,7 @@ class StateDB:
                 'ao.size_bytes, ao.extension, ao.mime_type, ao.preview_json '
                 'FROM artifact_heads ah '
                 'LEFT JOIN artifact_versions av ON av.version_id = ah.current_version_id '
-                'LEFT JOIN artifact_objects ao ON ao.artifact_hash = av.artifact_hash '
+                'LEFT JOIN objects ao ON ao.artifact_hash = av.artifact_hash '
                 'WHERE ah.node_id = ? AND ah.artifact_name = ?',
                 (node_id, artifact_name),
             ).fetchone()
@@ -514,7 +514,7 @@ class StateDB:
                 'ao.size_bytes, ao.extension, ao.mime_type, ao.preview_json '
                 'FROM artifact_heads ah '
                 'LEFT JOIN artifact_versions av ON av.version_id = ah.current_version_id '
-                'LEFT JOIN artifact_objects ao ON ao.artifact_hash = av.artifact_hash '
+                'LEFT JOIN objects ao ON ao.artifact_hash = av.artifact_hash '
                 'ORDER BY ah.node_id, ah.artifact_name'
             ).fetchall()
         return [self._row_to_artifact(row) for row in rows]

@@ -271,7 +271,7 @@ class ArtifactService:
         if interface is None:
             raise InvalidRequestError(f'Node `{node_id}` does not have a parsed interface yet.')
         changed_artifacts: list[str] = []
-        for port in interface.get('outputs', []) + interface.get('assets', []):
+        for port in interface.get('outputs', []):
             artifact_name = str(port['name'])
             head = self.project_service.require_project().state_db.get_artifact_head(node_id, artifact_name)
             if head is None or head.get('current_version_id') is None:

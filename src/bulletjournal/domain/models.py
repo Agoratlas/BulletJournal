@@ -134,7 +134,6 @@ class NotebookInterface:
     source_hash: str
     inputs: list[Port] = field(default_factory=list)
     outputs: list[Port] = field(default_factory=list)
-    assets: list[Port] = field(default_factory=list)
     docs: str | None = None
     issues: list[ValidationIssue] = field(default_factory=list)
 
@@ -144,7 +143,6 @@ class NotebookInterface:
             'source_hash': self.source_hash,
             'inputs': [port.to_dict() for port in self.inputs],
             'outputs': [port.to_dict() for port in self.outputs],
-            'assets': [port.to_dict() for port in self.assets],
             'docs': self.docs,
             'issues': [issue.to_dict() for issue in self.issues],
         }

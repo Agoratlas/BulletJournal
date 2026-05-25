@@ -103,7 +103,7 @@ def _binding_for_port(edges: list[Edge], node_id: str, port: Port) -> Binding:
 
 
 def _outputs_for_interface(interface: NotebookInterface) -> dict[str, Port]:
-    return {port.name: port for port in [*interface.outputs, *interface.assets]}
+    return {port.name: port for port in interface.outputs}
 
 
 def _record_run_started(context: RuntimeContext) -> None:
@@ -142,7 +142,7 @@ def _mark_downstream_stale(context: RuntimeContext) -> None:
             context.paths.notebook_path(downstream_node),
             node_id=downstream_node,
         )
-        for port in [*interface.outputs, *interface.assets]:
+        for port in interface.outputs:
             head = context.db.get_artifact_head(downstream_node, port.name)
             if head and head['current_version_id'] is not None:
                 from bulletjournal.domain.enums import ArtifactState

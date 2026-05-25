@@ -13,7 +13,6 @@ def test_parser_extracts_interface_and_docs() -> None:
 
     assert [port.name for port in interface.inputs] == ['limit']
     assert [port.name for port in interface.outputs] == ['frame', 'summary']
-    assert [port.name for port in interface.assets] == []
     assert interface.outputs[0].data_type == 'pandas.DataFrame'
     assert interface.inputs[0].has_default is True
     assert extract_notebook_docs(notebook) == '# Notebook docs'
@@ -80,7 +79,6 @@ def _(second, first):
 
     assert [port.name for port in interface.inputs] == ['second', 'first']
     assert [port.name for port in interface.outputs] == ['zeta', 'alpha', 'later_asset', 'earlier_asset']
-    assert [port.name for port in interface.assets] == []
 
 
 def test_parser_allows_matching_input_and_output_names(tmp_path) -> None:

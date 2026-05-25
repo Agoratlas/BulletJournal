@@ -410,7 +410,7 @@ class RunService:
                 'kind': port.get('kind', 'value'),
                 'direction': 'output',
             }
-            for port in interface.get('outputs', []) + interface.get('assets', [])
+            for port in interface.get('outputs', [])
         }
         manifest = RunManifest(
             project_root=str(project.paths.root),
@@ -769,7 +769,7 @@ class RunService:
         interface = self.project_service.latest_interface(node_id)
         if interface is None:
             return True
-        output_names = [str(port['name']) for port in interface.get('outputs', []) + interface.get('assets', [])]
+        output_names = [str(port['name']) for port in interface.get('outputs', [])]
         if not output_names:
             return False
         state_db = self.project_service.require_project().state_db
@@ -869,7 +869,7 @@ class RunService:
                 'kind': port.get('kind', 'value'),
                 'direction': 'output',
             }
-            for port in interface.get('outputs', []) + interface.get('assets', [])
+            for port in interface.get('outputs', [])
         }
 
     def _prepare_execution_log_files(self, *, run_id: str, node_id: str) -> tuple[Path, Path]:

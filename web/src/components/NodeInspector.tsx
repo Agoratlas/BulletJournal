@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 
 import { executionLogDownloadUrl, getExecutionLogs } from '../lib/api'
-import { artifactCounts, artifactFor, artifactIsEmpty, assetsForNode, badgeForNode, formatBytes, formatDurationSeconds, formatTimestamp, inputBindingSource, inputState, templateByRef } from '../lib/helpers'
+import { artifactCounts, artifactFor, artifactIsEmpty, badgeForNode, formatBytes, formatDurationSeconds, formatTimestamp, inputBindingSource, inputState, templateByRef } from '../lib/helpers'
 import { formatIssueDetails, frozenFileBlockMessage, normalizeNodeId, validationIssuesForNode } from '../lib/appHelpers'
 import type { NodeActionItem } from '../appTypes'
 import type { ExecutionLogSummary, NodeRecord, ProjectSnapshot } from '../lib/types'
@@ -450,7 +450,7 @@ export function NodeInspector({
       <div className="inspector-block">
         <h3>Outputs</h3>
         <div className="stack-list">
-          {[...(node.interface?.outputs ?? []), ...assetsForNode(node)].map((port) => {
+          {(node.interface?.outputs ?? []).map((port) => {
             const artifact = artifactFor(snapshot, node.id, port.name)
             const state = artifact?.state ?? 'pending'
             return (
@@ -465,7 +465,7 @@ export function NodeInspector({
               </div>
             )
           })}
-          {!(node.interface?.outputs?.length || assetsForNode(node).length) ? <p className="muted-copy">No outputs.</p> : null}
+          {!node.interface?.outputs?.length ? <p className="muted-copy">No outputs.</p> : null}
         </div>
       </div>
 

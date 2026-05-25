@@ -959,7 +959,7 @@ function App() {
     const outputMutationBlockedReason = freezeBlockedOutputMutations.length ? freezeBlockMessage(freezeBlockedOutputMutations) : undefined
     const deleteBlockedReason = deleteFrozenBlockers.length ? freezeBlockMessage(deleteFrozenBlockers) : undefined
     const artifactHeads = liveSnapshot
-      ? [...(node.interface?.outputs ?? []), ...(node.interface?.assets ?? [])]
+      ? (node.interface?.outputs ?? [])
           .map((port) => artifactFor(liveSnapshot, node.id, port.name))
           .filter((artifact): artifact is ArtifactRecord => artifact !== undefined && artifact.current_version_id !== null)
       : []
@@ -1108,7 +1108,7 @@ function App() {
       if (!liveSnapshot) {
         return false
       }
-      return [...(node.interface?.outputs ?? []), ...(node.interface?.assets ?? [])]
+      return (node.interface?.outputs ?? [])
         .some((port) => artifactFor(liveSnapshot, node.id, port.name)?.current_version_id !== null)
     }).map((node) => node.id)
     const staleMutationNodes = menuNodes.filter((node) => {
@@ -1118,7 +1118,7 @@ function App() {
       if (node.kind === 'constant') {
         return false
       }
-      return [...(node.interface?.outputs ?? []), ...(node.interface?.assets ?? [])]
+      return (node.interface?.outputs ?? [])
         .some((port) => artifactFor(liveSnapshot, node.id, port.name)?.state !== 'stale')
     })
     const readyMutationNodes = menuNodes.filter((node) => {
@@ -1128,7 +1128,7 @@ function App() {
       if (node.kind === 'constant') {
         return false
       }
-      const hasStaleOutputs = [...(node.interface?.outputs ?? []), ...(node.interface?.assets ?? [])]
+      const hasStaleOutputs = (node.interface?.outputs ?? [])
         .some((port) => artifactFor(liveSnapshot, node.id, port.name)?.state === 'stale')
       return hasStaleOutputs && nodeInputsAreReady(node)
     })
@@ -3030,7 +3030,7 @@ function App() {
       const oppositePortName = oppositeHandleId.replace(/^out:|^in:/, '')
       const oppositePort = sourceGhost
         ? inputsForNode(oppositeNode).find((port) => port.name === oppositePortName)
-        : [...outputsForNode(oppositeNode), ...(oppositeNode.interface?.assets ?? [])].find((port) => port.name === oppositePortName)
+        : outputsForNode(oppositeNode).find((port) => port.name === oppositePortName)
       if (!oppositePort) {
         return
       }

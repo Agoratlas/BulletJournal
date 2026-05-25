@@ -305,7 +305,7 @@ class RuntimeContext:
             return
         self.source_hash = interface.source_hash
         self.bindings = _live_bindings_for_node(graph, interface.inputs, node_id=self.node_id)
-        self.outputs = {port.name: port for port in [*interface.outputs, *interface.assets]}
+        self.outputs = {port.name: port for port in interface.outputs}
         self.interactive_contract_key = current_key
 
     def _interactive_contract_key_for_current_state(self) -> tuple[float | None, str]:

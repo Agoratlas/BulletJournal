@@ -131,7 +131,7 @@ def test_state_db_delete_node_state_removes_all_visible_node_records(tmp_path) -
         'node_a',
         'source-a',
         'docs',
-        {'node_id': 'node_a', 'source_hash': 'source-a', 'inputs': [], 'outputs': [], 'assets': [], 'issues': []},
+        {'node_id': 'node_a', 'source_hash': 'source-a', 'inputs': [], 'outputs': [], 'issues': []},
     )
     db.replace_validation_issues(
         'node_a',
@@ -305,7 +305,7 @@ def test_state_db_rename_node_state_updates_all_node_id_indexes_and_payloads(tmp
         'node_a',
         'source-a',
         'docs',
-        {'node_id': 'node_a', 'source_hash': 'source-a', 'inputs': [], 'outputs': [], 'assets': [], 'issues': []},
+        {'node_id': 'node_a', 'source_hash': 'source-a', 'inputs': [], 'outputs': [], 'issues': []},
     )
     db.replace_validation_issues(
         'node_a',

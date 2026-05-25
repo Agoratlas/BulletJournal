@@ -10,6 +10,7 @@ import pytest
 
 import bulletjournal.storage.project_archive as project_archive_module
 from bulletjournal.api.app import create_app
+from bulletjournal.domain.errors import ProjectValidationError
 from bulletjournal.services.template_service import TemplateService
 from bulletjournal.storage.project_archive import export_project_archive, import_project_archive
 from bulletjournal.storage.project_fs import init_project_root
@@ -89,6 +90,26 @@ def test_project_archive_export_reraises_missing_non_sidecar(monkeypatch: pytest
 
     with pytest.raises(FileNotFoundError):
         export_project_archive(project_root, archive_path, include_artifacts=False)
+
+
+def test_project_archive_import_rejects_schema_version_1(tmp_path: Path) -> None:
+    project_root = init_project_root(tmp_path / 'project', project_id='study-a').root
+    archive_path = tmp_path / 'study-a.zip'
+    invalid_archive_path = tmp_path / 'study-a-invalid.zip'
+
+    export_project_archive(project_root, archive_path, include_artifacts=False)
+
+    with zipfile.ZipFile(archive_path) as source_zip, zipfile.ZipFile(invalid_archive_path, 'w') as target_zip:
+        for info in source_zip.infolist():
+            payload = source_zip.read(info.filename)
+            if info.filename == 'project/metadata/project.json':
+                project_json = json.loads(payload.decode('utf-8'))
+                project_json['schema_version'] = 1
+                payload = json.dumps(project_json).encode('utf-8')
+            target_zip.writestr(info, payload)
+
+    with pytest.raises(ProjectValidationError, match='Schema version 1 projects are no longer supported'):
+        import_project_archive(invalid_archive_path, tmp_path / 'imported-invalid')
 
 
 def test_template_service_discovers_external_provider(monkeypatch, tmp_path: Path) -> None:

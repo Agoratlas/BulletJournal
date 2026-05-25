@@ -266,10 +266,7 @@ def validate_pipeline_template_definition(
         target_interface = interfaces_by_node.get(target_node)
         if source_interface is None or target_interface is None:
             continue
-        source_type = _port_data_type(
-            source_interface.get('outputs', []) + source_interface.get('assets', []),
-            source_port,
-        )
+        source_type = _port_data_type(source_interface.get('outputs', []), source_port)
         target_type = _port_data_type(target_interface.get('inputs', []), target_port)
         if source_type is None:
             issues.append(
@@ -352,7 +349,7 @@ def _pipeline_node_interface(
             kind='file',
             direction='output',
         )
-        return {'inputs': [], 'outputs': [output.to_dict()], 'assets': []}
+        return {'inputs': [], 'outputs': [output.to_dict()]}
     if kind_value == NodeKind.CONSTANT.value:
         artifact_name = _pipeline_constant_name(raw_node)
         data_type = _pipeline_constant_data_type(raw_node)
@@ -365,7 +362,7 @@ def _pipeline_node_interface(
             kind='file' if data_type == 'file' else 'value',
             direction='output',
         )
-        return {'inputs': [], 'outputs': [output.to_dict()], 'assets': []}
+        return {'inputs': [], 'outputs': [output.to_dict()]}
     if kind_value == NodeKind.ORGANIZER.value:
         interface = organizer_interface_for_ports(
             node_id=str(raw_node.get('id') or 'organizer'),
@@ -373,7 +370,7 @@ def _pipeline_node_interface(
         )
         return interface.to_dict()
     if kind_value == NodeKind.AREA.value:
-        return {'inputs': [], 'outputs': [], 'assets': []}
+        return {'inputs': [], 'outputs': []}
     template_ref = str(raw_node.get('template_ref') or '')
     template_path = notebook_paths_by_ref.get(template_ref)
     if template_path is None:

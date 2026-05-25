@@ -29,16 +29,12 @@ export function outputsForNode(node: NodeRecord): Port[] {
   return node.interface?.outputs ?? []
 }
 
-export function assetsForNode(node: NodeRecord): Port[] {
-  return node.interface?.assets ?? []
-}
-
 export function artifactsForDisplay(snapshot: ProjectSnapshot, artifacts: ArtifactRecord[]): ArtifactRecord[] {
   const nodeOrder = new Map(snapshot.graph.nodes.map((node, index) => [node.id, index]))
   const artifactOrder = new Map<string, Map<string, number>>()
 
   for (const node of snapshot.graph.nodes) {
-    const ports = [...(node.interface?.outputs ?? []), ...(node.interface?.assets ?? [])]
+    const ports = node.interface?.outputs ?? []
     if (!ports.length) {
       continue
     }

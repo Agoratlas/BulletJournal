@@ -13,7 +13,6 @@ class NodeKind(StrEnum):
 
 class ArtifactRole(StrEnum):
     OUTPUT = 'output'
-    ASSET = 'asset'
 
 
 class ArtifactState(StrEnum):

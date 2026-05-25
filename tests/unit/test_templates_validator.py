@@ -21,7 +21,6 @@ def _interface(
     *,
     inputs: list[Port] | None = None,
     outputs: list[Port] | None = None,
-    assets: list[Port] | None = None,
     issues=None,
 ) -> NotebookInterface:
     return NotebookInterface(
@@ -29,7 +28,6 @@ def _interface(
         source_hash='hash',
         inputs=inputs or [],
         outputs=outputs or [],
-        assets=assets or [],
         issues=issues or [],
     )
 
@@ -101,7 +99,7 @@ def test_pipeline_node_interface_builds_constant_output() -> None:
     )
 
     assert interface['inputs'] == []
-    assert interface['assets'] == []
+    assert 'assets' not in interface
     assert interface['outputs'][0]['name'] == 'dataset'
     assert interface['outputs'][0]['data_type'] == 'file'
     assert interface['outputs'][0]['role'] == ArtifactRole.OUTPUT.value

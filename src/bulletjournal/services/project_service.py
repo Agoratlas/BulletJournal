@@ -188,7 +188,6 @@ class ProjectService:
                     declaration_index=0,
                 )
             ],
-            assets=[],
             docs='File input node.',
             issues=[],
         )
@@ -211,7 +210,6 @@ class ProjectService:
                     declaration_index=0,
                 )
             ],
-            assets=[],
             docs='Constant block.',
             issues=[],
         )

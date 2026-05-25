@@ -86,7 +86,6 @@ def parse_notebook_interface(path: NotebookSource, node_id: str) -> NotebookInte
 
     inputs: list[Port] = []
     outputs: list[Port] = []
-    assets: list[Port] = []
     seen_input_names: set[str] = set()
     seen_output_names: set[str] = set()
     exported_names: dict[str, int] = {}
@@ -126,19 +125,6 @@ def parse_notebook_interface(path: NotebookSource, node_id: str) -> NotebookInte
                         continue
                     seen_input_names.add(port.name)
                     inputs.append(port)
-                elif port.role == ArtifactRole.OUTPUT:
-                    if port.name in seen_output_names:
-                        issues.append(
-                            build_issue(
-                                node_id=node_id,
-                                severity=ValidationSeverity.ERROR,
-                                code='duplicate_port',
-                                message=f'Duplicate artifact name `{port.name}`.',
-                            )
-                        )
-                        continue
-                    seen_output_names.add(port.name)
-                    outputs.append(port)
                 else:
                     if port.name in seen_output_names:
                         issues.append(
@@ -151,7 +137,7 @@ def parse_notebook_interface(path: NotebookSource, node_id: str) -> NotebookInte
                         )
                         continue
                     seen_output_names.add(port.name)
-                    assets.append(port)
+                    outputs.append(port)
         _collect_duplicate_export_issues(cell, node_id=node_id, exported_names=exported_names, issues=issues)
 
     issues = sorted(issues, key=lambda item: (item.severity.value, item.code, item.message))
@@ -161,7 +147,6 @@ def parse_notebook_interface(path: NotebookSource, node_id: str) -> NotebookInte
         source_hash=source_hash,
         inputs=inputs,
         outputs=outputs,
-        assets=assets,
         docs=docs,
         issues=issues,
     )

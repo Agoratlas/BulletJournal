@@ -6,7 +6,7 @@ export type Port = {
   name: string
   label?: string | null
   data_type: string
-  role: 'output' | 'asset' | null
+  role: 'output' | null
   description: string | null
   default: unknown
   has_default: boolean
@@ -60,7 +60,6 @@ export type NodeRecord = {
     source_hash: string
     inputs: Port[]
     outputs: Port[]
-    assets: Port[]
     docs: string | null
     issues: ValidationIssue[]
   } | null
@@ -129,7 +128,7 @@ export type ArtifactRecord = {
   artifact_name: string
   current_version_id: number | null
   state: ArtifactState
-  role: 'output' | 'asset' | null
+  role: 'output' | null
   artifact_hash: string | null
   source_hash: string | null
   upstream_code_hash: string | null

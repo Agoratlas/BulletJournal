@@ -5,10 +5,11 @@ import pandas as pd
 import pytest
 
 from bulletjournal.domain.enums import NodeKind
+from bulletjournal.domain.errors import ProjectValidationError
 from bulletjournal.domain.models import Edge, LayoutEntry, Node
 from bulletjournal.storage.graph_store import GraphStore
 from bulletjournal.storage.object_store import ObjectStore
-from bulletjournal.storage.project_fs import init_project_root
+from bulletjournal.storage.project_fs import init_project_root, require_project_root
 
 
 def test_project_init_and_graph_roundtrip(tmp_path) -> None:
@@ -28,6 +29,18 @@ def test_project_init_defaults_project_id_from_directory_name(tmp_path) -> None:
     project_json = json.loads(paths.project_json_path.read_text(encoding='utf-8'))
 
     assert project_json['project_id'] == 'my_study'
+    assert project_json['schema_version'] == 2
+    assert paths.object_store_dir == paths.root / 'objects'
+
+
+def test_require_project_root_rejects_schema_version_1(tmp_path) -> None:
+    paths = init_project_root(tmp_path / 'project')
+    project_json = json.loads(paths.project_json_path.read_text(encoding='utf-8'))
+    project_json['schema_version'] = 1
+    paths.project_json_path.write_text(json.dumps(project_json), encoding='utf-8')
+
+    with pytest.raises(ProjectValidationError, match='Schema version 1 projects are no longer supported'):
+        require_project_root(paths.root)
 
 
 def test_object_store_persists_dataframe(tmp_path) -> None:

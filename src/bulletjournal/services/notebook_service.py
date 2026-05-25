@@ -89,7 +89,7 @@ class NotebookService:
     ) -> list[dict[str, Any]]:
         project = self.project_service.require_project()
         previous_outputs = _output_ports(previous)
-        current_outputs = {port.name: port for port in [*current.outputs, *current.assets]}
+        current_outputs = {port.name: port for port in current.outputs}
         removed_output_names = [
             name
             for name, previous_port in previous_outputs.items()
@@ -104,7 +104,7 @@ class NotebookService:
             if name not in current_input_names or _input_type(current, name) != previous_port['data_type']
         ]
 
-        for port in [*current.outputs, *current.assets]:
+        for port in current.outputs:
             project.state_db.ensure_artifact_head(node_id, port.name, ArtifactState.PENDING)
 
         for name in removed_output_names:
@@ -152,7 +152,7 @@ class NotebookService:
         interface_json = project.state_db.latest_interface_json(node_id)
         if interface_json is None:
             return
-        for port in interface_json.get('outputs', []) + interface_json.get('assets', []):
+        for port in interface_json.get('outputs', []):
             project.state_db.ensure_artifact_head(node_id, port['name'], ArtifactState.PENDING)
             head = project.state_db.get_artifact_head(node_id, port['name'])
             if head and head['current_version_id'] is not None:
@@ -162,8 +162,7 @@ class NotebookService:
 def _output_ports(interface_json: dict[str, Any] | None) -> dict[str, dict[str, Any]]:
     if interface_json is None:
         return {}
-    ports = interface_json.get('outputs', []) + interface_json.get('assets', [])
-    return {port['name']: port for port in ports}
+    return {port['name']: port for port in interface_json.get('outputs', [])}
 
 
 def _input_ports(interface_json: dict[str, Any] | None) -> dict[str, dict[str, Any]]:

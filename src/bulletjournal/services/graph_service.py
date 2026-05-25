@@ -298,7 +298,7 @@ class GraphService:
                 continue
             if interface is None:
                 continue
-            for port in interface.get('outputs', []) + interface.get('assets', []):
+            for port in interface.get('outputs', []):
                 head = project.state_db.get_artifact_head(downstream_node, port['name'])
                 if head and head['current_version_id'] is not None:
                     old_state = head['state']
@@ -337,7 +337,7 @@ class GraphService:
             input_hashes.append(metadata['artifact_hash'])
             input_code_hashes.append(metadata['upstream_code_hash'])
 
-        for port in interface.get('outputs', []) + interface.get('assets', []):
+        for port in interface.get('outputs', []):
             artifact_name = str(port['name'])
             head = project.state_db.get_artifact_head(node_id, artifact_name)
             if head is None or head.get('current_version_id') is None:
@@ -745,7 +745,7 @@ class GraphService:
         if node.kind == NodeKind.ORGANIZER:
             return organizer_interface_for_node(node).to_dict()
         if node.kind == NodeKind.AREA:
-            return {'inputs': [], 'outputs': [], 'assets': []}
+            return {'inputs': [], 'outputs': []}
         return self.project_service.latest_interface(node_id)
 
     def _inline_notebook_interface(self, *, source_text: str, node_id: str) -> dict[str, Any]:
@@ -805,9 +805,7 @@ class GraphService:
         source_port = str(operation['source_port'])
         target_node = str(operation['target_node'])
         target_port = str(operation['target_port'])
-        source_type = _port_data_type(
-            source_interface.get('outputs', []) + source_interface.get('assets', []), source_port
-        )
+        source_type = _port_data_type(source_interface.get('outputs', []), source_port)
         target_type = _port_data_type(target_interface.get('inputs', []), target_port)
         if source_type is None:
             raise GraphValidationError(f'Unknown source port `{source_port}`.')

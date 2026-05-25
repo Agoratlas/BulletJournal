@@ -30,12 +30,8 @@ class ProjectPaths:
         return self.root / 'notebooks'
 
     @property
-    def artifacts_dir(self) -> Path:
-        return self.root / 'artifacts'
-
-    @property
     def object_store_dir(self) -> Path:
-        return self.artifacts_dir / 'objects'
+        return self.root / 'objects'
 
     @property
     def metadata_dir(self) -> Path:
@@ -89,7 +85,6 @@ def is_project_root(path: Path) -> bool:
     required_directories = [
         paths.graph_dir,
         paths.notebooks_dir,
-        paths.artifacts_dir,
         paths.object_store_dir,
         paths.metadata_dir,
         paths.checkpoints_dir,
@@ -168,16 +163,35 @@ def load_project_json(paths: ProjectPaths) -> dict[str, object]:
     return json.loads(paths.project_json_path.read_text(encoding='utf-8'))
 
 
+def validate_project_schema_version(project_json: dict[str, object], *, source: str) -> None:
+    raw_version = project_json.get('schema_version')
+    try:
+        version = int(raw_version)
+    except (TypeError, ValueError) as exc:
+        raise ProjectValidationError(f'{source} is missing a valid `schema_version`.') from exc
+    if version != PROJECT_SCHEMA_VERSION:
+        raise ProjectValidationError(
+            f'Unsupported BulletJournal project schema version {version}; expected {PROJECT_SCHEMA_VERSION}. '
+            'Schema version 1 projects are no longer supported.'
+        )
+
+
 def require_project_root(path: Path) -> ProjectPaths:
     paths = ProjectPaths(path.resolve())
+    project_json: dict[str, object] | None = None
+    if paths.project_json_path.is_file():
+        project_json = load_project_json(paths)
+        validate_project_schema_version(project_json, source=str(paths.project_json_path))
     if not is_project_root(paths.root):
         raise ProjectValidationError(f'{paths.root} is not a valid BulletJournal project root.')
+    if project_json is None:
+        project_json = load_project_json(paths)
+    validate_project_schema_version(project_json, source=str(paths.project_json_path))
+    validate_project_id(str(project_json.get('project_id') or ''))
     ensure_directory(paths.temp_dir)
     ensure_directory(paths.execution_logs_dir)
     ensure_directory(paths.uploads_dir)
     ensure_directory(paths.worker_temp_dir)
-    project_json = load_project_json(paths)
-    validate_project_id(str(project_json.get('project_id') or ''))
     return paths
 
 

@@ -33,7 +33,7 @@ MIGRATIONS: list[tuple[str, str]] = [
             created_at TEXT NOT NULL
         );
 
-        CREATE TABLE IF NOT EXISTS artifact_objects (
+        CREATE TABLE IF NOT EXISTS objects (
             artifact_hash TEXT PRIMARY KEY,
             storage_kind TEXT NOT NULL,
             data_type TEXT NOT NULL,
@@ -59,7 +59,7 @@ MIGRATIONS: list[tuple[str, str]] = [
             lineage_mode TEXT NOT NULL,
             created_at TEXT NOT NULL,
             warning_json TEXT NOT NULL DEFAULT '[]',
-            FOREIGN KEY (artifact_hash) REFERENCES artifact_objects (artifact_hash)
+            FOREIGN KEY (artifact_hash) REFERENCES objects (artifact_hash)
         );
 
         CREATE TABLE IF NOT EXISTS artifact_heads (

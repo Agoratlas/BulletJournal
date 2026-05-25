@@ -382,7 +382,7 @@ def test_file_push_handle_cleans_up_without_finalize_on_error(monkeypatch: pytes
     monkeypatch.setattr(file_artifacts, 'current_runtime_context', lambda: FakeContext())
 
     with pytest.raises(ValueError, match='boom'):
-        with file_artifacts.FilePushHandle(name='report', role=ArtifactRole.ASSET, extension='.txt') as path:
+        with file_artifacts.FilePushHandle(name='report', role=ArtifactRole.OUTPUT, extension='.txt') as path:
             path.write_text('hello', encoding='utf-8')
             raise ValueError('boom')
 

@@ -39,7 +39,6 @@ def organizer_interface_for_ports(*, node_id: str, ports: list[dict[str, str]]) 
         source_hash='organizer',
         inputs=inputs,
         outputs=outputs,
-        assets=[],
         docs='Organizer block. Each input is forwarded directly to the matching output.',
         issues=[],
     )

@@ -94,7 +94,7 @@ class CheckpointService:
             if interface is None:
                 allowed_artifacts[node.id] = set()
                 continue
-            names = {str(port['name']) for port in interface.get('outputs', []) + interface.get('assets', [])}
+            names = {str(port['name']) for port in interface.get('outputs', [])}
             allowed_artifacts[node.id] = names
             for artifact_name in names:
                 project.state_db.ensure_artifact_head(node.id, artifact_name, ArtifactState.PENDING)

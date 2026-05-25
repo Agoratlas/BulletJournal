@@ -7,7 +7,12 @@ from pathlib import Path
 
 from bulletjournal.config import EXPORT_MANIFEST_VERSION
 from bulletjournal.domain.errors import ProjectValidationError
-from bulletjournal.storage.project_fs import ProjectPaths, load_project_json, require_project_root
+from bulletjournal.storage.project_fs import (
+    ProjectPaths,
+    load_project_json,
+    require_project_root,
+    validate_project_schema_version,
+)
 from bulletjournal.utils import json_dumps, utc_now_iso
 
 EXCLUDED_NAMES = {'.DS_Store'}
@@ -91,6 +96,7 @@ def _validate_archive_manifest(zf: zipfile.ZipFile, names: set[str]) -> None:
     if int(manifest.get('manifest_version', 0)) != EXPORT_MANIFEST_VERSION:
         raise ProjectValidationError('Unsupported export manifest version.')
     project_json = json.loads(zf.read('project/metadata/project.json').decode('utf-8'))
+    validate_project_schema_version(project_json, source='Archive project metadata')
     if str(manifest.get('project_id') or '') != str(project_json.get('project_id') or ''):
         raise ProjectValidationError('Archive manifest project_id does not match metadata/project.json.')
 
@@ -104,7 +110,7 @@ def _iter_project_files(paths: ProjectPaths, *, include_artifacts: bool) -> list
         paths.root / 'uploads',
     ]
     if include_artifacts:
-        included_roots.append(paths.artifacts_dir)
+        included_roots.append(paths.object_store_dir)
     included_files = [paths.pyproject_path, paths.uv_lock_path]
     members: list[Path] = [file_path.relative_to(paths.root) for file_path in included_files]
     for root in included_roots:
@@ -131,7 +137,6 @@ def _restore_required_directories(root: Path) -> None:
         paths.graph_dir,
         paths.notebooks_dir,
         paths.metadata_dir,
-        paths.artifacts_dir,
         paths.object_store_dir,
         paths.checkpoints_dir,
         paths.uploads_dir,

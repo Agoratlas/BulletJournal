@@ -339,7 +339,6 @@ export function cloneSnapshot(snapshot: ProjectSnapshot): ProjectSnapshot {
               ...node.interface,
               inputs: node.interface.inputs.map((port) => ({ ...port })),
               outputs: node.interface.outputs.map((port) => ({ ...port })),
-              assets: node.interface.assets.map((port) => ({ ...port })),
               issues: node.interface.issues.map((issue) => ({ ...issue })),
             }
           : node.interface,
@@ -369,7 +368,6 @@ export function mergeGraphIntoSnapshot(snapshot: SnapshotLike, graph: { meta: Pr
             ...node.interface,
             inputs: node.interface.inputs.map((port) => ({ ...port })),
             outputs: node.interface.outputs.map((port) => ({ ...port })),
-            assets: node.interface.assets.map((port) => ({ ...port })),
             issues: node.interface.issues.map((issue) => ({ ...issue })),
           }
         : node.interface,
