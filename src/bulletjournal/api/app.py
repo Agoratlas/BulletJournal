@@ -17,7 +17,7 @@ from websockets.exceptions import ConnectionClosed
 
 from bulletjournal.api.deps import ServiceContainer
 from bulletjournal.api.errors import install_error_handlers
-from bulletjournal.api.routes import artifacts, checkpoints, graph, project, runs, templates
+from bulletjournal.api.routes import artifacts, assets, checkpoints, graph, project, runs, templates
 from bulletjournal.api.sse import sse_response
 from bulletjournal.config import ServerConfig, bundled_web_root, normalize_base_path
 
@@ -61,6 +61,7 @@ def create_app(*, project_path: Path | None = None, server_config: ServerConfig 
     app.include_router(project.router, prefix=api_prefix)
     app.include_router(graph.router, prefix=api_prefix)
     app.include_router(artifacts.router, prefix=api_prefix)
+    app.include_router(assets.router, prefix=api_prefix)
     app.include_router(runs.router, prefix=api_prefix)
     app.include_router(checkpoints.router, prefix=api_prefix)
     app.include_router(templates.router, prefix=api_prefix)

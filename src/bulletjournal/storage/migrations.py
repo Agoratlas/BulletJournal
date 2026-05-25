@@ -167,4 +167,59 @@ MIGRATIONS: list[tuple[str, str]] = [
         );
         """,
     ),
+    (
+        '005_assets',
+        """
+        CREATE TABLE IF NOT EXISTS asset_declarations (
+            node_id TEXT NOT NULL,
+            asset_name TEXT NOT NULL,
+            title TEXT NOT NULL,
+            description TEXT NULL,
+            declared_asset_type TEXT NULL,
+            declaration_index INTEGER NOT NULL,
+            source_hash TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            PRIMARY KEY (node_id, asset_name)
+        );
+
+        CREATE TABLE IF NOT EXISTS asset_versions (
+            asset_version_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            node_id TEXT NOT NULL,
+            asset_name TEXT NOT NULL,
+            asset_type TEXT NOT NULL,
+            interactive INTEGER NOT NULL,
+            source_hash TEXT NOT NULL,
+            upstream_code_hash TEXT NOT NULL,
+            upstream_data_hash TEXT NOT NULL,
+            run_id TEXT NOT NULL,
+            lineage_mode TEXT NOT NULL,
+            definition_json TEXT NOT NULL,
+            modifier_schema_json TEXT NOT NULL,
+            default_modifiers_json TEXT NOT NULL,
+            override_schema_hash TEXT NOT NULL,
+            warning_json TEXT NOT NULL DEFAULT '[]',
+            created_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS asset_heads (
+            node_id TEXT NOT NULL,
+            asset_name TEXT NOT NULL,
+            current_asset_version_id INTEGER NULL,
+            state TEXT NOT NULL,
+            PRIMARY KEY (node_id, asset_name),
+            FOREIGN KEY (current_asset_version_id) REFERENCES asset_versions (asset_version_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS asset_version_objects (
+            asset_version_id INTEGER NOT NULL,
+            object_role TEXT NOT NULL,
+            object_index INTEGER NOT NULL DEFAULT 0,
+            artifact_hash TEXT NOT NULL,
+            metadata_json TEXT NULL,
+            PRIMARY KEY (asset_version_id, object_role, object_index),
+            FOREIGN KEY (asset_version_id) REFERENCES asset_versions (asset_version_id),
+            FOREIGN KEY (artifact_hash) REFERENCES objects (artifact_hash)
+        );
+        """,
+    ),
 ]

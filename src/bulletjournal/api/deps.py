@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from bulletjournal.services import (
     ArtifactService,
+    AssetService,
     CheckpointService,
     EventService,
     GraphService,
@@ -17,6 +18,7 @@ class ServiceContainer:
         self.template_service = TemplateService()
         self.project_service = ProjectService(self.event_service, self.template_service)
         self.graph_service = GraphService(self.project_service)
+        self.asset_service = AssetService(self.project_service)
         self.artifact_service = ArtifactService(self.project_service)
         self.run_service = RunService(self.project_service)
         self.project_service.run_service = self.run_service

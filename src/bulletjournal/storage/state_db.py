@@ -9,7 +9,7 @@ from typing import Any
 
 from bulletjournal.config import DB_TIMEOUT_SECONDS
 from bulletjournal.domain.enums import ArtifactRole, ArtifactState, LineageMode, RunStatus, ValidationSeverity
-from bulletjournal.domain.models import CheckpointRecord, ValidationIssue
+from bulletjournal.domain.models import AssetDeclaration, CheckpointRecord, ValidationIssue
 from bulletjournal.storage.migrations import MIGRATIONS
 from bulletjournal.utils import json_dumps, utc_now_iso
 
@@ -116,24 +116,39 @@ class StateDB:
             ).fetchone()
         return None if row is None else str(row['ended_at'])
 
-    def save_notebook_revision(
-        self, node_id: str, source_hash: str, docs: str | None, interface_json: dict[str, Any]
+    def save_notebook_contract(
+        self, node_id: str, source_hash: str, docs: str | None, contract_json: dict[str, Any]
     ) -> None:
         with self._connect() as connection:
             connection.execute(
                 'INSERT OR REPLACE INTO notebook_revisions '
                 '(node_id, source_hash, saved_at, doc_excerpt, interface_json) VALUES (?, ?, ?, ?, ?)',
-                (node_id, source_hash, utc_now_iso(), docs, json_dumps(interface_json)),
+                (node_id, source_hash, utc_now_iso(), docs, json_dumps(contract_json)),
             )
             connection.commit()
 
-    def latest_interface_json(self, node_id: str) -> dict[str, Any] | None:
+    def save_notebook_revision(
+        self, node_id: str, source_hash: str, docs: str | None, interface_json: dict[str, Any]
+    ) -> None:
+        self.save_notebook_contract(node_id, source_hash, docs, interface_json)
+
+    def latest_notebook_contract_json(self, node_id: str) -> dict[str, Any] | None:
         with self._connect() as connection:
             row = connection.execute(
                 'SELECT interface_json FROM notebook_revisions WHERE node_id = ? ORDER BY rowid DESC LIMIT 1',
                 (node_id,),
             ).fetchone()
-        return None if row is None else json.loads(str(row['interface_json']))
+        if row is None:
+            return None
+        payload = json.loads(str(row['interface_json']))
+        return payload if isinstance(payload, dict) else None
+
+    def latest_interface_json(self, node_id: str) -> dict[str, Any] | None:
+        payload = self.latest_notebook_contract_json(node_id)
+        if payload is None:
+            return None
+        interface = payload.get('interface')
+        return dict(interface) if isinstance(interface, dict) else payload
 
     def latest_source_hash(self, node_id: str) -> str | None:
         with self._connect() as connection:
@@ -284,12 +299,230 @@ class StateDB:
                 'UNION SELECT node_id FROM (SELECT node_id FROM persistent_notices WHERE node_id IS NOT NULL) '
                 'UNION SELECT node_id FROM artifact_versions '
                 'UNION SELECT node_id FROM artifact_heads '
+                'UNION SELECT node_id FROM asset_declarations '
+                'UNION SELECT node_id FROM asset_versions '
+                'UNION SELECT node_id FROM asset_heads '
                 'UNION SELECT node_id FROM cache_index '
                 'UNION SELECT node_id FROM orchestrator_execution_meta '
                 'UNION SELECT node_id FROM run_outputs '
                 'ORDER BY node_id'
             ).fetchall()
         return [str(row['node_id']) for row in rows]
+
+    def replace_asset_declarations(
+        self,
+        node_id: str,
+        source_hash: str,
+        declarations: Iterable[AssetDeclaration],
+    ) -> None:
+        with self._connect() as connection:
+            connection.execute('DELETE FROM asset_declarations WHERE node_id = ?', (node_id,))
+            now = utc_now_iso()
+            connection.executemany(
+                'INSERT INTO asset_declarations '
+                '('
+                'node_id, asset_name, title, description, declared_asset_type, declaration_index, '
+                'source_hash, updated_at'
+                ') '
+                'VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+                [
+                    (
+                        declaration.node_id,
+                        declaration.name,
+                        declaration.title,
+                        declaration.description,
+                        declaration.declared_asset_type,
+                        declaration.declaration_index,
+                        source_hash,
+                        now,
+                    )
+                    for declaration in declarations
+                ],
+            )
+            connection.commit()
+
+    def list_asset_declarations(self, node_id: str | None = None) -> list[dict[str, Any]]:
+        with self._connect() as connection:
+            query = (
+                'SELECT node_id, asset_name, title, description, declared_asset_type, declaration_index, '
+                'source_hash, updated_at FROM asset_declarations'
+            )
+            params: list[Any] = []
+            if node_id is not None:
+                query = f'{query} WHERE node_id = ?'
+                params.append(node_id)
+            query = f'{query} ORDER BY node_id, declaration_index, asset_name'
+            rows = connection.execute(query, params).fetchall()
+        return [self._row_to_asset_declaration(row) for row in rows]
+
+    def ensure_asset_head(self, node_id: str, asset_name: str, state: ArtifactState = ArtifactState.PENDING) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                'INSERT OR IGNORE INTO asset_heads '
+                '(node_id, asset_name, current_asset_version_id, state) VALUES (?, ?, NULL, ?)',
+                (node_id, asset_name, state.value),
+            )
+            connection.commit()
+
+    def delete_asset_state(self, node_id: str, asset_name: str) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                'DELETE FROM asset_version_objects WHERE asset_version_id IN '
+                '(SELECT asset_version_id FROM asset_versions WHERE node_id = ? AND asset_name = ?)',
+                (node_id, asset_name),
+            )
+            connection.execute(
+                'DELETE FROM asset_heads WHERE node_id = ? AND asset_name = ?',
+                (node_id, asset_name),
+            )
+            connection.execute(
+                'DELETE FROM asset_declarations WHERE node_id = ? AND asset_name = ?',
+                (node_id, asset_name),
+            )
+            connection.execute(
+                'DELETE FROM asset_versions WHERE node_id = ? AND asset_name = ?',
+                (node_id, asset_name),
+            )
+            connection.commit()
+
+    def set_asset_head_state(self, node_id: str, asset_name: str, state: ArtifactState) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                'UPDATE asset_heads SET state = ? WHERE node_id = ? AND asset_name = ?',
+                (state.value, node_id, asset_name),
+            )
+            connection.commit()
+
+    def create_asset_version(
+        self,
+        *,
+        node_id: str,
+        asset_name: str,
+        asset_type: str,
+        interactive: bool,
+        source_hash: str,
+        upstream_code_hash: str,
+        upstream_data_hash: str,
+        run_id: str,
+        lineage_mode: LineageMode,
+        definition: dict[str, Any],
+        modifier_schema: list[dict[str, Any]],
+        default_modifiers: dict[str, Any],
+        override_schema_hash: str,
+        warnings: list[dict[str, Any]],
+        objects: list[dict[str, Any]],
+        state: ArtifactState = ArtifactState.READY,
+    ) -> int:
+        now = utc_now_iso()
+        with self._connect() as connection:
+            cursor = connection.execute(
+                'INSERT INTO asset_versions '
+                '(node_id, asset_name, asset_type, interactive, source_hash, upstream_code_hash, upstream_data_hash, '
+                'run_id, lineage_mode, definition_json, modifier_schema_json, default_modifiers_json, '
+                'override_schema_hash, warning_json, created_at) '
+                'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                (
+                    node_id,
+                    asset_name,
+                    asset_type,
+                    1 if interactive else 0,
+                    source_hash,
+                    upstream_code_hash,
+                    upstream_data_hash,
+                    run_id,
+                    lineage_mode.value,
+                    json_dumps(definition),
+                    json_dumps(modifier_schema),
+                    json_dumps(default_modifiers),
+                    override_schema_hash,
+                    json_dumps(warnings),
+                    now,
+                ),
+            )
+            last_row_id = cursor.lastrowid
+            if last_row_id is None:
+                raise RuntimeError('Failed to create asset version.')
+            asset_version_id = int(last_row_id)
+            if objects:
+                connection.executemany(
+                    'INSERT INTO asset_version_objects '
+                    '(asset_version_id, object_role, object_index, artifact_hash, metadata_json) '
+                    'VALUES (?, ?, ?, ?, ?)',
+                    [
+                        (
+                            asset_version_id,
+                            item['object_role'],
+                            int(item.get('object_index', 0)),
+                            item['artifact_hash'],
+                            None if item.get('metadata') is None else json_dumps(item['metadata']),
+                        )
+                        for item in objects
+                    ],
+                )
+            connection.execute(
+                'INSERT INTO asset_heads (node_id, asset_name, current_asset_version_id, state) VALUES (?, ?, ?, ?) '
+                'ON CONFLICT(node_id, asset_name) DO UPDATE SET '
+                'current_asset_version_id = excluded.current_asset_version_id, state = excluded.state',
+                (node_id, asset_name, asset_version_id, state.value),
+            )
+            connection.commit()
+            return asset_version_id
+
+    def get_asset_head(self, node_id: str, asset_name: str) -> dict[str, Any] | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                'SELECT ah.node_id, ah.asset_name, ah.current_asset_version_id, ah.state, '
+                'ad.title, ad.description, ad.declared_asset_type, ad.declaration_index, '
+                'ad.source_hash AS declaration_source_hash, av.asset_version_id, av.asset_type, av.interactive, '
+                'av.source_hash, av.upstream_code_hash, av.upstream_data_hash, av.run_id, av.lineage_mode, '
+                'av.definition_json, av.modifier_schema_json, av.default_modifiers_json, '
+                'av.override_schema_hash, av.warning_json, av.created_at '
+                'FROM asset_heads ah '
+                'LEFT JOIN asset_declarations ad ON ad.node_id = ah.node_id AND ad.asset_name = ah.asset_name '
+                'LEFT JOIN asset_versions av ON av.asset_version_id = ah.current_asset_version_id '
+                'WHERE ah.node_id = ? AND ah.asset_name = ?',
+                (node_id, asset_name),
+            ).fetchone()
+            if row is None:
+                return None
+            version_id = row['current_asset_version_id']
+            objects = (
+                self._asset_objects_for_version_ids(connection, [int(version_id)]) if version_id is not None else {}
+            )
+        return self._row_to_asset(row, objects.get(int(version_id), []) if version_id is not None else [])
+
+    def list_asset_heads(self, *, node_id: str | None = None) -> list[dict[str, Any]]:
+        with self._connect() as connection:
+            query = (
+                'SELECT ah.node_id, ah.asset_name, ah.current_asset_version_id, ah.state, '
+                'ad.title, ad.description, ad.declared_asset_type, ad.declaration_index, '
+                'ad.source_hash AS declaration_source_hash, av.asset_version_id, av.asset_type, av.interactive, '
+                'av.source_hash, av.upstream_code_hash, av.upstream_data_hash, av.run_id, av.lineage_mode, '
+                'av.definition_json, av.modifier_schema_json, av.default_modifiers_json, '
+                'av.override_schema_hash, av.warning_json, av.created_at '
+                'FROM asset_heads ah '
+                'LEFT JOIN asset_declarations ad ON ad.node_id = ah.node_id AND ad.asset_name = ah.asset_name '
+                'LEFT JOIN asset_versions av ON av.asset_version_id = ah.current_asset_version_id'
+            )
+            params: list[Any] = []
+            if node_id is not None:
+                query = f'{query} WHERE ah.node_id = ?'
+                params.append(node_id)
+            query = f'{query} ORDER BY ah.node_id, COALESCE(ad.declaration_index, 2147483647), ah.asset_name'
+            rows = connection.execute(query, params).fetchall()
+            version_ids = [
+                int(row['current_asset_version_id']) for row in rows if row['current_asset_version_id'] is not None
+            ]
+            objects_by_version_id = self._asset_objects_for_version_ids(connection, version_ids)
+        return [
+            self._row_to_asset(
+                row,
+                objects_by_version_id.get(int(row['current_asset_version_id']), [])
+                if row['current_asset_version_id'] is not None
+                else [],
+            )
+            for row in rows
+        ]
 
     def ensure_artifact_head(
         self, node_id: str, artifact_name: str, state: ArtifactState = ArtifactState.PENDING
@@ -316,6 +549,14 @@ class StateDB:
             connection.execute('DELETE FROM run_inputs WHERE logical_artifact_id LIKE ?', (f'{node_id}/%',))
             connection.execute('DELETE FROM run_outputs WHERE node_id = ?', (node_id,))
             connection.execute('DELETE FROM cache_index WHERE node_id = ?', (node_id,))
+            connection.execute(
+                'DELETE FROM asset_version_objects WHERE asset_version_id IN '
+                '(SELECT asset_version_id FROM asset_versions WHERE node_id = ?)',
+                (node_id,),
+            )
+            connection.execute('DELETE FROM asset_heads WHERE node_id = ?', (node_id,))
+            connection.execute('DELETE FROM asset_declarations WHERE node_id = ?', (node_id,))
+            connection.execute('DELETE FROM asset_versions WHERE node_id = ?', (node_id,))
             connection.execute('DELETE FROM artifact_heads WHERE node_id = ?', (node_id,))
             connection.execute('DELETE FROM artifact_versions WHERE node_id = ?', (node_id,))
             connection.execute('DELETE FROM orchestrator_execution_meta WHERE node_id = ?', (node_id,))
@@ -336,6 +577,11 @@ class StateDB:
             connection.execute(
                 'UPDATE persistent_notices SET node_id = ? WHERE node_id = ?', (new_node_id, old_node_id)
             )
+            connection.execute(
+                'UPDATE asset_declarations SET node_id = ? WHERE node_id = ?', (new_node_id, old_node_id)
+            )
+            connection.execute('UPDATE asset_versions SET node_id = ? WHERE node_id = ?', (new_node_id, old_node_id))
+            connection.execute('UPDATE asset_heads SET node_id = ? WHERE node_id = ?', (new_node_id, old_node_id))
             connection.execute('UPDATE artifact_versions SET node_id = ? WHERE node_id = ?', (new_node_id, old_node_id))
             connection.execute('UPDATE artifact_heads SET node_id = ? WHERE node_id = ?', (new_node_id, old_node_id))
             connection.execute('UPDATE cache_index SET node_id = ? WHERE node_id = ?', (new_node_id, old_node_id))
@@ -894,6 +1140,79 @@ class StateDB:
         if failure is None:
             return False
         return str(failure.get('node_id') or '') == node_id
+
+    @staticmethod
+    def _row_to_asset_declaration(row: sqlite3.Row) -> dict[str, Any]:
+        return {
+            'node_id': row['node_id'],
+            'name': row['asset_name'],
+            'title': row['title'],
+            'description': row['description'],
+            'declared_asset_type': row['declared_asset_type'],
+            'declaration_index': row['declaration_index'],
+            'source_hash': row['source_hash'],
+            'updated_at': row['updated_at'],
+        }
+
+    @staticmethod
+    def _asset_objects_for_version_ids(
+        connection: sqlite3.Connection,
+        version_ids: list[int],
+    ) -> dict[int, list[dict[str, Any]]]:
+        if not version_ids:
+            return {}
+        version_id_set = set(version_ids)
+        rows = connection.execute(
+            'SELECT asset_version_id, object_role, object_index, artifact_hash, metadata_json '
+            'FROM asset_version_objects '
+            'ORDER BY asset_version_id, object_role, object_index',
+        ).fetchall()
+        objects_by_version: dict[int, list[dict[str, Any]]] = {}
+        for row in rows:
+            asset_version_id = int(row['asset_version_id'])
+            if asset_version_id not in version_id_set:
+                continue
+            objects_by_version.setdefault(asset_version_id, []).append(
+                {
+                    'object_role': row['object_role'],
+                    'object_index': row['object_index'],
+                    'artifact_hash': row['artifact_hash'],
+                    'metadata': None if row['metadata_json'] is None else json.loads(str(row['metadata_json'])),
+                }
+            )
+        return objects_by_version
+
+    @staticmethod
+    def _row_to_asset(row: sqlite3.Row, objects: list[dict[str, Any]]) -> dict[str, Any]:
+        source_hash = row['source_hash'] if row['source_hash'] is not None else row['declaration_source_hash']
+        return {
+            'node_id': row['node_id'],
+            'asset_name': row['asset_name'],
+            'title': row['title'],
+            'description': row['description'],
+            'declared_asset_type': row['declared_asset_type'],
+            'declaration_index': row['declaration_index'],
+            'current_asset_version_id': row['current_asset_version_id'],
+            'state': row['state'],
+            'asset_type': row['asset_type'],
+            'interactive': None if row['interactive'] is None else bool(row['interactive']),
+            'source_hash': source_hash,
+            'upstream_code_hash': row['upstream_code_hash'],
+            'upstream_data_hash': row['upstream_data_hash'],
+            'run_id': row['run_id'],
+            'lineage_mode': row['lineage_mode'],
+            'definition': None if row['definition_json'] is None else json.loads(str(row['definition_json'])),
+            'modifier_schema': []
+            if row['modifier_schema_json'] is None
+            else json.loads(str(row['modifier_schema_json'])),
+            'default_modifiers': {}
+            if row['default_modifiers_json'] is None
+            else json.loads(str(row['default_modifiers_json'])),
+            'override_schema_hash': row['override_schema_hash'],
+            'warnings': [] if row['warning_json'] is None else json.loads(str(row['warning_json'])),
+            'created_at': row['created_at'],
+            'objects': objects,
+        }
 
     @staticmethod
     def _row_to_artifact(row: sqlite3.Row) -> dict[str, Any]:

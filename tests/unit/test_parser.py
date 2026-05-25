@@ -2,7 +2,7 @@ from pathlib import Path
 
 from bulletjournal.domain.enums import ValidationSeverity
 from bulletjournal.parser.docs_parser import extract_notebook_docs
-from bulletjournal.parser.interface_parser import parse_notebook_interface
+from bulletjournal.parser.interface_parser import parse_notebook_contract, parse_notebook_interface
 
 FIXTURES = Path(__file__).resolve().parents[1] / 'fixtures'
 
@@ -107,6 +107,68 @@ def _():
     assert [port.name for port in interface.inputs] == ['dataset']
     assert [port.name for port in interface.outputs] == ['dataset']
     assert not any(issue.code == 'duplicate_port' for issue in interface.issues)
+
+
+def test_parser_extracts_asset_declarations_in_same_pass(tmp_path) -> None:
+    notebook = tmp_path / 'asset_notebook.py'
+    notebook.write_text(
+        """
+import marimo
+
+app = marimo.App()
+
+with app.setup:
+    from bulletjournal.runtime import artifacts, assets
+
+@app.cell
+def _():
+    value = artifacts.pull(name='dataset', data_type=int)
+    frame_asset = assets.DataFrame(__import__('pandas').DataFrame({'value': [value]}))
+    assets.push(frame_asset, name='table', title='Table', description='Rows', asset_type=assets.DataFrame)
+    assets.push(assets.Markdown('hello'), name='notes', title='Notes')
+    artifacts.push(value, name='result', data_type=int)
+    return value
+""".strip()
+        + '\n',
+        encoding='utf-8',
+    )
+
+    contract = parse_notebook_contract(notebook, node_id='asset_notebook')
+
+    assert [port.name for port in contract.interface.inputs] == ['dataset']
+    assert [port.name for port in contract.interface.outputs] == ['result']
+    assert [declaration.name for declaration in contract.asset_declarations] == ['table', 'notes']
+    assert contract.asset_declarations[0].declared_asset_type == 'dataframe'
+    assert contract.asset_declarations[1].declared_asset_type is None
+
+
+def test_parser_rejects_non_literal_asset_metadata_and_invalid_asset_type(tmp_path) -> None:
+    notebook = tmp_path / 'invalid_asset_notebook.py'
+    notebook.write_text(
+        """
+import marimo
+
+app = marimo.App()
+
+with app.setup:
+    from bulletjournal.runtime import assets
+
+TITLE = 'Dynamic'
+
+@app.cell
+def _():
+    note = assets.Markdown('hello')
+    assets.push(note, name='notes', title=TITLE, asset_type=TITLE)
+    return note
+""".strip()
+        + '\n',
+        encoding='utf-8',
+    )
+
+    contract = parse_notebook_contract(notebook, node_id='invalid_asset_notebook')
+
+    assert any(issue.code == 'invalid_title' for issue in contract.issues)
+    assert any(issue.code == 'invalid_asset_type' for issue in contract.issues)
 
 
 def test_parser_rejects_invalid_artifact_names(tmp_path) -> None:

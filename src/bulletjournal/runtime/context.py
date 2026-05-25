@@ -9,12 +9,14 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from bulletjournal.assets.runtime_types import BaseAsset, asset_type_id_for_class, asset_type_id_for_instance
+from bulletjournal.assets.serializer import serialize_asset
 from bulletjournal.config import EDIT_STABILIZATION_SECONDS
 from bulletjournal.domain.enums import ArtifactRole, ArtifactState, LineageMode, ValidationSeverity
 from bulletjournal.domain.graph_bindings import resolve_input_binding
 from bulletjournal.domain.hashing import combine_hashes, hash_json
-from bulletjournal.domain.models import GraphData, Port
-from bulletjournal.parser.interface_parser import parse_notebook_interface
+from bulletjournal.domain.models import AssetDeclaration, GraphData, Port
+from bulletjournal.parser.interface_parser import parse_notebook_contract
 from bulletjournal.parser.source_hash import compute_source_hash
 from bulletjournal.runtime.warnings import (
     interactive_lineage_warning,
@@ -47,12 +49,14 @@ class RuntimeContext:
     lineage_mode: LineageMode
     bindings: dict[str, Binding]
     outputs: dict[str, Port]
+    asset_declarations: dict[str, AssetDeclaration] = field(default_factory=dict)
     project_id: str | None = None
     db: StateDB = field(init=False)
     paths: ProjectPaths = field(init=False)
     object_store: ObjectStore = field(init=False)
     loaded_inputs: dict[str, dict[str, Any]] = field(default_factory=dict)
     pushed_outputs: list[dict[str, Any]] = field(default_factory=list)
+    pushed_assets: list[dict[str, Any]] = field(default_factory=list)
     interactive_contract_key: tuple[float | None, str] | None = None
 
     def __post_init__(self) -> None:
@@ -183,10 +187,119 @@ class RuntimeContext:
         )
         return self._create_version(name=name, persisted=persisted, role=role)
 
+    def finalize_asset_push(
+        self,
+        *,
+        asset: BaseAsset,
+        name: str,
+        title: str,
+        description: str | None,
+        asset_type: type[BaseAsset] | None,
+    ) -> dict[str, Any]:
+        self._refresh_interactive_contracts()
+        declaration = self.asset_declarations.get(name)
+        if declaration is None:
+            raise KeyError(f'Asset `{name}` is not declared in the parsed notebook contract.')
+        if declaration.title != title:
+            raise TypeError(f'Asset title mismatch for `{name}`: expected {declaration.title!r}, got {title!r}.')
+        if declaration.description != description:
+            raise TypeError(
+                f'Asset description mismatch for `{name}`: expected {declaration.description!r}, got {description!r}.'
+            )
+        runtime_asset_type = asset_type_id_for_instance(asset)
+        if runtime_asset_type is None:
+            raise TypeError(f'Unsupported asset instance `{type(asset).__name__}`.')
+        runtime_declared_type = asset_type_id_for_class(asset_type) if asset_type is not None else None
+        if asset_type is not None and runtime_declared_type is None:
+            raise TypeError('asset_type must be a BulletJournal asset class reference such as `assets.Markdown`.')
+        if declaration.declared_asset_type is not None and declaration.declared_asset_type != runtime_asset_type:
+            raise TypeError(
+                'Asset type mismatch for '
+                f'`{name}`: expected {declaration.declared_asset_type}, got {runtime_asset_type}.'
+            )
+        if runtime_declared_type is not None and runtime_declared_type != runtime_asset_type:
+            raise TypeError(
+                f'Asset type mismatch for `{name}`: expected {runtime_declared_type}, got {runtime_asset_type}.'
+            )
+        serialized = serialize_asset(asset, object_store=self.object_store, description=description)
+        objects: list[dict[str, Any]] = []
+        for item in serialized.objects:
+            persisted = item.persisted
+            self.db.upsert_artifact_object(
+                persisted['artifact_hash'],
+                persisted['storage_kind'],
+                persisted['data_type'],
+                persisted['size_bytes'],
+                persisted.get('extension'),
+                persisted.get('mime_type'),
+                persisted.get('preview'),
+            )
+            objects.append(
+                {
+                    'object_role': item.object_role,
+                    'object_index': item.object_index,
+                    'artifact_hash': persisted['artifact_hash'],
+                    'metadata': item.metadata,
+                }
+            )
+        upstream_data_hash, upstream_code_hash, warnings, output_state = self._lineage_for_logical_output(name)
+        override_schema_hash = hash_json(serialized.modifier_schema)
+        asset_version_id = self.db.create_asset_version(
+            node_id=self.node_id,
+            asset_name=name,
+            asset_type=serialized.asset_type,
+            interactive=serialized.interactive,
+            source_hash=self.source_hash,
+            upstream_code_hash=upstream_code_hash,
+            upstream_data_hash=upstream_data_hash,
+            run_id=self.run_id,
+            lineage_mode=self.lineage_mode,
+            definition=serialized.definition,
+            modifier_schema=serialized.modifier_schema,
+            default_modifiers=serialized.default_modifiers,
+            override_schema_hash=override_schema_hash,
+            warnings=warnings,
+            objects=objects,
+            state=output_state,
+        )
+        record = {
+            'asset_name': name,
+            'asset_version_id': asset_version_id,
+            'asset_type': serialized.asset_type,
+            'state': output_state.value,
+        }
+        self.pushed_assets.append(record)
+        return record
+
     def _create_version(self, *, name: str, persisted: dict[str, Any], role: ArtifactRole) -> dict[str, Any]:
+        upstream_data_hash, upstream_code_hash, warnings, output_state = self._lineage_for_logical_output(name)
+        version_id = self.db.create_artifact_version(
+            node_id=self.node_id,
+            artifact_name=name,
+            role=role,
+            artifact_hash=persisted['artifact_hash'],
+            source_hash=self.source_hash,
+            upstream_code_hash=upstream_code_hash,
+            upstream_data_hash=upstream_data_hash,
+            run_id=self.run_id,
+            lineage_mode=self.lineage_mode,
+            warnings=warnings,
+            state=output_state,
+        )
+        record = {
+            'artifact_name': name,
+            'version_id': version_id,
+            'artifact_hash': persisted['artifact_hash'],
+            'state': output_state.value,
+            'role': role.value,
+        }
+        self.pushed_outputs.append(record)
+        return record
+
+    def _lineage_for_logical_output(self, name: str) -> tuple[str, str, list[dict[str, Any]], ArtifactState]:
         input_hashes = [self.source_hash, f'{self.node_id}/{name}']
         input_code_hashes = [self.source_hash, f'{self.node_id}/{name}']
-        warnings = []
+        warnings: list[dict[str, Any]] = []
         warning_keys: set[str] = set()
         output_state = ArtifactState.READY
         for metadata in self.loaded_inputs.values():
@@ -231,28 +344,7 @@ class RuntimeContext:
             warnings.append(interactive_lineage_warning())
         upstream_data_hash = combine_hashes(input_hashes)
         upstream_code_hash = combine_hashes(input_code_hashes)
-        version_id = self.db.create_artifact_version(
-            node_id=self.node_id,
-            artifact_name=name,
-            role=role,
-            artifact_hash=persisted['artifact_hash'],
-            source_hash=self.source_hash,
-            upstream_code_hash=upstream_code_hash,
-            upstream_data_hash=upstream_data_hash,
-            run_id=self.run_id,
-            lineage_mode=self.lineage_mode,
-            warnings=warnings,
-            state=output_state,
-        )
-        record = {
-            'artifact_name': name,
-            'version_id': version_id,
-            'artifact_hash': persisted['artifact_hash'],
-            'state': output_state.value,
-            'role': role.value,
-        }
-        self.pushed_outputs.append(record)
-        return record
+        return upstream_data_hash, upstream_code_hash, warnings, output_state
 
     def _validate_output_contract(self, *, name: str, data_type: str, role: ArtifactRole, kind: str) -> None:
         expected = self.outputs.get(name)
@@ -300,12 +392,13 @@ class RuntimeContext:
         current_key = _interactive_contract_key(notebook_path, graph.meta)
         if current_key == self.interactive_contract_key:
             return
-        interface = parse_notebook_interface(notebook_path, node_id=self.node_id)
-        if any(issue.severity == ValidationSeverity.ERROR for issue in interface.issues):
+        contract = parse_notebook_contract(notebook_path, node_id=self.node_id)
+        if any(issue.severity == ValidationSeverity.ERROR for issue in contract.issues):
             return
-        self.source_hash = interface.source_hash
-        self.bindings = _live_bindings_for_node(graph, interface.inputs, node_id=self.node_id)
-        self.outputs = {port.name: port for port in interface.outputs}
+        self.source_hash = contract.source_hash
+        self.bindings = _live_bindings_for_node(graph, contract.interface.inputs, node_id=self.node_id)
+        self.outputs = {port.name: port for port in contract.interface.outputs}
+        self.asset_declarations = {declaration.name: declaration for declaration in contract.asset_declarations}
         self.interactive_contract_key = current_key
 
     def _interactive_contract_key_for_current_state(self) -> tuple[float | None, str]:
@@ -372,10 +465,12 @@ def current_runtime_context() -> RuntimeContext:
     env_lineage = os.environ.get('BULLETJOURNAL_LINEAGE_MODE')
     env_bindings = os.environ.get('BULLETJOURNAL_BINDINGS_JSON')
     env_outputs = os.environ.get('BULLETJOURNAL_OUTPUTS_JSON')
+    env_assets = os.environ.get('BULLETJOURNAL_ASSET_DECLARATIONS_JSON')
     if not all([env_root, env_node, env_run, env_source_hash, env_lineage]):
         raise RuntimeError('BulletJournal runtime context is not active.')
     binding_data = json.loads(env_bindings) if env_bindings else {}
     output_data = json.loads(env_outputs) if env_outputs else {}
+    asset_data = json.loads(env_assets) if env_assets else {}
     context = RuntimeContext(
         project_root=Path(env_root),
         node_id=env_node,
@@ -393,6 +488,17 @@ def current_runtime_context() -> RuntimeContext:
                 direction=value.get('direction', 'output'),
             )
             for name, value in output_data.items()
+        },
+        asset_declarations={
+            name: AssetDeclaration(
+                node_id=value.get('node_id', env_node),
+                name=name,
+                title=value['title'],
+                description=value.get('description'),
+                declared_asset_type=value.get('declared_asset_type'),
+                declaration_index=int(value.get('declaration_index', 0)),
+            )
+            for name, value in asset_data.items()
         },
     )
     _RUNTIME_CONTEXT.set(context)

@@ -9,12 +9,14 @@ from bulletjournal.domain.enums import (
     ValidationSeverity,
 )
 from bulletjournal.domain.models import (
+    AssetDeclaration,
     CheckpointRecord,
     Edge,
     GraphData,
     LayoutEntry,
     Node,
     NotebookInterface,
+    ParsedNotebookContract,
     Port,
     ProjectMetadata,
     TemplateRef,
@@ -24,6 +26,7 @@ from bulletjournal.domain.models import (
 __all__ = [
     'ArtifactRole',
     'ArtifactState',
+    'AssetDeclaration',
     'CheckpointRecord',
     'Edge',
     'GraphData',
@@ -32,6 +35,7 @@ __all__ = [
     'Node',
     'NodeKind',
     'NotebookInterface',
+    'ParsedNotebookContract',
     'Port',
     'ProjectMetadata',
     'RunMode',

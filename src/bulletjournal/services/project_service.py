@@ -489,6 +489,13 @@ class ProjectService:
                     continue
                 project.state_db.set_artifact_head_state(head['node_id'], head['artifact_name'], ArtifactState.STALE)
                 stale_count += 1
+            for head in project.state_db.list_asset_heads():
+                if head['node_id'] not in notebook_ids:
+                    continue
+                if head['current_asset_version_id'] is None or head['state'] == ArtifactState.STALE.value:
+                    continue
+                project.state_db.set_asset_head_state(head['node_id'], head['asset_name'], ArtifactState.STALE)
+                stale_count += 1
             graph_version = int(self.graph().meta['graph_version'])
             self.event_service.publish(
                 'project.environment_changed',

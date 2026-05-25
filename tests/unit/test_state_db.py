@@ -1,7 +1,7 @@
 from pathlib import Path
 
 from bulletjournal.domain.enums import ArtifactRole, ArtifactState, LineageMode, RunStatus, ValidationSeverity
-from bulletjournal.domain.models import ValidationIssue
+from bulletjournal.domain.models import AssetDeclaration, ValidationIssue
 from bulletjournal.parser.validation import build_issue_id
 from bulletjournal.storage.project_fs import init_project_root
 from bulletjournal.storage.state_db import StateDB, _database_journal_mode
@@ -271,6 +271,53 @@ def test_state_db_preserves_persistent_notice_dismissal_across_updates(tmp_path)
     persisted = db.get_persistent_notice(issue_id)
     assert persisted is not None
     assert persisted['details']['current_node'] == 'sample'
+
+
+def test_state_db_persists_asset_declarations_and_versions(tmp_path) -> None:
+    paths = init_project_root(tmp_path / 'project')
+    db = StateDB(paths.state_db_path)
+
+    db.replace_asset_declarations(
+        'node_a',
+        'source-a',
+        [
+            AssetDeclaration(
+                node_id='node_a',
+                name='notes',
+                title='Notes',
+                description='Summary',
+                declared_asset_type='markdown',
+                declaration_index=0,
+            )
+        ],
+    )
+    db.ensure_asset_head('node_a', 'notes')
+    asset_version_id = db.create_asset_version(
+        node_id='node_a',
+        asset_name='notes',
+        asset_type='markdown',
+        interactive=False,
+        source_hash='source-a',
+        upstream_code_hash='code-a',
+        upstream_data_hash='data-a',
+        run_id='run-1',
+        lineage_mode=LineageMode.MANAGED,
+        definition={'asset_type': 'markdown', 'markdown_text': 'hello'},
+        modifier_schema=[],
+        default_modifiers={},
+        override_schema_hash='hash',
+        warnings=[],
+        objects=[],
+    )
+
+    declarations = db.list_asset_declarations('node_a')
+    head = db.get_asset_head('node_a', 'notes')
+
+    assert declarations[0]['name'] == 'notes'
+    assert declarations[0]['declared_asset_type'] == 'markdown'
+    assert head is not None
+    assert head['current_asset_version_id'] == asset_version_id
+    assert head['definition']['markdown_text'] == 'hello'
 
 
 def test_state_db_rename_node_state_updates_all_node_id_indexes_and_payloads(tmp_path) -> None:

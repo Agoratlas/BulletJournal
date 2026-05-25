@@ -315,6 +315,24 @@ class GraphService:
                                 'new_state': ArtifactState.STALE.value,
                             },
                         )
+            for asset in project.state_db.list_asset_heads(node_id=downstream_node):
+                if asset.get('current_asset_version_id') is None:
+                    continue
+                old_state = asset['state']
+                if old_state == ArtifactState.STALE.value:
+                    continue
+                project.state_db.set_asset_head_state(downstream_node, str(asset['asset_name']), ArtifactState.STALE)
+                self.project_service.event_service.publish(
+                    'asset.state_changed',
+                    project_id=project.metadata.project_id,
+                    graph_version=int(graph.meta['graph_version']),
+                    payload={
+                        'node_id': downstream_node,
+                        'asset_name': asset['asset_name'],
+                        'old_state': old_state,
+                        'new_state': ArtifactState.STALE.value,
+                    },
+                )
 
     def _restore_ready_outputs_for_node(self, node_id: str, graph: GraphData) -> None:
         project = self.project_service.require_project()

@@ -7,7 +7,7 @@ from typing import Any
 from bulletjournal.domain.enums import LineageMode, NodeKind, ValidationSeverity
 from bulletjournal.domain.models import Edge, GraphData, NotebookInterface, Port
 from bulletjournal.execution.planner import downstream_closure
-from bulletjournal.parser.interface_parser import parse_notebook_interface
+from bulletjournal.parser.interface_parser import parse_notebook_contract, parse_notebook_interface
 from bulletjournal.runtime.context import Binding, RuntimeContext, activate_runtime_context
 from bulletjournal.storage.graph_store import GraphStore
 from bulletjournal.storage.project_fs import ProjectPaths, is_project_root
@@ -45,8 +45,9 @@ def build_standalone_context(notebook_path: str | Path) -> RuntimeContext:
         raise StandaloneRuntimeError(
             f'Notebook `{resolved_notebook}` does not match project node path `{expected_path}`.'
         )
-    interface = parse_notebook_interface(resolved_notebook, node_id=node_id)
-    error_messages = [issue.message for issue in interface.issues if issue.severity == ValidationSeverity.ERROR]
+    contract = parse_notebook_contract(resolved_notebook, node_id=node_id)
+    interface = contract.interface
+    error_messages = [issue.message for issue in contract.issues if issue.severity == ValidationSeverity.ERROR]
     if error_messages:
         joined = '; '.join(error_messages)
         raise StandaloneRuntimeError(f'Notebook `{node_id}` has validation errors: {joined}')
@@ -58,6 +59,7 @@ def build_standalone_context(notebook_path: str | Path) -> RuntimeContext:
         lineage_mode=LineageMode.MANAGED,
         bindings=_bindings_for_interface(graph, interface),
         outputs=_outputs_for_interface(interface),
+        asset_declarations={declaration.name: declaration for declaration in contract.asset_declarations},
     )
 
 
@@ -152,6 +154,16 @@ def _mark_downstream_stale(context: RuntimeContext) -> None:
                     port.name,
                     ArtifactState.STALE,
                 )
+        for asset in context.db.list_asset_heads(node_id=downstream_node):
+            if asset.get('current_asset_version_id') is None:
+                continue
+            from bulletjournal.domain.enums import ArtifactState
+
+            context.db.set_asset_head_state(
+                downstream_node,
+                str(asset['asset_name']),
+                ArtifactState.STALE,
+            )
 
 
 def _project_id(graph: GraphData) -> str:

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -15,6 +15,7 @@ class RunManifest:
     lineage_mode: str
     bindings: dict[str, dict[str, Any]]
     outputs: dict[str, dict[str, Any]]
+    assets: dict[str, dict[str, Any]] = field(default_factory=dict)
     progress_path: str | None = None
     stdout_path: str | None = None
     stderr_path: str | None = None

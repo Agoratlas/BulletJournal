@@ -323,7 +323,11 @@ class RunService:
 
     def run_all_stale(self) -> dict[str, Any]:
         graph = self.project_service.graph()
-        nodes = stale_or_pending_nodes(graph, self.project_service.require_project().state_db.list_artifact_heads())
+        state_db = self.project_service.require_project().state_db
+        nodes = stale_or_pending_nodes(
+            graph,
+            [*state_db.list_artifact_heads(), *state_db.list_asset_heads()],
+        )
         if not nodes:
             return {'status': 'noop', 'node_ids': []}
         blocked_nodes: list[dict[str, Any]] = []
@@ -421,6 +425,7 @@ class RunService:
             lineage_mode=LineageMode.MANAGED.value,
             bindings=bindings,
             outputs=outputs,
+            assets=self._asset_declarations_for_node(node_id),
         )
         stdout_path, stderr_path = self._prepare_execution_log_files(run_id=run_id, node_id=node_id)
         manifest.stdout_path = str(stdout_path)
@@ -767,14 +772,22 @@ class RunService:
 
     def _node_has_nonready_outputs(self, node_id: str) -> bool:
         interface = self.project_service.latest_interface(node_id)
-        if interface is None:
+        asset_names = [
+            str(declaration['name'])
+            for declaration in self.project_service.require_project().state_db.list_asset_declarations(node_id)
+        ]
+        if interface is None and not asset_names:
             return True
-        output_names = [str(port['name']) for port in interface.get('outputs', [])]
-        if not output_names:
+        output_names = [] if interface is None else [str(port['name']) for port in interface.get('outputs', [])]
+        if not output_names and not asset_names:
             return False
         state_db = self.project_service.require_project().state_db
         for output_name in output_names:
             head = state_db.get_artifact_head(node_id, output_name)
+            if head is None or head['state'] != ArtifactState.READY.value:
+                return True
+        for asset_name in asset_names:
+            head = state_db.get_asset_head(node_id, asset_name)
             if head is None or head['state'] != ArtifactState.READY.value:
                 return True
         return False
@@ -870,6 +883,19 @@ class RunService:
                 'direction': 'output',
             }
             for port in interface.get('outputs', [])
+        }
+
+    def _asset_declarations_for_node(self, node_id: str) -> dict[str, dict[str, Any]]:
+        declarations = self.project_service.require_project().state_db.list_asset_declarations(node_id)
+        return {
+            declaration['name']: {
+                'node_id': declaration['node_id'],
+                'title': declaration['title'],
+                'description': declaration.get('description'),
+                'declared_asset_type': declaration.get('declared_asset_type'),
+                'declaration_index': declaration.get('declaration_index', 0),
+            }
+            for declaration in declarations
         }
 
     def _prepare_execution_log_files(self, *, run_id: str, node_id: str) -> tuple[Path, Path]:

@@ -8,7 +8,13 @@ from textwrap import dedent
 from typing import TYPE_CHECKING
 
 from bulletjournal.domain.enums import ArtifactRole, ValidationSeverity
-from bulletjournal.domain.models import NotebookInterface, Port, ValidationIssue
+from bulletjournal.domain.models import (
+    AssetDeclaration,
+    NotebookInterface,
+    ParsedNotebookContract,
+    Port,
+    ValidationIssue,
+)
 from bulletjournal.domain.type_system import normalize_type_expr
 from bulletjournal.parser.docs_parser import extract_notebook_docs_from_module
 from bulletjournal.parser.marimo_loader import iter_app_cells
@@ -24,7 +30,12 @@ else:
 
 
 ARTIFACT_CALLS = {'pull', 'pull_file', 'push', 'push_file'}
+ASSET_CALLS = {'push'}
 ARTIFACT_NAME_PATTERN = re.compile(r'^[a-z0-9_]+$')
+ASSET_TYPE_IDS_BY_CLASS_NAME = {
+    'Markdown': 'markdown',
+    'DataFrame': 'dataframe',
+}
 
 
 def is_valid_artifact_name(value: str) -> bool:
@@ -36,38 +47,36 @@ def _invalid_artifact_name_message(name: str) -> str:
 
 
 def parse_notebook_interface(path: NotebookSource, node_id: str) -> NotebookInterface:
+    return parse_notebook_contract(path, node_id).interface
+
+
+def parse_notebook_contract(path: NotebookSource, node_id: str) -> ParsedNotebookContract:
     source_text, filename = _notebook_source(path)
     source_hash = normalized_source_hash_text(source_text)
     try:
         module = ast.parse(source_text, filename=filename)
     except SyntaxError as exc:
-        return NotebookInterface(
-            node_id=node_id,
-            source_hash=source_hash,
-            issues=[
-                build_issue(
-                    node_id=node_id,
-                    severity=ValidationSeverity.ERROR,
-                    code='invalid_syntax',
-                    message=_syntax_error_message(exc),
-                    details=_syntax_error_details(exc),
-                )
-            ],
-        )
+        issues = [
+            build_issue(
+                node_id=node_id,
+                severity=ValidationSeverity.ERROR,
+                code='invalid_syntax',
+                message=_syntax_error_message(exc),
+                details=_syntax_error_details(exc),
+            )
+        ]
+        return _empty_contract(node_id=node_id, source_hash=source_hash, issues=issues)
     except Exception as exc:
-        return NotebookInterface(
-            node_id=node_id,
-            source_hash=source_hash,
-            issues=[
-                build_issue(
-                    node_id=node_id,
-                    severity=ValidationSeverity.ERROR,
-                    code='notebook_parse_failed',
-                    message=f'Failed to parse notebook: {exc}',
-                    details={'error_type': exc.__class__.__name__},
-                )
-            ],
-        )
+        issues = [
+            build_issue(
+                node_id=node_id,
+                severity=ValidationSeverity.ERROR,
+                code='notebook_parse_failed',
+                message=f'Failed to parse notebook: {exc}',
+                details={'error_type': exc.__class__.__name__},
+            )
+        ]
+        return _empty_contract(node_id=node_id, source_hash=source_hash, issues=issues)
 
     issues: list[ValidationIssue] = []
     for statement in module.body:
@@ -80,38 +89,45 @@ def parse_notebook_interface(path: NotebookSource, node_id: str) -> NotebookInte
                 node_id=node_id,
                 severity=ValidationSeverity.ERROR,
                 code='missing_runtime_import',
-                message='Notebook must import artifacts via `from bulletjournal.runtime import artifacts`.',
+                message=(
+                    'Notebook must import runtime helpers via '
+                    '`from bulletjournal.runtime import artifacts` '
+                    'and/or `from bulletjournal.runtime import assets`.'
+                ),
             )
         )
 
     inputs: list[Port] = []
     outputs: list[Port] = []
+    asset_declarations: list[AssetDeclaration] = []
     seen_input_names: set[str] = set()
     seen_output_names: set[str] = set()
+    seen_asset_names: set[str] = set()
     exported_names: dict[str, int] = {}
-    declaration_index = 0
+    port_declaration_index = 0
+    asset_declaration_index = 0
     for cell in iter_app_cells(module):
         for statement in cell.body:
-            alias_issue = _artifact_alias_issue(statement, node_id=node_id)
+            alias_issue = _runtime_alias_issue(statement, node_id=node_id)
             if alias_issue is not None:
                 issues.append(alias_issue)
-            if _contains_artifact_call_nested(statement) and not _is_top_level_artifact_statement(statement):
+            if _contains_runtime_call_nested(statement) and not _is_top_level_runtime_statement(statement):
                 issues.append(
                     build_issue(
                         node_id=node_id,
                         severity=ValidationSeverity.ERROR,
-                        code='nested_artifact_call',
-                        message='Artifact declarations must appear at the top level of a cell body.',
+                        code='nested_runtime_call',
+                        message='Artifact and asset declarations must appear at the top level of a cell body.',
                     )
                 )
             parsed = _parse_statement(statement, node_id=node_id)
             if parsed is None:
                 continue
-            ports, new_issues = parsed
+            ports, declarations, new_issues = parsed
             issues.extend(new_issues)
             for port in ports:
-                port.declaration_index = declaration_index
-                declaration_index += 1
+                port.declaration_index = port_declaration_index
+                port_declaration_index += 1
                 if port.direction == 'input':
                     if port.name in seen_input_names:
                         issues.append(
@@ -138,17 +154,50 @@ def parse_notebook_interface(path: NotebookSource, node_id: str) -> NotebookInte
                         continue
                     seen_output_names.add(port.name)
                     outputs.append(port)
+            for declaration in declarations:
+                declaration.declaration_index = asset_declaration_index
+                asset_declaration_index += 1
+                if declaration.name in seen_asset_names:
+                    issues.append(
+                        build_issue(
+                            node_id=node_id,
+                            severity=ValidationSeverity.ERROR,
+                            code='duplicate_asset',
+                            message=f'Duplicate asset name `{declaration.name}`.',
+                        )
+                    )
+                    continue
+                seen_asset_names.add(declaration.name)
+                asset_declarations.append(declaration)
         _collect_duplicate_export_issues(cell, node_id=node_id, exported_names=exported_names, issues=issues)
 
     issues = sorted(issues, key=lambda item: (item.severity.value, item.code, item.message))
     docs = extract_notebook_docs_from_module(module)
-    return NotebookInterface(
+    interface = NotebookInterface(
         node_id=node_id,
         source_hash=source_hash,
         inputs=inputs,
         outputs=outputs,
         docs=docs,
         issues=issues,
+    )
+    return ParsedNotebookContract(
+        source_hash=source_hash,
+        docs=docs,
+        issues=issues,
+        interface=interface,
+        asset_declarations=asset_declarations,
+    )
+
+
+def _empty_contract(*, node_id: str, source_hash: str, issues: list[ValidationIssue]) -> ParsedNotebookContract:
+    interface = NotebookInterface(node_id=node_id, source_hash=source_hash, issues=issues)
+    return ParsedNotebookContract(
+        source_hash=source_hash,
+        docs=None,
+        issues=issues,
+        interface=interface,
+        asset_declarations=[],
     )
 
 
@@ -280,7 +329,7 @@ def _has_runtime_import(module: ast.Module) -> bool:
 def _is_runtime_import(node: ast.stmt) -> bool:
     if isinstance(node, ast.ImportFrom) and node.module == 'bulletjournal.runtime':
         for alias in node.names:
-            if alias.name == 'artifacts' and alias.asname is None:
+            if alias.name in {'artifacts', 'assets'} and alias.asname is None:
                 return True
     return False
 
@@ -303,30 +352,32 @@ def _app_setup_block(node: ast.stmt) -> ast.With | None:
     return None
 
 
-def _contains_artifact_call_nested(node: ast.AST) -> bool:
+def _contains_runtime_call_nested(node: ast.AST) -> bool:
     for child in ast.walk(node):
-        if isinstance(child, ast.Call) and _is_artifact_call(child):
+        if isinstance(child, ast.Call) and (_is_artifact_call(child) or _is_asset_call(child)):
             return True
         if isinstance(child, ast.With):
             for item in child.items:
-                if isinstance(item.context_expr, ast.Call) and _is_artifact_call(item.context_expr):
+                if isinstance(item.context_expr, ast.Call) and (
+                    _is_artifact_call(item.context_expr) or _is_asset_call(item.context_expr)
+                ):
                     return True
     return False
 
 
-def _is_top_level_artifact_statement(statement: ast.stmt) -> bool:
+def _is_top_level_runtime_statement(statement: ast.stmt) -> bool:
     if isinstance(statement, ast.Assign) and isinstance(statement.value, ast.Call):
-        return _is_artifact_call(statement.value)
+        return _is_artifact_call(statement.value) or _is_asset_call(statement.value)
     if isinstance(statement, ast.Expr) and isinstance(statement.value, ast.Call):
-        return _is_artifact_call(statement.value)
+        return _is_artifact_call(statement.value) or _is_asset_call(statement.value)
     if isinstance(statement, ast.With) and len(statement.items) == 1:
-        return isinstance(statement.items[0].context_expr, ast.Call) and _is_artifact_call(
-            statement.items[0].context_expr
+        return isinstance(statement.items[0].context_expr, ast.Call) and (
+            _is_artifact_call(statement.items[0].context_expr) or _is_asset_call(statement.items[0].context_expr)
         )
     return False
 
 
-def _artifact_alias_issue(statement: ast.stmt, *, node_id: str) -> ValidationIssue | None:
+def _runtime_alias_issue(statement: ast.stmt, *, node_id: str) -> ValidationIssue | None:
     if not isinstance(statement, ast.Assign):
         return None
     if _is_artifact_attribute(statement.value):
@@ -335,6 +386,13 @@ def _artifact_alias_issue(statement: ast.stmt, *, node_id: str) -> ValidationIss
             severity=ValidationSeverity.ERROR,
             code='artifact_aliasing',
             message='Aliasing artifact runtime helpers is not supported; call `artifacts.pull/push/...` directly.',
+        )
+    if _is_asset_attribute(statement.value):
+        return build_issue(
+            node_id=node_id,
+            severity=ValidationSeverity.ERROR,
+            code='asset_aliasing',
+            message='Aliasing asset runtime helpers is not supported; call `assets.push(...)` directly.',
         )
     return None
 
@@ -357,7 +415,29 @@ def _is_artifact_attribute(node: ast.AST) -> bool:
     )
 
 
-def _parse_statement(statement: ast.stmt, *, node_id: str) -> tuple[list[Port], list[ValidationIssue]] | None:
+def _is_asset_call(call: ast.Call) -> bool:
+    return (
+        isinstance(call.func, ast.Attribute)
+        and isinstance(call.func.value, ast.Name)
+        and call.func.value.id == 'assets'
+        and call.func.attr in ASSET_CALLS
+    )
+
+
+def _is_asset_attribute(node: ast.AST) -> bool:
+    return (
+        isinstance(node, ast.Attribute)
+        and isinstance(node.value, ast.Name)
+        and node.value.id == 'assets'
+        and node.attr in ASSET_CALLS
+    )
+
+
+def _parse_statement(
+    statement: ast.stmt,
+    *,
+    node_id: str,
+) -> tuple[list[Port], list[AssetDeclaration], list[ValidationIssue]] | None:
     issues: list[ValidationIssue] = []
     if (
         isinstance(statement, ast.Assign)
@@ -369,11 +449,11 @@ def _parse_statement(statement: ast.stmt, *, node_id: str) -> tuple[list[Port], 
         if call_name == 'pull':
             port, port_issues = _parse_pull(call, node_id=node_id)
             issues.extend(port_issues)
-            return ([port] if port else []), issues
+            return ([port] if port else []), [], issues
         if call_name == 'pull_file':
             port, port_issues = _parse_pull_file(call, node_id=node_id)
             issues.extend(port_issues)
-            return ([port] if port else []), issues
+            return ([port] if port else []), [], issues
         issues.append(
             build_issue(
                 node_id=node_id,
@@ -382,14 +462,24 @@ def _parse_statement(statement: ast.stmt, *, node_id: str) -> tuple[list[Port], 
                 message=f'`artifacts.{call_name}` cannot be assigned this way.',
             )
         )
-        return [], issues
+        return [], [], issues
+    if isinstance(statement, ast.Assign) and isinstance(statement.value, ast.Call) and _is_asset_call(statement.value):
+        issues.append(
+            build_issue(
+                node_id=node_id,
+                severity=ValidationSeverity.ERROR,
+                code='invalid_asset_assignment_call',
+                message='`assets.push(...)` cannot be assigned this way.',
+            )
+        )
+        return [], [], issues
     if isinstance(statement, ast.Expr) and isinstance(statement.value, ast.Call) and _is_artifact_call(statement.value):
         call = statement.value
         call_name = _artifact_call_name(call)
         if call_name == 'push':
             port, port_issues = _parse_push(call, node_id=node_id)
             issues.extend(port_issues)
-            return ([port] if port else []), issues
+            return ([port] if port else []), [], issues
         issues.append(
             build_issue(
                 node_id=node_id,
@@ -398,7 +488,11 @@ def _parse_statement(statement: ast.stmt, *, node_id: str) -> tuple[list[Port], 
                 message=f'`artifacts.{call_name}` must follow the supported top-level syntax.',
             )
         )
-        return [], issues
+        return [], [], issues
+    if isinstance(statement, ast.Expr) and isinstance(statement.value, ast.Call) and _is_asset_call(statement.value):
+        declaration, declaration_issues = _parse_asset_push(statement.value, node_id=node_id)
+        issues.extend(declaration_issues)
+        return [], ([declaration] if declaration else []), issues
     if isinstance(statement, ast.With) and len(statement.items) == 1:
         item = statement.items[0]
         if isinstance(item.context_expr, ast.Call) and _is_artifact_call(item.context_expr):
@@ -406,8 +500,43 @@ def _parse_statement(statement: ast.stmt, *, node_id: str) -> tuple[list[Port], 
             if _artifact_call_name(call) == 'push_file':
                 port, port_issues = _parse_push_file(call, node_id=node_id)
                 issues.extend(port_issues)
-                return ([port] if port else []), issues
+                return ([port] if port else []), [], issues
     return None
+
+
+def _parse_asset_push(call: ast.Call, *, node_id: str) -> tuple[AssetDeclaration | None, list[ValidationIssue]]:
+    kwargs = {item.arg: item.value for item in call.keywords if item.arg is not None}
+    name = _literal_string(kwargs.get('name'))
+    title = _literal_string(kwargs.get('title'))
+    description, description_is_literal = _literal_optional_string(kwargs.get('description'))
+    declared_asset_type, asset_type_issue = _parse_asset_type(kwargs.get('asset_type'), node_id=node_id)
+    issues: list[ValidationIssue] = []
+    if name is None:
+        issues.append(_literal_issue(node_id, 'name', 'Asset name must be a literal string.'))
+    if title is None:
+        issues.append(_literal_issue(node_id, 'title', 'Asset title must be a literal string.'))
+    if name is None or title is None:
+        if asset_type_issue is not None:
+            issues.append(asset_type_issue)
+        if 'description' in kwargs and not description_is_literal:
+            issues.append(_literal_issue(node_id, 'description', 'Description must be a literal string or `None`.'))
+        return None, issues
+    if not is_valid_artifact_name(name):
+        issues.append(_literal_issue(node_id, 'name', _invalid_artifact_name_message(name)))
+    if 'description' in kwargs and not description_is_literal:
+        issues.append(_literal_issue(node_id, 'description', 'Description must be a literal string or `None`.'))
+    if asset_type_issue is not None:
+        issues.append(asset_type_issue)
+    return (
+        AssetDeclaration(
+            node_id=node_id,
+            name=name,
+            title=title,
+            description=description,
+            declared_asset_type=declared_asset_type,
+        ),
+        issues,
+    )
 
 
 def _parse_pull(call: ast.Call, *, node_id: str) -> tuple[Port | None, list[ValidationIssue]]:
@@ -517,6 +646,16 @@ def _literal_string(node: ast.AST | None) -> str | None:
     return None
 
 
+def _literal_optional_string(node: ast.AST | None) -> tuple[str | None, bool]:
+    if node is None:
+        return None, True
+    if isinstance(node, ast.Constant) and node.value is None:
+        return None, True
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value, True
+    return None, False
+
+
 def _literal_bool(node: ast.AST | None) -> bool | None:
     if isinstance(node, ast.Constant) and isinstance(node.value, bool):
         return node.value
@@ -577,3 +716,22 @@ def _artifact_call_name(call: ast.Call) -> str:
     if isinstance(func, ast.Attribute):
         return func.attr
     raise ValueError('Unsupported artifact call.')
+
+
+def _parse_asset_type(node: ast.AST | None, *, node_id: str) -> tuple[str | None, ValidationIssue | None]:
+    if node is None:
+        return None, None
+    if not isinstance(node, ast.Attribute) or not isinstance(node.value, ast.Name) or node.value.id != 'assets':
+        return None, _literal_issue(
+            node_id,
+            'asset_type',
+            'asset_type must be a direct asset class reference such as `assets.Markdown`.',
+        )
+    asset_type_id = ASSET_TYPE_IDS_BY_CLASS_NAME.get(node.attr)
+    if asset_type_id is None:
+        return None, _literal_issue(
+            node_id,
+            'asset_type',
+            f'Unsupported asset type `assets.{node.attr}`.',
+        )
+    return asset_type_id, None

@@ -89,6 +89,73 @@ def test_new_notebook_is_custom_and_uses_empty_template_source(tmp_path) -> None
     assert 'import pandas as pd' in source
 
 
+def test_notebook_assets_are_listed_through_dedicated_api(tmp_path) -> None:
+    project_root = init_project_root(tmp_path / 'project').root
+    app = create_app(project_path=project_root)
+    client = TestClient(app)
+    container = app.state.container
+
+    opened = client.get('/api/v1/project/snapshot')
+    graph_version = opened.json()['graph']['meta']['graph_version']
+
+    patched = client.patch(
+        '/api/v1/graph',
+        json={
+            'graph_version': graph_version,
+            'operations': [
+                {
+                    'type': 'add_notebook_node',
+                    'node_id': 'asset_node',
+                    'title': 'Asset Node',
+                }
+            ],
+        },
+    )
+    assert patched.status_code == 200
+
+    notebook_path = project_root / 'notebooks' / 'asset_node.py'
+    notebook_path.write_text(
+        """
+import marimo
+
+app = marimo.App()
+
+with app.setup:
+    import pandas as pd
+    from bulletjournal.runtime import assets
+
+@app.cell
+def _():
+    assets.push(assets.Markdown('hello'), name='notes', title='Notes')
+    assets.push(assets.DataFrame(pd.DataFrame({'value': [1, 2]})), name='table', title='Table', asset_type=assets.DataFrame)
+    return
+""".strip()
+        + '\n',
+        encoding='utf-8',
+    )
+    container.project_service.reparse_notebook_by_path(notebook_path)
+
+    pending = client.get('/api/v1/nodes/asset_node/assets')
+    assert pending.status_code == 200
+    assert [asset['asset_name'] for asset in pending.json()] == ['notes', 'table']
+    assert all(asset['state'] == 'pending' for asset in pending.json())
+
+    run = client.post('/api/v1/nodes/asset_node/run', json={'mode': 'run_stale', 'action': 'use_stale'})
+    assert run.status_code == 200
+    assert run.json()['status'] == 'succeeded'
+
+    listed = client.get('/api/v1/nodes/asset_node/assets')
+    assert listed.status_code == 200
+    listed_payload = listed.json()
+    assert [asset['asset_name'] for asset in listed_payload] == ['notes', 'table']
+    assert listed_payload[0]['asset_type'] == 'markdown'
+    assert listed_payload[1]['asset_type'] == 'dataframe'
+
+    table_asset = client.get('/api/v1/nodes/asset_node/assets/table')
+    assert table_asset.status_code == 200
+    assert table_asset.json()['objects'][0]['object_role'] == 'backing_dataset'
+
+
 def test_graph_patch_rejects_unknown_operation_fields(tmp_path) -> None:
     project_root = init_project_root(tmp_path / 'project').root
     app = create_app(project_path=project_root)

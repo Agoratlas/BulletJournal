@@ -1,9 +1,10 @@
 import pandas as pd
 import pytest
 
+import bulletjournal.runtime.assets as runtime_assets
 from bulletjournal.domain.enums import ArtifactRole, ArtifactState, LineageMode
 from bulletjournal.domain.hashing import combine_hashes, hash_json
-from bulletjournal.domain.models import Port
+from bulletjournal.domain.models import AssetDeclaration, Port
 from bulletjournal.runtime.context import _RUNTIME_CONTEXT, Binding, RuntimeContext, current_runtime_context
 from bulletjournal.storage.project_fs import init_project_root
 
@@ -399,6 +400,83 @@ def test_runtime_context_finalize_value_push_serializes_dataframe_datetime_previ
 
     assert head is not None
     assert head['preview']['sample'] == [{'created_at': '2024-01-02T03:04:05+00:00'}]
+
+
+def test_runtime_context_finalize_asset_push_persists_markdown_asset(tmp_path) -> None:
+    project_root = init_project_root(tmp_path / 'project').root
+    context = RuntimeContext(
+        project_root=project_root,
+        node_id='producer',
+        run_id='run-markdown-asset',
+        source_hash='producer-source',
+        lineage_mode=LineageMode.MANAGED,
+        bindings={},
+        outputs={},
+        asset_declarations={
+            'notes': AssetDeclaration(
+                node_id='producer',
+                name='notes',
+                title='Notes',
+                description='Summary',
+                declared_asset_type='markdown',
+                declaration_index=0,
+            )
+        },
+    )
+
+    pushed = context.finalize_asset_push(
+        asset=runtime_assets.Markdown('hello'),
+        name='notes',
+        title='Notes',
+        description='Summary',
+        asset_type=runtime_assets.Markdown,
+    )
+    head = context.db.get_asset_head('producer', 'notes')
+
+    assert pushed['asset_name'] == 'notes'
+    assert head is not None
+    assert head['state'] == ArtifactState.READY.value
+    assert head['asset_type'] == 'markdown'
+    assert head['definition']['markdown_text'] == 'hello'
+    assert head['objects'] == []
+
+
+def test_runtime_context_finalize_asset_push_persists_dataframe_backing_dataset(tmp_path) -> None:
+    project_root = init_project_root(tmp_path / 'project').root
+    context = RuntimeContext(
+        project_root=project_root,
+        node_id='producer',
+        run_id='run-dataframe-asset',
+        source_hash='producer-source',
+        lineage_mode=LineageMode.MANAGED,
+        bindings={},
+        outputs={},
+        asset_declarations={
+            'table': AssetDeclaration(
+                node_id='producer',
+                name='table',
+                title='Table',
+                description=None,
+                declared_asset_type='dataframe',
+                declaration_index=0,
+            )
+        },
+    )
+
+    pushed = context.finalize_asset_push(
+        asset=runtime_assets.DataFrame(pd.DataFrame({'value': [1, 2, 3]})),
+        name='table',
+        title='Table',
+        description=None,
+        asset_type=runtime_assets.DataFrame,
+    )
+    head = context.db.get_asset_head('producer', 'table')
+
+    assert pushed['asset_name'] == 'table'
+    assert head is not None
+    assert head['asset_type'] == 'dataframe'
+    assert head['definition']['row_count'] == 3
+    assert head['objects'][0]['object_role'] == 'backing_dataset'
 
 
 def test_runtime_context_rejects_output_not_declared_in_interface(tmp_path) -> None:

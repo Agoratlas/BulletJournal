@@ -10,7 +10,7 @@ from collections import deque
 from pathlib import Path
 
 from bulletjournal.domain.enums import ArtifactRole, LineageMode
-from bulletjournal.domain.models import Port
+from bulletjournal.domain.models import AssetDeclaration, Port
 from bulletjournal.execution.manifests import RunManifest
 from bulletjournal.execution.marimo_adapter import execute_notebook
 from bulletjournal.parser.marimo_loader import iter_app_cells, load_module_ast
@@ -182,6 +182,17 @@ def main(argv: list[str] | None = None) -> int:
                 )
                 for name, value in manifest.outputs.items()
             }
+            asset_declarations = {
+                name: AssetDeclaration(
+                    node_id=value.get('node_id', manifest.node_id),
+                    name=name,
+                    title=value['title'],
+                    description=value.get('description'),
+                    declared_asset_type=value.get('declared_asset_type'),
+                    declaration_index=int(value.get('declaration_index', 0)),
+                )
+                for name, value in manifest.assets.items()
+            }
             context = RuntimeContext(
                 project_root=Path(manifest.project_root),
                 node_id=manifest.node_id,
@@ -190,6 +201,7 @@ def main(argv: list[str] | None = None) -> int:
                 lineage_mode=LineageMode(manifest.lineage_mode),
                 bindings=bindings,
                 outputs=outputs,
+                asset_declarations=asset_declarations,
             )
             progress_path = Path(manifest.progress_path) if manifest.progress_path else None
             _install_script_runner_progress_hooks(
@@ -215,6 +227,7 @@ def main(argv: list[str] | None = None) -> int:
             'error': str(exc),
             'traceback': traceback.format_exc(),
             'outputs': [] if context is None else context.pushed_outputs,
+            'assets': [] if context is None else context.pushed_assets,
         }
         if captured_warnings:
             payload['warnings'] = captured_warnings
@@ -231,7 +244,7 @@ def main(argv: list[str] | None = None) -> int:
             stdout_log_handle.close()
         if stderr_log_handle is not None:
             stderr_log_handle.close()
-    payload = {'status': 'ok', 'outputs': context.pushed_outputs}
+    payload = {'status': 'ok', 'outputs': context.pushed_outputs, 'assets': context.pushed_assets}
     if captured_warnings:
         payload['warnings'] = captured_warnings
     stdout_text = captured_stdout.getvalue()

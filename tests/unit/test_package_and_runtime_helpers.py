@@ -15,6 +15,7 @@ import bulletjournal.api as bulletjournal_api
 import bulletjournal.cli as bulletjournal_cli
 import bulletjournal.execution.worker_main as worker_main
 import bulletjournal.runtime.artifacts as runtime_artifacts
+import bulletjournal.runtime.assets as runtime_assets
 import bulletjournal.runtime.context as runtime_context
 import bulletjournal.runtime.file_artifacts as file_artifacts
 import bulletjournal.storage as bulletjournal_storage
@@ -33,6 +34,7 @@ def test_lazy_package_exports_and_attribute_errors() -> None:
     import bulletjournal.api.app as api_app_module
     import bulletjournal.runtime as runtime_package
     import bulletjournal.runtime.artifacts as runtime_artifacts_module
+    import bulletjournal.runtime.assets as runtime_assets_module
     import bulletjournal.runtime.context as runtime_context_module
     import bulletjournal.storage.graph_store as graph_store_module
     import bulletjournal.storage.object_store as object_store_module
@@ -51,6 +53,7 @@ def test_lazy_package_exports_and_attribute_errors() -> None:
     assert bulletjournal_storage.init_project_root is project_fs_module.init_project_root
     assert bulletjournal_storage.is_project_root is project_fs_module.is_project_root
     assert runtime_package.artifacts is runtime_artifacts_module
+    assert runtime_package.assets is runtime_assets_module
     assert runtime_package.get_node_id is runtime_context_module.get_node_id
     assert runtime_package.get_project_id is runtime_context_module.get_project_id
 
@@ -72,6 +75,18 @@ def test_runtime_artifacts_module_exposes_helper_functions_after_submodule_impor
     assert callable(runtime_module.pull_file)
     assert callable(runtime_module.push)
     assert callable(runtime_module.push_file)
+    assert imported is runtime_module
+
+
+def test_runtime_assets_module_exposes_helper_functions_after_submodule_import() -> None:
+    runtime_package = importlib.import_module('bulletjournal.runtime')
+    runtime_module = importlib.import_module('bulletjournal.runtime.assets')
+
+    imported = runtime_package.assets
+
+    assert callable(runtime_module.push)
+    assert runtime_module.Markdown is not None
+    assert runtime_module.DataFrame is not None
     assert imported is runtime_module
 
 
@@ -209,6 +224,21 @@ def test_artifacts_api_delegates_to_runtime_context(monkeypatch: pytest.MonkeyPa
         ('record_pull', ('dataset', file_metadata)),
         ('push', ('result', 42, 'int', ArtifactRole.OUTPUT)),
     ]
+
+
+def test_assets_api_delegates_to_runtime_context(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[tuple[str, object]] = []
+
+    class FakeContext:
+        def finalize_asset_push(self, *, asset, name: str, title: str, description: str | None, asset_type) -> None:
+            calls.append(('asset_push', (asset, name, title, description, asset_type)))
+
+    monkeypatch.setattr(runtime_assets, 'current_runtime_context', lambda: FakeContext())
+
+    asset = runtime_assets.Markdown('hello')
+    runtime_assets.push(asset, name='summary', title='Summary', description='Notebook summary')
+
+    assert calls == [('asset_push', (asset, 'summary', 'Summary', 'Notebook summary', None))]
 
 
 def test_artifacts_pull_file_returns_none_for_optional_missing_binding(monkeypatch: pytest.MonkeyPatch) -> None:

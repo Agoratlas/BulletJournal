@@ -149,6 +149,44 @@ class NotebookInterface:
 
 
 @dataclass(slots=True)
+class AssetDeclaration:
+    node_id: str
+    name: str
+    title: str
+    description: str | None = None
+    declared_asset_type: str | None = None
+    declaration_index: int = 0
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            'node_id': self.node_id,
+            'name': self.name,
+            'title': self.title,
+            'description': self.description,
+            'declared_asset_type': self.declared_asset_type,
+            'declaration_index': self.declaration_index,
+        }
+
+
+@dataclass(slots=True)
+class ParsedNotebookContract:
+    source_hash: str
+    docs: str | None
+    issues: list[ValidationIssue]
+    interface: NotebookInterface
+    asset_declarations: list[AssetDeclaration] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            'source_hash': self.source_hash,
+            'docs': self.docs,
+            'issues': [issue.to_dict() for issue in self.issues],
+            'interface': self.interface.to_dict(),
+            'asset_declarations': [declaration.to_dict() for declaration in self.asset_declarations],
+        }
+
+
+@dataclass(slots=True)
 class GraphData:
     meta: dict[str, Any]
     nodes: list[Node]

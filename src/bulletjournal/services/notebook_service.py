@@ -5,8 +5,8 @@ from typing import Any
 
 from bulletjournal.domain.enums import ArtifactState, NodeKind, ValidationSeverity
 from bulletjournal.domain.errors import InvalidRequestError
-from bulletjournal.domain.models import NotebookInterface, ValidationIssue
-from bulletjournal.parser import parse_notebook_interface
+from bulletjournal.domain.models import NotebookInterface, ParsedNotebookContract, ValidationIssue
+from bulletjournal.parser import parse_notebook_contract
 from bulletjournal.parser.validation import build_issue
 
 
@@ -22,16 +22,18 @@ class NotebookService:
         notebook_path = project.paths.notebook_path(node_id)
         if not notebook_path.exists():
             raise FileNotFoundError(f'Notebook file not found: {notebook_path}')
-        previous = project.state_db.latest_interface_json(node_id)
-        interface = parse_notebook_interface(notebook_path, node_id=node_id)
-        interface_payload = interface.to_dict()
-        blocking_errors = [issue for issue in interface.issues if issue.severity == ValidationSeverity.ERROR]
-        project.state_db.replace_validation_issues(node_id, interface.issues)
+        previous_contract = project.state_db.latest_notebook_contract_json(node_id)
+        previous_interface = _contract_interface(previous_contract)
+        contract = parse_notebook_contract(notebook_path, node_id=node_id)
+        interface_payload = contract.interface.to_dict()
+        blocking_errors = [issue for issue in contract.issues if issue.severity == ValidationSeverity.ERROR]
+        project.state_db.replace_validation_issues(node_id, contract.issues)
         removed_edges: list[dict[str, Any]] = []
         if not blocking_errors:
-            removed_edges = self._sync_ports(node_id, previous, interface)
+            removed_edges = self._sync_ports(node_id, previous_interface, contract.interface)
+            self._sync_asset_declarations(node_id, previous_contract, contract)
             durable_warnings = self._removed_edge_warnings(node_id=node_id, removed_edges=removed_edges)
-            project.state_db.save_notebook_revision(node_id, interface.source_hash, interface.docs, interface_payload)
+            project.state_db.save_notebook_contract(node_id, contract.source_hash, contract.docs, contract.to_dict())
             for warning in durable_warnings:
                 self.project_service.record_notice(
                     issue_id=warning.issue_id,
@@ -41,8 +43,8 @@ class NotebookService:
                     message=warning.message,
                     details=warning.details,
                 )
-            changed = previous is not None and previous.get('source_hash') != interface.source_hash
-            first_parse = previous is None
+            changed = previous_interface is not None and previous_interface.get('source_hash') != contract.source_hash
+            first_parse = previous_interface is None
             if changed or first_parse:
                 self.project_service.record_notebook_activity()
             if changed:
@@ -63,7 +65,7 @@ class NotebookService:
             payload={
                 'node_id': node_id,
                 'removed_edges': removed_edges,
-                'source_hash': interface.source_hash,
+                'source_hash': contract.source_hash,
                 'applied': not blocking_errors,
             },
         )
@@ -71,7 +73,7 @@ class NotebookService:
             'validation.updated',
             project_id=project.metadata.project_id,
             graph_version=int(graph.meta['graph_version']),
-            payload={'node_id': node_id, 'issues': [issue.to_dict() for issue in interface.issues]},
+            payload={'node_id': node_id, 'issues': [issue.to_dict() for issue in contract.issues]},
         )
         return interface_payload
 
@@ -157,6 +159,29 @@ class NotebookService:
             head = project.state_db.get_artifact_head(node_id, port['name'])
             if head and head['current_version_id'] is not None:
                 project.state_db.set_artifact_head_state(node_id, port['name'], ArtifactState.STALE)
+        for head in project.state_db.list_asset_heads(node_id=node_id):
+            if head.get('current_asset_version_id') is None:
+                continue
+            project.state_db.set_asset_head_state(node_id, str(head['asset_name']), ArtifactState.STALE)
+
+    def _sync_asset_declarations(
+        self,
+        node_id: str,
+        previous_contract: dict[str, Any] | None,
+        current: ParsedNotebookContract,
+    ) -> None:
+        project = self.project_service.require_project()
+        previous_names = {
+            str(declaration['name'])
+            for declaration in (previous_contract or {}).get('asset_declarations', [])
+            if isinstance(declaration, dict) and declaration.get('name')
+        }
+        current_names = {declaration.name for declaration in current.asset_declarations}
+        project.state_db.replace_asset_declarations(node_id, current.source_hash, current.asset_declarations)
+        for declaration in current.asset_declarations:
+            project.state_db.ensure_asset_head(node_id, declaration.name, ArtifactState.PENDING)
+        for removed_name in sorted(previous_names - current_names):
+            project.state_db.delete_asset_state(node_id, removed_name)
 
 
 def _output_ports(interface_json: dict[str, Any] | None) -> dict[str, dict[str, Any]]:
@@ -176,3 +201,12 @@ def _input_type(interface: NotebookInterface, name: str) -> str | None:
         if port.name == name:
             return port.data_type
     return None
+
+
+def _contract_interface(contract_json: dict[str, Any] | None) -> dict[str, Any] | None:
+    if contract_json is None:
+        return None
+    interface = contract_json.get('interface')
+    if isinstance(interface, dict):
+        return interface
+    return contract_json
