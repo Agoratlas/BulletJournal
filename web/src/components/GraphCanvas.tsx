@@ -29,7 +29,7 @@ import { areaSettings } from '../lib/area'
 import { CONSTANT_NODE_PORT_CENTER_OFFSET, CONSTANT_NODE_WIDTH, ORGANIZER_NODE_PORT_CENTER_OFFSET, PORT_ROW_HEIGHT, STANDARD_NODE_PORT_CENTER_OFFSET, artifactCounts, artifactFor, artifactIsEmpty, badgeForNode, formatDurationSeconds, inputBindingSource, inputState, inputsForNode, outputsForNode } from '../lib/helpers'
 import type { ArtifactState, NodeRecord, Port, ProjectSnapshot } from '../lib/types'
 import { ArtifactCounts } from './ArtifactCounts'
-import { Pencil, Play } from './Icons'
+import { Eye, Pencil, Play } from './Icons'
 import { PortLabel, TYPE_COLORS, displayPortName } from './PortLabel'
 
 type GraphCanvasProps = {
@@ -55,6 +55,7 @@ type GraphCanvasProps = {
   onEditOrganizerNode: (nodeId: string) => void
   onEditAreaNode: (nodeId: string) => void
   onOpenEditor: (nodeId: string) => void
+  onOpenDashboard: (nodeId: string, options?: { newTab?: boolean }) => void
   onKillEditor: (nodeId: string) => void
   onRunNode: (nodeId: string, mode: 'run_stale' | 'run_all' | 'edit_run', scope?: 'node' | 'ancestors' | 'descendants') => void
   onOpenArtifacts: (nodeId: string) => void
@@ -66,12 +67,16 @@ type GraphCanvasProps = {
   draggedBlock: { title: string; kind: string } | null
   onBlockDrop: (x: number, y: number) => void
   onViewportChange: (viewport: { center: { x: number; y: number }; zoom: number }) => void
+  dashboardPseudoLinks?: Array<{ sourceNodeId: string; dashboardNodeId: string }>
+  selectedDashboardId?: string | null
+  selectedDashboardSourceNodeIds?: string[]
+  onToggleDashboardSource?: (nodeId: string) => void
   nodeNoticeSeverityById?: Record<string, 'error' | 'warning'>
   hoveredNoticeNodeId?: string | null
   focusedNotice?: { nodeId: string; token: number } | null
 }
 
-const NON_RUNNABLE_NODE_KINDS = new Set(['constant', 'file_input', 'organizer', 'area'])
+const NON_RUNNABLE_NODE_KINDS = new Set(['constant', 'file_input', 'organizer', 'area', 'dashboard'])
 const GRAPH_MIN_ZOOM = 0.18
 const GRAPH_MAX_ZOOM = 1.35
 const GRAPH_DEFAULT_ZOOM = 0.78
@@ -97,10 +102,16 @@ type BulletJournalNodeData = {
   onEditOrganizerNode: (nodeId: string) => void
   onEditAreaNode: (nodeId: string) => void
   onOpenEditor: (nodeId: string) => void
+  onOpenDashboard: (nodeId: string, options?: { newTab?: boolean }) => void
   onKillEditor: (nodeId: string) => void
   onRunNode: (nodeId: string, mode: 'run_stale' | 'run_all' | 'edit_run', scope?: 'node' | 'ancestors' | 'descendants') => void
   onOpenArtifacts: (nodeId: string) => void
   activeEditorNodeIds: string[]
+  selectedDashboardId: string | null
+  selectedDashboardSourceNodeIds: string[]
+  selectedDashboardEdgeNotebookIds: string[]
+  selectedDashboardEdgeDashboardIds: string[]
+  onToggleDashboardSource: (nodeId: string) => void
   organizerGhostInsertIndex: number | null
   onNodeResizePreview: (nodeId: string, x: number, y: number, w: number, h: number) => void
   onNodeResize: (nodeId: string, x: number, y: number, w: number, h: number) => void
@@ -560,6 +571,9 @@ const BulletJournalNodeCard = memo(({ data, selected }: NodeProps<BulletJournalN
   const connectionIntent = useConnectionIntent()
   const noticeClassName = data.activeNoticeSeverity ? `has-active-notice-${data.activeNoticeSeverity}` : ''
   const hoveredNoticeClassName = data.hoveredNotice ? 'notice-hovered' : ''
+  const dashboardSourceSelected = data.selectedDashboardSourceNodeIds.includes(node.id)
+  const showDashboardSourcePort = node.kind === 'notebook' && (data.selectedDashboardId !== null || data.selectedDashboardEdgeNotebookIds.includes(node.id))
+  const showDashboardTargetPort = node.kind === 'dashboard' && (data.selectedDashboardId === node.id || data.selectedDashboardEdgeDashboardIds.includes(node.id))
 
   useEffect(() => {
     if (!isExecutionActive) {
@@ -690,6 +704,59 @@ const BulletJournalNodeCard = memo(({ data, selected }: NodeProps<BulletJournalN
     )
   }
 
+  if (node.kind === 'dashboard') {
+    return (
+      <div
+        className={`rf-node rf-dashboard-node state-${node.state} ${selected ? 'is-selected' : ''} ${noticeClassName} ${hoveredNoticeClassName}`}
+        onDoubleClick={(event) => {
+          event.stopPropagation()
+          data.onOpenDashboard(node.id, { newTab: true })
+        }}
+        onContextMenu={(event) => {
+          event.preventDefault()
+          event.stopPropagation()
+          onNodeContextMenu(node.id, { x: event.clientX, y: event.clientY })
+        }}
+      >
+        <Handle
+          type="target"
+          id="dashboard-link:bottom"
+          position={Position.Bottom}
+          className={showDashboardTargetPort ? 'rf-dashboard-target-port' : 'rf-dashboard-hidden-handle'}
+        />
+        <div className="rf-dashboard-copy">
+          <div className="rf-node-header rf-dashboard-header">
+            <div className="rf-node-titles">
+              <h4>{node.title}</h4>
+              <span>{node.id}</span>
+            </div>
+          </div>
+          <div className="rf-node-footer rf-dashboard-footer">
+            <button
+              type="button"
+              className="round-node-action dashboard-open"
+              aria-label="Open dashboard"
+              title="Open dashboard"
+              onClick={(event) => {
+                event.stopPropagation()
+                data.onOpenDashboard(node.id, { newTab: true })
+              }}
+            >
+              <Eye className="dashboard-open-icon" width={21} height={21} strokeWidth={2.35} />
+            </button>
+            <div className="artifact-button dashboard-asset-button">
+              Assets
+              <ArtifactCounts
+                counts={node.ui?.asset_counts ?? { pending: 0, stale: 0, ready: 0 }}
+                compact
+              />
+            </div>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
   if (node.kind === 'constant') {
     const outputPort = outputs[0] ?? null
     const ownArtifact = outputPort ? artifactFor(snapshot, node.id, outputPort.name) : null
@@ -777,6 +844,37 @@ const BulletJournalNodeCard = memo(({ data, selected }: NodeProps<BulletJournalN
         onNodeContextMenu(node.id, { x: event.clientX, y: event.clientY })
       }}
     >
+      {node.kind === 'notebook' ? (
+        <Handle
+          type="source"
+          id="dashboard-link:top"
+          position={Position.Top}
+          className={showDashboardSourcePort ? `rf-dashboard-source-port${dashboardSourceSelected ? ' selected' : ''}` : 'rf-dashboard-hidden-handle'}
+          role="button"
+          tabIndex={showDashboardSourcePort ? 0 : -1}
+          aria-pressed={dashboardSourceSelected}
+          aria-label={dashboardSourceSelected ? 'Remove notebook from dashboard' : 'Add notebook to dashboard'}
+          title={dashboardSourceSelected ? 'Remove notebook from dashboard' : 'Add notebook to dashboard'}
+          onClick={(event) => {
+            if (!showDashboardSourcePort) {
+              return
+            }
+            event.preventDefault()
+            event.stopPropagation()
+            data.onToggleDashboardSource(node.id)
+          }}
+          onKeyDown={(event) => {
+            if (!showDashboardSourcePort || (event.key !== 'Enter' && event.key !== ' ')) {
+              return
+            }
+            event.preventDefault()
+            event.stopPropagation()
+            data.onToggleDashboardSource(node.id)
+          }}
+        >
+          {dashboardSourceSelected ? <Eye className="rf-dashboard-source-port-icon" width={13} height={13} /> : null}
+        </Handle>
+      ) : null}
       <div className="rf-node-header">
         <div className={`rf-badge tone-${badge.tone}`} title={badge.title}>{badge.label}</div>
         <div className="rf-node-titles">
@@ -915,7 +1013,7 @@ function isGhostHandle(handleId: string | null | undefined): boolean {
   return Boolean(handleId && (handleId.startsWith('ghost-in:') || handleId.startsWith('ghost-out:')))
 }
 
-export function GraphCanvas({ snapshot, serverNowMs = Date.now(), serverNowClientAnchorMs = Date.now(), selectedNodeIds, selectedEdgeIds, activeRunNodeId = null, queuedRunNodeIds = [], completedRunNodeIds = [], activeEditorNodeIds = [], onConnect, onEdgesChange, onSelectionChange, onNodeSelect, onEdgeSelect, onNodeContextMenu, onSelectionContextMenu, onPortContextMenu, onEditConstantNode, onEditFileNode, onEditOrganizerNode, onEditAreaNode, onOpenEditor, onKillEditor, onRunNode, onOpenArtifacts, onCanvasInteract, onCanvasClear, onNodeMove, onNodeResize, onNodesDelete, draggedBlock, onBlockDrop, onViewportChange, nodeNoticeSeverityById = {}, hoveredNoticeNodeId = null, focusedNotice = null }: GraphCanvasProps) {
+export function GraphCanvas({ snapshot, serverNowMs = Date.now(), serverNowClientAnchorMs = Date.now(), selectedNodeIds, selectedEdgeIds, activeRunNodeId = null, queuedRunNodeIds = [], completedRunNodeIds = [], activeEditorNodeIds = [], onConnect, onEdgesChange, onSelectionChange, onNodeSelect, onEdgeSelect, onNodeContextMenu, onSelectionContextMenu, onPortContextMenu, onEditConstantNode, onEditFileNode, onEditOrganizerNode, onEditAreaNode, onOpenEditor, onOpenDashboard, onKillEditor, onRunNode, onOpenArtifacts, onCanvasInteract, onCanvasClear, onNodeMove, onNodeResize, onNodesDelete, draggedBlock, onBlockDrop, onViewportChange, dashboardPseudoLinks = [], selectedDashboardId = null, selectedDashboardSourceNodeIds = [], onToggleDashboardSource = () => undefined, nodeNoticeSeverityById = {}, hoveredNoticeNodeId = null, focusedNotice = null }: GraphCanvasProps) {
   const { screenToFlowPosition, setCenter, setViewport } = useReactFlow()
   const store = useStoreApi()
   const updateNodeInternals = useUpdateNodeInternals()
@@ -970,6 +1068,22 @@ export function GraphCanvas({ snapshot, serverNowMs = Date.now(), serverNowClien
     () => JSON.stringify(Object.entries(organizerGhostByNodeId).sort(([left], [right]) => left.localeCompare(right))),
     [organizerGhostByNodeId],
   )
+  const selectedDashboardPseudoEdgeNotebookIds = useMemo(
+    () => Array.from(new Set(
+      dashboardPseudoLinks
+        .filter((edge) => selectedEdgeIds.includes(`dashboard:${edge.sourceNodeId}__${edge.dashboardNodeId}`))
+        .map((edge) => edge.sourceNodeId),
+    )),
+    [dashboardPseudoLinks, selectedEdgeIds],
+  )
+  const selectedDashboardPseudoEdgeDashboardIds = useMemo(
+    () => Array.from(new Set(
+      dashboardPseudoLinks
+        .filter((edge) => selectedEdgeIds.includes(`dashboard:${edge.sourceNodeId}__${edge.dashboardNodeId}`))
+        .map((edge) => edge.dashboardNodeId),
+    )),
+    [dashboardPseudoLinks, selectedEdgeIds],
+  )
 
   const mappedNodes = useMemo<Node<BulletJournalNodeData>[]>(() => {
     const layoutByNode = Object.fromEntries(snapshot.graph.layout.map((entry) => [entry.node_id, entry]))
@@ -995,9 +1109,15 @@ export function GraphCanvas({ snapshot, serverNowMs = Date.now(), serverNowClien
           onEditOrganizerNode,
           onEditAreaNode,
           onOpenEditor,
+          onOpenDashboard,
           onKillEditor,
           onRunNode,
           onOpenArtifacts,
+          selectedDashboardId,
+          selectedDashboardSourceNodeIds,
+          selectedDashboardEdgeNotebookIds: selectedDashboardPseudoEdgeNotebookIds,
+          selectedDashboardEdgeDashboardIds: selectedDashboardPseudoEdgeDashboardIds,
+          onToggleDashboardSource,
           organizerGhostInsertIndex: organizerGhostByNodeId[node.id] ?? null,
           onNodeResizePreview: previewNodeResize,
           onNodeResize,
@@ -1017,7 +1137,7 @@ export function GraphCanvas({ snapshot, serverNowMs = Date.now(), serverNowClien
         zIndex: node.kind === 'area' ? -1 : 0,
       }
     })
-  }, [snapshot, serverNowMs, serverNowClientAnchorMs, selectedNodeIds, activeRunNodeId, queuedRunNodeIds, completedRunNodeIds, activeEditorNodeIds, onNodeContextMenu, onPortContextMenu, onEditConstantNode, onEditFileNode, onEditOrganizerNode, onEditAreaNode, onKillEditor, onNodeResize, onNodeSelect, onOpenArtifacts, onOpenEditor, onRunNode, nodeDimensions, organizerGhostByNodeId, pendingLayoutVersion, nodeNoticeSeverityById, hoveredNoticeNodeId])
+  }, [snapshot, serverNowMs, serverNowClientAnchorMs, selectedNodeIds, activeRunNodeId, queuedRunNodeIds, completedRunNodeIds, activeEditorNodeIds, onNodeContextMenu, onPortContextMenu, onEditConstantNode, onEditFileNode, onEditOrganizerNode, onEditAreaNode, onKillEditor, onNodeResize, onNodeSelect, onOpenArtifacts, onOpenDashboard, onOpenEditor, onRunNode, onToggleDashboardSource, selectedDashboardId, selectedDashboardSourceNodeIds, selectedDashboardPseudoEdgeNotebookIds, selectedDashboardPseudoEdgeDashboardIds, nodeDimensions, organizerGhostByNodeId, pendingLayoutVersion, nodeNoticeSeverityById, hoveredNoticeNodeId])
 
   useEffect(() => {
     const currentNodeIds = new Set(snapshot.graph.nodes.map((node) => node.id))
@@ -1099,6 +1219,9 @@ export function GraphCanvas({ snapshot, serverNowMs = Date.now(), serverNowClien
           inputs: (node.interface?.inputs ?? []).map((port) => [port.name, port.data_type, port.declaration_index ?? null]),
           outputs: (node.interface?.outputs ?? []).map((port) => [port.name, port.data_type, port.declaration_index ?? null]),
           organizerGhostInsertIndex: node.kind === 'organizer' ? (organizerGhostByNodeId[node.id] ?? null) : null,
+          dashboardSourcePort: node.kind === 'notebook' && (selectedDashboardId !== null || selectedDashboardPseudoEdgeNotebookIds.includes(node.id)),
+          dashboardSourceSelected: selectedDashboardSourceNodeIds.includes(node.id),
+          dashboardTargetPort: selectedDashboardId === node.id || selectedDashboardPseudoEdgeDashboardIds.includes(node.id),
         }),
       ]),
     )
@@ -1110,7 +1233,7 @@ export function GraphCanvas({ snapshot, serverNowMs = Date.now(), serverNowClien
       return
     }
     updateNodeInternals(changedNodeIds)
-  }, [snapshot.graph.nodes, organizerGhostByNodeId, organizerGhostSignature, updateNodeInternals])
+  }, [snapshot.graph.nodes, organizerGhostByNodeId, organizerGhostSignature, selectedDashboardId, selectedDashboardSourceNodeIds, selectedDashboardPseudoEdgeNotebookIds, selectedDashboardPseudoEdgeDashboardIds, updateNodeInternals])
 
   const nodes = useMemo(() => {
     let changed = false
@@ -1151,7 +1274,7 @@ export function GraphCanvas({ snapshot, serverNowMs = Date.now(), serverNowClien
 
   const edges = useMemo<Edge[]>(() => {
     const nodeById = new Map(snapshot.graph.nodes.map((node) => [node.id, node]))
-    return snapshot.graph.edges.map((edge) => {
+    const executionEdges = snapshot.graph.edges.map((edge) => {
       const isSelected = selectedEdgeIds.includes(edge.id)
       const isFrozen = Boolean(nodeById.get(edge.source_node)?.ui?.frozen && nodeById.get(edge.target_node)?.ui?.frozen)
       const stroke = isSelected ? '#1d8f78' : isFrozen ? 'var(--freeze-edge)' : '#75858a'
@@ -1171,7 +1294,30 @@ export function GraphCanvas({ snapshot, serverNowMs = Date.now(), serverNowClien
         style: { strokeWidth: isSelected ? 3.6 : isFrozen ? 2.8 : 2.2, stroke },
       }
     })
-  }, [snapshot.graph.edges, snapshot.graph.nodes, selectedEdgeIds])
+    const pseudoEdges = dashboardPseudoLinks
+      .filter((edge) => nodeById.has(edge.sourceNodeId) && nodeById.has(edge.dashboardNodeId))
+      .map((edge) => {
+        const id = `dashboard:${edge.sourceNodeId}__${edge.dashboardNodeId}`
+        const isSelected = selectedEdgeIds.includes(id)
+        return {
+          id,
+          source: edge.sourceNodeId,
+          target: edge.dashboardNodeId,
+          sourceHandle: 'dashboard-link:top',
+          targetHandle: 'dashboard-link:bottom',
+          className: isSelected ? 'rf-dashboard-edge rf-edge-selected' : 'rf-dashboard-edge',
+          selected: isSelected,
+          animated: false,
+          markerEnd: { type: MarkerType.ArrowClosed, color: isSelected ? '#1d8f78' : '#2563eb' },
+          style: {
+            strokeWidth: 3.6,
+            stroke: isSelected ? '#1d8f78' : '#2563eb',
+            opacity: 0.9,
+          },
+        }
+      })
+    return [...executionEdges, ...pseudoEdges]
+  }, [dashboardPseudoLinks, snapshot.graph.edges, snapshot.graph.nodes, selectedEdgeIds])
 
   const handleNodeDragStop: NodeDragHandler = (_event, node) => {
     onCanvasInteract()
@@ -1382,6 +1528,13 @@ export function GraphCanvas({ snapshot, serverNowMs = Date.now(), serverNowClien
           const targetNode = snapshot.graph.nodes.find((item) => item.id === connection.target)
           if (!sourceNode || !targetNode || sourceNode.id === targetNode.id) {
             return false
+          }
+          const dashboardLinkConnection = sourceNode.kind !== targetNode.kind
+            && ((sourceNode.kind === 'dashboard' && targetNode.kind === 'notebook') || (sourceNode.kind === 'notebook' && targetNode.kind === 'dashboard'))
+            && connection.sourceHandle.startsWith('dashboard-link:')
+            && connection.targetHandle.startsWith('dashboard-link:')
+          if (dashboardLinkConnection) {
+            return true
           }
           const sourceGhost = isGhostHandle(connection.sourceHandle)
           const targetGhost = isGhostHandle(connection.targetHandle)

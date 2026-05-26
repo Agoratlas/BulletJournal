@@ -1,4 +1,7 @@
 import type {
+  AssetPrepareResponse,
+  AssetRecord,
+  DashboardRecord,
   ExecutionLogSummary,
   GraphPatchResponse,
   GraphPatchOperation,
@@ -52,6 +55,14 @@ export async function getExecutionLogs(nodeId: string): Promise<{ stdout: Execut
 
 export function notebookDownloadUrl(nodeId: string): string {
   return appUrl(`/api/v1/nodes/${encodeURIComponent(nodeId)}/notebook/download`)
+}
+
+export function notebookAssetsUrl(nodeId: string): string {
+  return appUrl(`/notebooks/${encodeURIComponent(nodeId)}/assets`)
+}
+
+export function dashboardUrl(dashboardId: string): string {
+  return appUrl(`/dashboards/${encodeURIComponent(dashboardId)}`)
 }
 
 export async function downloadNotebookSource(nodeId: string): Promise<string> {
@@ -294,6 +305,103 @@ export async function setNodeOutputsState(nodeId: string, state: 'ready' | 'stal
   return request<Record<string, unknown>>(`/api/v1/nodes/${encodeURIComponent(nodeId)}/outputs/state`, {
     method: 'POST',
     body: JSON.stringify({ state, only_current_state: onlyCurrentState }),
+  })
+}
+
+export async function listNodeAssets(nodeId: string): Promise<AssetRecord[]> {
+  return request(`/api/v1/nodes/${encodeURIComponent(nodeId)}/assets`)
+}
+
+export async function prepareAsset(
+  nodeId: string,
+  assetName: string,
+  payload: {
+    asset_version_id?: number | null
+    modifier_overrides?: Record<string, unknown>
+    transient_modifiers?: Record<string, unknown>
+    panel_context?: Record<string, unknown> | null
+  },
+): Promise<AssetPrepareResponse> {
+  return request(`/api/v1/assets/${encodeURIComponent(nodeId)}/${encodeURIComponent(assetName)}/prepare`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+export async function getDashboard(dashboardId: string): Promise<DashboardRecord> {
+  return request(`/api/v1/dashboards/${encodeURIComponent(dashboardId)}`)
+}
+
+export async function createDashboard(payload: {
+  dashboard_id?: string | null
+  title: string
+  sources: Array<{ node_id: string }>
+  panels: Array<{
+    panel_id?: string | null
+    node_id: string
+    asset_name: string
+    visible?: boolean
+    position?: number | null
+    modifier_overrides?: Record<string, unknown>
+    override_schema_hash?: string | null
+  }>
+  x?: number
+  y?: number
+}): Promise<DashboardRecord> {
+  return request('/api/v1/dashboards', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+export async function patchDashboard(
+  dashboardId: string,
+  payload: {
+    dashboard_version: number
+    title?: string | null
+    sources?: Array<{ node_id: string }> | null
+    panels?: Array<{
+      panel_id?: string | null
+      node_id: string
+      asset_name: string
+      visible?: boolean
+      position?: number | null
+      modifier_overrides?: Record<string, unknown>
+      override_schema_hash?: string | null
+    }> | null
+  },
+): Promise<DashboardRecord> {
+  return request(`/api/v1/dashboards/${encodeURIComponent(dashboardId)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(payload),
+  })
+}
+
+export async function deleteDashboard(dashboardId: string) {
+  return request<Record<string, unknown>>(`/api/v1/dashboards/${encodeURIComponent(dashboardId)}`, {
+    method: 'DELETE',
+  })
+}
+
+export async function saveNotebookDashboard(
+  nodeId: string,
+  payload: {
+    dashboard_id?: string | null
+    title?: string | null
+    panels?: Array<{
+      panel_id?: string | null
+      node_id: string
+      asset_name: string
+      visible?: boolean
+      position?: number | null
+      modifier_overrides?: Record<string, unknown>
+      override_schema_hash?: string | null
+    }> | null
+  },
+): Promise<DashboardRecord & { dashboard_url: string }> {
+  return request(`/api/v1/nodes/${encodeURIComponent(nodeId)}/dashboards`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
   })
 }
 

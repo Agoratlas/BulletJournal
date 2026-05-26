@@ -187,6 +187,60 @@ class ParsedNotebookContract:
 
 
 @dataclass(slots=True)
+class DashboardSource:
+    node_id: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return {'node_id': self.node_id}
+
+
+@dataclass(slots=True)
+class DashboardPanel:
+    panel_id: str
+    node_id: str
+    asset_name: str
+    visible: bool = True
+    position: int = 0
+    modifier_overrides: dict[str, Any] = field(default_factory=dict)
+    override_schema_hash: str | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            'panel_id': self.panel_id,
+            'node_id': self.node_id,
+            'asset_name': self.asset_name,
+            'visible': self.visible,
+            'position': self.position,
+            'modifier_overrides': self.modifier_overrides,
+            'override_schema_hash': self.override_schema_hash,
+        }
+
+
+@dataclass(slots=True)
+class DashboardDocument:
+    schema_version: int
+    dashboard_id: str
+    version: int
+    title: str
+    created_at: str
+    updated_at: str
+    sources: list[DashboardSource] = field(default_factory=list)
+    panels: list[DashboardPanel] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            'schema_version': self.schema_version,
+            'dashboard_id': self.dashboard_id,
+            'version': self.version,
+            'title': self.title,
+            'created_at': self.created_at,
+            'updated_at': self.updated_at,
+            'sources': [source.to_dict() for source in self.sources],
+            'panels': [panel.to_dict() for panel in self.panels],
+        }
+
+
+@dataclass(slots=True)
 class GraphData:
     meta: dict[str, Any]
     nodes: list[Node]

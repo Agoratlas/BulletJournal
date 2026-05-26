@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from collections.abc import Mapping
 from contextlib import asynccontextmanager, suppress
 from pathlib import Path
@@ -17,7 +18,7 @@ from websockets.exceptions import ConnectionClosed
 
 from bulletjournal.api.deps import ServiceContainer
 from bulletjournal.api.errors import install_error_handlers
-from bulletjournal.api.routes import artifacts, assets, checkpoints, graph, project, runs, templates
+from bulletjournal.api.routes import artifacts, assets, checkpoints, dashboards, graph, project, runs, templates
 from bulletjournal.api.sse import sse_response
 from bulletjournal.config import ServerConfig, bundled_web_root, normalize_base_path
 
@@ -62,6 +63,7 @@ def create_app(*, project_path: Path | None = None, server_config: ServerConfig 
     app.include_router(graph.router, prefix=api_prefix)
     app.include_router(artifacts.router, prefix=api_prefix)
     app.include_router(assets.router, prefix=api_prefix)
+    app.include_router(dashboards.router, prefix=api_prefix)
     app.include_router(runs.router, prefix=api_prefix)
     app.include_router(checkpoints.router, prefix=api_prefix)
     app.include_router(templates.router, prefix=api_prefix)
@@ -154,8 +156,7 @@ def create_app(*, project_path: Path | None = None, server_config: ServerConfig 
         index = web_root / 'index.html'
         if index.exists():
             html = index.read_text(encoding='utf-8')
-            snippet = f'<script>window.__BULLETJOURNAL_BASE_PATH__ = {base_path!r};</script>'
-            injected = html.replace('</head>', f'{snippet}</head>', 1) if '</head>' in html else f'{html}{snippet}'
+            injected = _inject_spa_bootstrap(html, base_path=base_path)
             return HTMLResponse(injected)
         return JSONResponse(
             status_code=503,
@@ -175,6 +176,16 @@ def _cors_allowed_origins(server_config: ServerConfig) -> list[str]:
         if parsed.scheme and parsed.netloc:
             origins.add(f'{parsed.scheme}://{parsed.netloc}')
     return sorted(origins)
+
+
+def _inject_spa_bootstrap(html: str, *, base_path: str) -> str:
+    base_href = f'{base_path}/' if base_path else '/'
+    snippet = f'<base href="{base_href}"><script>window.__BULLETJOURNAL_BASE_PATH__ = {json.dumps(base_path)};</script>'
+    if '<head>' in html:
+        return html.replace('<head>', f'<head>{snippet}', 1)
+    if '</head>' in html:
+        return html.replace('</head>', f'{snippet}</head>', 1)
+    return f'{html}{snippet}'
 
 
 def _route_path(base_path: str, suffix: str) -> str:

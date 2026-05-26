@@ -34,6 +34,10 @@ class ProjectPaths:
         return self.root / 'objects'
 
     @property
+    def dashboards_dir(self) -> Path:
+        return self.root / 'dashboards'
+
+    @property
     def metadata_dir(self) -> Path:
         return self.root / 'metadata'
 
@@ -79,6 +83,9 @@ class ProjectPaths:
     def notebook_relpath(self, node_id: str) -> str:
         return f'notebooks/{node_id}.py'
 
+    def dashboard_path(self, dashboard_id: str) -> Path:
+        return self.dashboards_dir / f'{dashboard_id}.json'
+
 
 def is_project_root(path: Path) -> bool:
     paths = ProjectPaths(path.resolve())
@@ -120,6 +127,7 @@ def init_project_root(path: Path, title: str | None = None, project_id: str | No
     ensure_directory(paths.graph_dir)
     ensure_directory(paths.notebooks_dir)
     ensure_directory(paths.object_store_dir)
+    ensure_directory(paths.dashboards_dir)
     ensure_directory(paths.metadata_dir)
     ensure_directory(paths.checkpoints_dir)
     ensure_directory(paths.temp_dir)
@@ -189,6 +197,7 @@ def require_project_root(path: Path) -> ProjectPaths:
     validate_project_schema_version(project_json, source=str(paths.project_json_path))
     validate_project_id(str(project_json.get('project_id') or ''))
     ensure_directory(paths.temp_dir)
+    ensure_directory(paths.dashboards_dir)
     ensure_directory(paths.execution_logs_dir)
     ensure_directory(paths.uploads_dir)
     ensure_directory(paths.worker_temp_dir)

@@ -3,7 +3,7 @@ import type { EdgeRecord, GraphPatchOperation, LayoutRecord, NodeRecord, NoticeR
 export type PalettePreviewBlock = {
   key: string
   title: string
-  kind: 'notebook' | 'constant' | 'file_input' | 'organizer' | 'area'
+  kind: 'notebook' | 'constant' | 'file_input' | 'organizer' | 'area' | 'dashboard'
   x: number
   y: number
   width: number
@@ -15,7 +15,7 @@ export type PaletteEntry = {
   title: string
   description?: string
   documentation?: string
-  kind: 'empty' | 'constant' | 'organizer' | 'area' | 'template' | 'pipeline'
+  kind: 'empty' | 'constant' | 'organizer' | 'area' | 'dashboard' | 'template' | 'pipeline'
   templateRef?: string
   templateName?: string
   templateProvider?: string
@@ -67,9 +67,11 @@ export type NodeActionItem = {
   key: string
   label: string
   href?: string
+  newTab?: boolean
   tone?: 'default' | 'danger' | 'success'
   disabled?: boolean
   title?: string
+  className?: string
   onClick?: () => void
 }
 

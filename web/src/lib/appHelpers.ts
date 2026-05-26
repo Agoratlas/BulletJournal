@@ -1,6 +1,6 @@
 import { appUrl } from './api'
 import { GRID_SIZE, inputBindingSource } from './helpers'
-import type { ArtifactRecord, GraphPatchOperation, LayoutRecord, NodeRecord, ProjectSnapshot, TemplateRecord } from './types'
+import type { ArtifactRecord, DashboardRecord, GraphPatchOperation, LayoutRecord, NodeRecord, ProjectSnapshot, TemplateRecord } from './types'
 import type { AppNotice, ConstantValueType, GraphMutationPlan, OptimisticGraphState, PaletteEntry, PortActionMenuState, SnapshotLike } from '../appTypes'
 
 type EditorSessionNoticeDetails = {
@@ -504,6 +504,48 @@ export function areaAddOperationForNode(node: NodeRecord, layout: LayoutRecord, 
   }
 }
 
+export function dashboardAddOperationForNode(
+  node: NodeRecord,
+  layout: LayoutRecord,
+  nodeId: string,
+  title = node.title,
+): GraphPatchOperation {
+  return {
+    type: 'add_dashboard_node',
+    node_id: nodeId,
+    title,
+    ui: {
+      source_count: node.ui?.source_count ?? 0,
+      panel_count: node.ui?.panel_count ?? 0,
+    },
+    x: layout.x,
+    y: layout.y,
+    w: layout.w,
+    h: layout.h,
+  }
+}
+
+export function applyOptimisticDashboardSources(
+  dashboard: DashboardRecord,
+  payload: { title?: string; sourceNodeIds: string[] },
+): DashboardRecord {
+  const sourceNodeIds = Array.from(new Set(payload.sourceNodeIds))
+  const sourceNodeIdSet = new Set(sourceNodeIds)
+  return {
+    ...dashboard,
+    version: dashboard.version + 1,
+    title: payload.title ?? dashboard.title,
+    updated_at: new Date().toISOString(),
+    sources: sourceNodeIds.map((nodeId) => ({ node_id: nodeId })),
+    panels: dashboard.panels
+      .filter((panel) => sourceNodeIdSet.has(panel.node_id))
+      .map((panel, index) => ({
+        ...panel,
+        position: index,
+      })),
+  }
+}
+
 export function applyOptimisticGraphOperations(snapshot: ProjectSnapshot, operations: Array<Record<string, unknown>>): OptimisticGraphState | null {
   const next = cloneSnapshot(snapshot)
   let changed = false
@@ -515,17 +557,19 @@ export function applyOptimisticGraphOperations(snapshot: ProjectSnapshot, operat
     if (type === 'add_pipeline_template') {
       continue
     }
-    if (type === 'add_notebook_node' || type === 'add_constant_node' || type === 'add_file_input_node' || type === 'add_organizer_node' || type === 'add_area_node') {
+    if (type === 'add_notebook_node' || type === 'add_constant_node' || type === 'add_file_input_node' || type === 'add_organizer_node' || type === 'add_area_node' || type === 'add_dashboard_node') {
       const nodeId = String(operation.node_id)
       if (!next.graph.nodes.some((node) => node.id === nodeId)) {
         const kind = type === 'add_constant_node'
           ? 'constant'
           : type === 'add_file_input_node'
           ? 'file_input'
-          : type === 'add_organizer_node'
-            ? 'organizer'
+            : type === 'add_organizer_node'
+              ? 'organizer'
             : type === 'add_area_node'
               ? 'area'
+            : type === 'add_dashboard_node'
+              ? 'dashboard'
             : 'notebook'
         next.graph.nodes.push({
           id: nodeId,
@@ -560,6 +604,11 @@ export function applyOptimisticGraphOperations(snapshot: ProjectSnapshot, operat
                   area_color: String((operation.ui as { area_color?: unknown } | undefined)?.area_color ?? 'blue'),
                   area_filled: Boolean((operation.ui as { area_filled?: unknown } | undefined)?.area_filled ?? true),
                 }
+              : type === 'add_dashboard_node'
+                ? {
+                  source_count: Number((operation.ui as { source_count?: unknown } | undefined)?.source_count ?? 0),
+                  panel_count: Number((operation.ui as { panel_count?: unknown } | undefined)?.panel_count ?? 0),
+                }
               : {
                   frozen: Boolean((operation.ui as { frozen?: unknown } | undefined)?.frozen),
                 },
@@ -572,8 +621,8 @@ export function applyOptimisticGraphOperations(snapshot: ProjectSnapshot, operat
           node_id: nodeId,
           x: Number(operation.x ?? 80),
           y: Number(operation.y ?? 80),
-          w: Number(operation.w ?? (type === 'add_organizer_node' ? 160 : type === 'add_area_node' ? 480 : 360)),
-          h: Number(operation.h ?? (type === 'add_constant_node' ? 120 : type === 'add_organizer_node' ? 140 : type === 'add_area_node' ? 280 : 220)),
+          w: Number(operation.w ?? (type === 'add_organizer_node' ? 160 : type === 'add_area_node' ? 480 : type === 'add_dashboard_node' ? 240 : 360)),
+          h: Number(operation.h ?? (type === 'add_constant_node' ? 120 : type === 'add_organizer_node' ? 140 : type === 'add_area_node' ? 280 : type === 'add_dashboard_node' ? 120 : 220)),
         })
         changed = true
       }
@@ -820,6 +869,8 @@ export const SNAPSHOT_REFRESH_EVENTS = [
   'artifact.state_changed',
   'checkpoint.created',
   'checkpoint.restored',
+  'dashboard.deleted',
+  'dashboard.updated',
   'graph.updated',
   'notebook.reparsed',
   'notice.created',

@@ -2,12 +2,14 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import type { Connection, EdgeChange, Node } from 'reactflow'
 
-import { appUrl, cancelRun, clearConstantValue, createCheckpoint, currentProject, dismissNotice, downloadNotebookSource, getSnapshot, listSessions, notebookDownloadUrl, patchGraph, restoreCheckpoint, runAll, runNode, runSelection, setArtifactState, setConstantValue, setNodeOutputsState, stopSession, uploadConstantFile, uploadFile } from './lib/api'
+import { appBasePath, appUrl, cancelRun, clearConstantValue, createCheckpoint, currentProject, dashboardUrl, dismissNotice, downloadNotebookSource, getDashboard, getSnapshot, listNodeAssets, listSessions, notebookAssetsUrl, notebookDownloadUrl, patchDashboard, patchGraph, restoreCheckpoint, runAll, runNode, runSelection, setArtifactState, setConstantValue, setNodeOutputsState, stopSession, uploadConstantFile, uploadFile } from './lib/api'
 import { CONSTANT_NODE_HEIGHT, CONSTANT_NODE_PORT_CENTER_OFFSET, CONSTANT_NODE_WIDTH, GRID_SIZE, PORT_ROW_HEIGHT, STANDARD_NODE_PORT_CENTER_OFFSET, activeRunNodeId, artifactFor, artifactsForDisplay, currentRun, formatTimestamp, globalArtifactCounts, inputState, inputsForNode, outputsForNode, queuedRunNodeIds, templateByRef } from './lib/helpers'
 import { areaSettings, type AreaColorKey, type AreaTitlePosition } from './lib/area'
-import type { ArtifactRecord, GraphPatchOperation, LayoutRecord, NodeRecord, ProjectSnapshot, SessionRecord, TemplateRecord } from './lib/types'
+import type { ArtifactRecord, DashboardRecord, GraphPatchOperation, LayoutRecord, NodeRecord, ProjectSnapshot, SessionRecord, TemplateRecord } from './lib/types'
 import type { AppNotice, ClipboardGraph, ClipboardNodeRecord, ConstantValueType, CsvSeparator, GraphHistoryEntry, GraphMutationPlan, NodeActionItem, OptimisticGraphState, PaletteEntry, PalettePreviewBlock, PortActionMenuState } from './appTypes'
-import { applyOptimisticGraphOperations, areaAddOperationForNode, artifactTargetForPort, blockCreateMode, clampContextMenuPosition, cloneSnapshot, constantAddOperationForNode, copiedTitle, createClientNotice, edgeIdForPorts, edgeIdsForPort, editorSessionDetails, expandMutationPlan, fileInputAddOperationForNode, formatMarkdownCode, formatRunBlockedMessage, formatRunFailureMessage, freezeBlockMessage, frozenBlockBlockersForDelete, frozenBlockBlockersForRemovedEdges, frozenBlockBlockersForStaleRoots, isEditableTarget, isEditorOpenConflict, isFreezeConflict, isManagedRunFailure, mergeGraphIntoSnapshot, normalizeNodeId, notebookAddOperationForNode, organizerAddOperationForNode, pipelineTemplateNodeRecords, pipelineTopLeftForCenter, SNAPSHOT_REFRESH_EVENTS, SNAPSHOT_REFRESH_THROTTLE_MS, snapToGrid, uniqueCopiedNodeId } from './lib/appHelpers'
+import { applyOptimisticDashboardSources, applyOptimisticGraphOperations, areaAddOperationForNode, artifactTargetForPort, blockCreateMode, clampContextMenuPosition, cloneSnapshot, constantAddOperationForNode, copiedTitle, createClientNotice, dashboardAddOperationForNode, edgeIdForPorts, edgeIdsForPort, editorSessionDetails, expandMutationPlan, fileInputAddOperationForNode, formatMarkdownCode, formatRunBlockedMessage, formatRunFailureMessage, freezeBlockMessage, frozenBlockBlockersForDelete, frozenBlockBlockersForRemovedEdges, frozenBlockBlockersForStaleRoots, isEditableTarget, isEditorOpenConflict, isFreezeConflict, isManagedRunFailure, mergeGraphIntoSnapshot, normalizeNodeId, notebookAddOperationForNode, organizerAddOperationForNode, pipelineTemplateNodeRecords, pipelineTopLeftForCenter, SNAPSHOT_REFRESH_EVENTS, SNAPSHOT_REFRESH_THROTTLE_MS, snapToGrid, uniqueCopiedNodeId } from './lib/appHelpers'
+import { NotebookAssetsPage } from './assets/NotebookAssetsPage'
+import { DashboardPage } from './dashboard/DashboardPage'
 import { ArtifactCard } from './components/ArtifactCard'
 import { ArtifactCounts } from './components/ArtifactCounts'
 import { BlockPalette } from './components/BlockPalette'
@@ -100,6 +102,8 @@ const ORGANIZER_NODE_WIDTH = 160
 const ORGANIZER_NODE_HEIGHT = 140
 const AREA_NODE_WIDTH = 480
 const AREA_NODE_HEIGHT = 280
+const DASHBOARD_NODE_WIDTH = GRID_SIZE * 12
+const DASHBOARD_NODE_HEIGHT = GRID_SIZE * 7
 const PLACEMENT_PADDING = 40
 const PLACEMENT_SEARCH_STEP = GRID_SIZE * 2
 const MAX_PLACEMENT_RINGS = 24
@@ -118,6 +122,16 @@ type NotebookRunScope = 'node' | 'ancestors' | 'descendants'
 type NoticeFocusRequest = {
   nodeId: string
   token: number
+}
+
+type DashboardSourceUpdatePayload = {
+  title?: string
+  sourceNodeIds: string[]
+}
+
+type OptimisticDashboardEntry = {
+  dashboard: DashboardRecord
+  mutationId: number
 }
 
 type ConfirmationState =
@@ -203,6 +217,7 @@ function App() {
   const [nodeActionMenu, setNodeActionMenu] = useState<NodeActionMenuState | null>(null)
   const [portActionMenu, setPortActionMenu] = useState<PortActionMenuState | null>(null)
   const [optimisticGraph, setOptimisticGraph] = useState<OptimisticGraphState | null>(null)
+  const [optimisticDashboards, setOptimisticDashboards] = useState<Record<string, OptimisticDashboardEntry>>({})
   const [inspectorOpen, setInspectorOpen] = useState(false)
   const [confirmationState, setConfirmationState] = useState<ConfirmationState | null>(null)
   const [clipboardGraph, setClipboardGraph] = useState<ClipboardGraph | null>(null)
@@ -216,6 +231,7 @@ function App() {
   const [activeEditorNodeIds, setActiveEditorNodeIds] = useState<string[]>([])
   const [hoveredNoticeNodeId, setHoveredNoticeNodeId] = useState<string | null>(null)
   const [noticeFocusRequest, setNoticeFocusRequest] = useState<NoticeFocusRequest | null>(null)
+  const [notebookAssetCountsByNodeId, setNotebookAssetCountsByNodeId] = useState<Record<string, number>>({})
   const [themeMode, setThemeMode] = useState<ThemeMode>(() => {
     const stored = window.localStorage.getItem('bulletjournal-theme')
     if (stored === 'light' || stored === 'dark' || stored === 'system') {
@@ -232,8 +248,13 @@ function App() {
   const snapshotRefreshQueuedRef = useRef(false)
   const pendingClickSelectionRef = useRef<{ nodeIds: string[]; edgeIds: string[]; token: number } | null>(null)
   const pendingClickSelectionTokenRef = useRef(0)
+  const dashboardUpdateQueueRef = useRef(new Map<string, Promise<boolean>>())
+  const dashboardMutationIdRef = useRef(0)
   const lastSnapshotRefreshAtRef = useRef(0)
   const startupSearch = useMemo(() => new URLSearchParams(window.location.search), [])
+  const [pathname, setPathname] = useState(() => window.location.pathname)
+  const notebookAssetsNodeId = useMemo(() => resolveNotebookAssetsNodeId(pathname), [pathname])
+  const savedDashboardId = useMemo(() => resolveDashboardPageId(pathname), [pathname])
   const loadingSession = startupSearch.get('session_id')
     ? {
         sessionId: startupSearch.get('session_id') as string,
@@ -261,6 +282,21 @@ function App() {
 
   const serverSnapshot = snapshotQuery.data ?? snapshot
   const liveSnapshot = optimisticGraph?.snapshot ?? serverSnapshot
+
+  useEffect(() => {
+    const handlePopState = () => setPathname(window.location.pathname)
+    window.addEventListener('popstate', handlePopState)
+    return () => window.removeEventListener('popstate', handlePopState)
+  }, [])
+
+  function navigateToPath(path: string, options: { replace?: boolean } = {}) {
+    if (options.replace) {
+      window.history.replaceState({}, '', path)
+    } else {
+      window.history.pushState({}, '', path)
+    }
+    setPathname(window.location.pathname)
+  }
 
   function canOpenInspectorForNode(nodeId: string | null): boolean {
     if (!nodeId || !liveSnapshot) {
@@ -551,6 +587,10 @@ function App() {
       hadEventConnectionRef.current = true
     }
     const refreshSnapshot = () => {
+      void queryClient.invalidateQueries({ queryKey: ['node-assets'] })
+      void queryClient.invalidateQueries({ queryKey: ['asset-prepare'] })
+      void queryClient.invalidateQueries({ queryKey: ['dashboard'] })
+      void queryClient.invalidateQueries({ queryKey: ['dashboard-assets'] })
       void scheduleSnapshotRefresh()
     }
     source.onmessage = refreshSnapshot
@@ -585,6 +625,208 @@ function App() {
     () => liveSnapshot?.graph.nodes.find((node) => node.id === selectedNodeId) ?? null,
     [liveSnapshot, selectedNodeId],
   )
+  const selectedDashboardId = selectedNode?.kind === 'dashboard' ? selectedNode.id : null
+  const selectedDashboardQuery = useQuery({
+    queryKey: ['dashboard', selectedDashboardId],
+    queryFn: () => getDashboard(selectedDashboardId as string),
+    enabled: Boolean(selectedDashboardId),
+    retry: false,
+  })
+  const selectedDashboard = useMemo(
+    () => (selectedDashboardId
+      ? optimisticDashboards[selectedDashboardId]?.dashboard ?? selectedDashboardQuery.data ?? null
+      : null),
+    [optimisticDashboards, selectedDashboardId, selectedDashboardQuery.data],
+  )
+
+  function dashboardRecordForId(dashboardId: string | null | undefined): DashboardRecord | null {
+    if (!dashboardId) {
+      return null
+    }
+    return optimisticDashboards[dashboardId]?.dashboard
+      ?? (queryClient.getQueryData(['dashboard', dashboardId]) as DashboardRecord | undefined)
+      ?? null
+  }
+
+  async function ensureDashboardRecord(dashboardId: string): Promise<DashboardRecord> {
+    const dashboard = dashboardRecordForId(dashboardId)
+    if (dashboard) {
+      return dashboard
+    }
+    const fetched = await getDashboard(dashboardId)
+    queryClient.setQueryData(['dashboard', dashboardId], fetched)
+    return fetched
+  }
+
+  const dashboardPseudoLinks = useMemo(() => {
+    const links = new Map<string, { sourceNodeId: string; dashboardNodeId: string }>()
+    function addDashboardLinks(dashboardId?: string | null) {
+      if (!dashboardId) {
+        return
+      }
+      const dashboard = dashboardRecordForId(dashboardId)
+      if (!dashboard) {
+        return
+      }
+      for (const source of dashboard.sources) {
+        links.set(`${source.node_id}__${dashboardId}`, {
+          sourceNodeId: source.node_id,
+          dashboardNodeId: dashboardId,
+        })
+      }
+    }
+    addDashboardLinks(selectedDashboardId)
+    for (const edgeId of selectedEdgeIds) {
+      const edge = dashboardPseudoEdgeNodes(edgeId)
+      if (!edge) {
+        continue
+      }
+      addDashboardLinks(edge.dashboardId)
+    }
+    return Array.from(links.values())
+  }, [optimisticDashboards, queryClient, selectedDashboardId, selectedDashboardQuery.data, selectedEdgeIds])
+  async function buildDashboardPanelsForSources(
+    dashboard: { panels: Array<{ panel_id: string; node_id: string; asset_name: string; visible: boolean; modifier_overrides: Record<string, unknown>; override_schema_hash: string | null }> },
+    sourceNodeIds: string[],
+  ) {
+    const existingPanelsByLogicalId = new Map<string, (typeof dashboard.panels)[number]>(
+      dashboard.panels.map((panel) => [`${panel.node_id}/${panel.asset_name}`, panel] as const),
+    )
+    const nextPanels: Array<{
+      panel_id: string
+      node_id: string
+      asset_name: string
+      visible: boolean
+      position: number
+      modifier_overrides: Record<string, unknown>
+      override_schema_hash: string | null
+    }> = []
+    for (const sourceNodeId of sourceNodeIds) {
+      const assets = await listNodeAssets(sourceNodeId)
+      for (const asset of assets) {
+        const logicalId = `${sourceNodeId}/${asset.asset_name}`
+        const existingPanel = existingPanelsByLogicalId.get(logicalId)
+        nextPanels.push({
+          panel_id: logicalId,
+          node_id: sourceNodeId,
+          asset_name: asset.asset_name,
+          visible: existingPanel?.visible ?? true,
+          position: nextPanels.length,
+          modifier_overrides: existingPanel?.modifier_overrides ?? {},
+          override_schema_hash: existingPanel?.override_schema_hash ?? asset.override_schema_hash,
+        })
+      }
+    }
+    return nextPanels
+  }
+
+  async function updateDashboardSources(
+    dashboardId: string,
+    payload: DashboardSourceUpdatePayload,
+  ): Promise<boolean> {
+    const currentDashboard = await ensureDashboardRecord(dashboardId)
+    const mutationId = dashboardMutationIdRef.current + 1
+    dashboardMutationIdRef.current = mutationId
+    setOptimisticDashboards((current) => ({
+      ...current,
+      [dashboardId]: {
+        dashboard: applyOptimisticDashboardSources(currentDashboard, payload),
+        mutationId,
+      },
+    }))
+
+    const previous = dashboardUpdateQueueRef.current.get(dashboardId) ?? Promise.resolve(true)
+    let queuedUpdate: Promise<boolean>
+    queuedUpdate = previous
+      .catch(() => true)
+      .then(async () => {
+        const dashboard = await getDashboard(dashboardId)
+        const nextPanels = await buildDashboardPanelsForSources(dashboard, payload.sourceNodeIds)
+        const updatedDashboard = await patchDashboard(dashboardId, {
+          dashboard_version: dashboard.version,
+          title: payload.title ?? dashboard.title,
+          sources: payload.sourceNodeIds.map((nodeId) => ({ node_id: nodeId })),
+          panels: nextPanels,
+        })
+        queryClient.setQueryData(['dashboard', dashboardId], updatedDashboard)
+        setOptimisticDashboards((current) => {
+          const entry = current[dashboardId]
+          if (!entry || entry.mutationId !== mutationId) {
+            return current
+          }
+          const next = { ...current }
+          delete next[dashboardId]
+          return next
+        })
+        await queryClient.invalidateQueries({ queryKey: ['dashboard-assets'] })
+        await refreshSnapshot()
+        return true
+      })
+      .catch(async (err) => {
+        setOptimisticDashboards((current) => {
+          const entry = current[dashboardId]
+          if (!entry || entry.mutationId !== mutationId) {
+            return current
+          }
+          const next = { ...current }
+          delete next[dashboardId]
+          return next
+        })
+        await queryClient.invalidateQueries({ queryKey: ['dashboard', dashboardId], exact: true })
+        await queryClient.invalidateQueries({ queryKey: ['dashboard-assets'] })
+        await refreshSnapshot()
+        const message = err instanceof Error ? err.message : 'Dashboard update failed.'
+        reportClientError(`dashboard-update:${dashboardId}`, 'dashboard_update_failed', message, { nodeId: dashboardId })
+        return false
+      })
+      .finally(() => {
+        if (dashboardUpdateQueueRef.current.get(dashboardId) === queuedUpdate) {
+          dashboardUpdateQueueRef.current.delete(dashboardId)
+        }
+      })
+    dashboardUpdateQueueRef.current.set(dashboardId, queuedUpdate)
+    return queuedUpdate
+  }
+
+  function dashboardPseudoEdgeNodes(edgeId: string): { dashboardId: string; notebookId: string } | null {
+    if (!edgeId.startsWith('dashboard:')) {
+      return null
+    }
+    const body = edgeId.slice('dashboard:'.length)
+    const separatorIndex = body.lastIndexOf('__')
+    if (separatorIndex === -1) {
+      return null
+    }
+    const notebookId = body.slice(0, separatorIndex)
+    const dashboardId = body.slice(separatorIndex + 2)
+    if (!notebookId || !dashboardId) {
+      return null
+    }
+    return { dashboardId, notebookId }
+  }
+
+  async function preloadNotebookAssetCount(nodeId: string) {
+    try {
+      const assets = await listNodeAssets(nodeId)
+      setNotebookAssetCountsByNodeId((current) => ({ ...current, [nodeId]: assets.length }))
+    } catch {
+      setNotebookAssetCountsByNodeId((current) => ({ ...current, [nodeId]: 0 }))
+    }
+  }
+
+  async function handleToggleDashboardSource(nodeId: string) {
+    if (!selectedDashboardId || !selectedDashboard) {
+      return
+    }
+    const currentSourceNodeIds = selectedDashboard.sources.map((source) => source.node_id)
+    const nextSourceNodeIds = currentSourceNodeIds.includes(nodeId)
+      ? currentSourceNodeIds.filter((currentNodeId) => currentNodeId !== nodeId)
+      : [...currentSourceNodeIds, nodeId]
+    await updateDashboardSources(selectedDashboardId, {
+      title: selectedDashboard.title,
+      sourceNodeIds: nextSourceNodeIds,
+    })
+  }
 
   const nodeActionMenuNode = useMemo(
     () => {
@@ -661,6 +903,27 @@ function App() {
 
   function isOrganizerGhostHandle(handleId: string | null | undefined): boolean {
     return Boolean(handleId && (handleId.startsWith('ghost-in:') || handleId.startsWith('ghost-out:')))
+  }
+
+  function dashboardLinkConnectionNodes(connection: Connection): { dashboardId: string; notebookId: string } | null {
+    if (!liveSnapshot || !connection.source || !connection.target || !connection.sourceHandle || !connection.targetHandle) {
+      return null
+    }
+    if (!connection.sourceHandle.startsWith('dashboard-link:') || !connection.targetHandle.startsWith('dashboard-link:')) {
+      return null
+    }
+    const sourceNode = liveSnapshot.graph.nodes.find((node) => node.id === connection.source)
+    const targetNode = liveSnapshot.graph.nodes.find((node) => node.id === connection.target)
+    if (!sourceNode || !targetNode || sourceNode.id === targetNode.id) {
+      return null
+    }
+    if (sourceNode.kind === 'dashboard' && targetNode.kind === 'notebook') {
+      return { dashboardId: sourceNode.id, notebookId: targetNode.id }
+    }
+    if (sourceNode.kind === 'notebook' && targetNode.kind === 'dashboard') {
+      return { dashboardId: targetNode.id, notebookId: sourceNode.id }
+    }
+    return null
   }
 
   function organizerInsertIndexFromHandle(handleId: string): number {
@@ -979,6 +1242,17 @@ function App() {
       })
     }
 
+    if (node.kind === 'dashboard') {
+      actions.push({
+        key: 'open-dashboard',
+        label: 'Open dashboard',
+        onClick: () => {
+          dismissMenu()
+          navigateToPath(dashboardUrl(node.id))
+        },
+      })
+    }
+
     if (node.kind === 'constant') {
       actions.push({
         key: 'edit-constant',
@@ -1024,6 +1298,16 @@ function App() {
     }
 
     if (node.kind === 'notebook') {
+      const assetCount = notebookAssetCountsByNodeId[node.id] ?? 0
+      actions.push({
+        key: 'view-assets',
+        label: `View ${assetCount} asset${assetCount === 1 ? '' : 's'}`,
+        href: notebookAssetsUrl(node.id),
+        newTab: true,
+        className: 'notebook-assets-action',
+        disabled: assetCount === 0,
+        onClick: () => dismissMenu(),
+      })
       actions.push({
         key: 'download-notebook',
         label: 'Download notebook',
@@ -1032,7 +1316,7 @@ function App() {
       })
     }
 
-    if (node.kind !== 'organizer' && node.kind !== 'area' && node.kind !== 'constant') {
+    if (node.kind !== 'organizer' && node.kind !== 'area' && node.kind !== 'constant' && node.kind !== 'dashboard') {
       actions.push(
         {
           key: 'mark-outputs-stale',
@@ -1064,7 +1348,7 @@ function App() {
       )
     }
 
-    if (node.kind !== 'area') {
+    if (node.kind !== 'area' && node.kind !== 'dashboard') {
       actions.push({
         key: 'toggle-frozen',
         label: node.ui?.frozen ? 'Unfreeze block' : 'Freeze block',
@@ -1102,7 +1386,7 @@ function App() {
       return []
     }
 
-    const freezableNodes = menuNodes.filter((node) => node.kind !== 'area')
+    const freezableNodes = menuNodes.filter((node) => node.kind !== 'area' && node.kind !== 'dashboard')
     const runnableNotebookNodeIds = menuNodes.filter((node) => node.kind === 'notebook').map((node) => node.id)
     const affectedOutputNodeIds = menuNodes.filter((node) => {
       if (!liveSnapshot) {
@@ -1264,7 +1548,7 @@ function App() {
   }, [portActionMenu])
 
   useEffect(() => {
-    if (!projectId) {
+    if (!projectId || notebookAssetsNodeId) {
       setActiveEditorNodeIds([])
       return
     }
@@ -1294,7 +1578,7 @@ function App() {
       window.clearInterval(interval)
       window.removeEventListener('focus', handleWindowFocus)
     }
-  }, [projectId])
+  }, [projectId, notebookAssetsNodeId])
 
   useEffect(() => {
     if (!liveSnapshot) {
@@ -1306,6 +1590,13 @@ function App() {
     }
     setTemplatesCollapsed(true)
   }, [liveSnapshot?.graph.nodes.length])
+
+  useEffect(() => {
+    if (selectedNode?.kind !== 'notebook') {
+      return
+    }
+    void preloadNotebookAssetCount(selectedNode.id)
+  }, [selectedNode?.id, selectedNode?.kind])
 
   const artifactNode = useMemo(
     () => liveSnapshot?.graph.nodes.find((node) => node.id === artifactNodeId) ?? null,
@@ -1365,7 +1656,7 @@ function App() {
 
   function palettePreviewBlocks(
     title: string,
-    kind: 'empty' | 'constant' | 'organizer' | 'area' | 'template' | 'pipeline',
+    kind: 'empty' | 'constant' | 'organizer' | 'area' | 'dashboard' | 'template' | 'pipeline',
     template: TemplateRecord | null = null,
   ): PalettePreviewBlock[] {
     if (kind === 'organizer') {
@@ -1388,6 +1679,17 @@ function App() {
         y: 0,
         width: 320,
         height: 220,
+      }]
+    }
+    if (kind === 'dashboard') {
+      return [{
+        key: `${kind}:${title}`,
+        title,
+        kind: 'dashboard',
+        x: 0,
+        y: 0,
+        width: DASHBOARD_NODE_WIDTH,
+        height: DASHBOARD_NODE_HEIGHT,
       }]
     }
     if (!template || template.kind !== 'pipeline') {
@@ -1491,6 +1793,13 @@ function App() {
         description: 'Add a visual grouping rectangle behind functional blocks.',
         kind: 'area',
         previewBlocks: palettePreviewBlocks('Area', 'area'),
+      },
+      {
+        key: 'dashboard',
+        title: 'Dashboard',
+        description: 'Create a saved dashboard block that collects notebook assets.',
+        kind: 'dashboard',
+        previewBlocks: palettePreviewBlocks('Dashboard', 'dashboard'),
       },
     ] satisfies PaletteEntry[]
     const builtinsWithPreview = builtins.map<PaletteEntry>((entry) => ({
@@ -1784,6 +2093,9 @@ function App() {
       if (node.kind === 'area') {
         return areaAddOperationForNode(node, layout, node.id, node.title)
       }
+      if (node.kind === 'dashboard') {
+        return dashboardAddOperationForNode(node, layout, node.id, node.title)
+      }
       return fileInputAddOperationForNode(node, layout, node.id, node.title)
     })
     const restoredEdges = liveSnapshot.graph.edges.filter(
@@ -2030,14 +2342,20 @@ function App() {
     }
     const history = await deleteSelectionHistoryEntry(nodeIds, edgeIds)
     const deletedNodeIdSet = new Set(nodeIds)
+    const dashboardPseudoEdges = edgeIds
+      .map((edgeId) => dashboardPseudoEdgeNodes(edgeId))
+      .filter((edge): edge is { dashboardId: string; notebookId: string } => edge !== null)
     const detachedEdgeIds = edgeIds.filter((edgeId) => {
+      if (dashboardPseudoEdgeNodes(edgeId)) {
+        return false
+      }
       const edge = liveSnapshot.graph.edges.find((entry) => entry.id === edgeId)
       if (!edge) {
         return false
       }
       return !deletedNodeIdSet.has(edge.source_node) && !deletedNodeIdSet.has(edge.target_node)
     })
-    if (!nodeIds.length && !detachedEdgeIds.length) {
+    if (!nodeIds.length && !detachedEdgeIds.length && !dashboardPseudoEdges.length) {
       return
     }
     if (nodeIds.length) {
@@ -2047,9 +2365,29 @@ function App() {
       ...detachedEdgeIds.map((edgeId) => ({ type: 'remove_edge', edge_id: edgeId } satisfies GraphPatchOperation)),
       ...nodeIds.map((nodeId) => ({ type: 'delete_node', node_id: nodeId } satisfies GraphPatchOperation)),
     ]
-    const success = await mutateGraph(operations, { history })
-    if (!success) {
-      return
+    if (operations.length) {
+      const success = await mutateGraph(operations, { history })
+      if (!success) {
+        return
+      }
+    }
+    if (dashboardPseudoEdges.length) {
+      const dashboardRemovals = new Map<string, Set<string>>()
+      for (const edge of dashboardPseudoEdges) {
+        const notebookIds = dashboardRemovals.get(edge.dashboardId) ?? new Set<string>()
+        notebookIds.add(edge.notebookId)
+        dashboardRemovals.set(edge.dashboardId, notebookIds)
+      }
+      for (const [dashboardId, notebookIds] of dashboardRemovals) {
+        const dashboard = await ensureDashboardRecord(dashboardId)
+        const nextSourceNodeIds = dashboard.sources
+          .map((source) => source.node_id)
+          .filter((nodeId) => !notebookIds.has(nodeId))
+        await updateDashboardSources(dashboardId, {
+          title: dashboard.title,
+          sourceNodeIds: nextSourceNodeIds,
+        })
+      }
     }
     applySelection([], [], { openInspector: false })
     setArtifactNodeId((current) => (current && deletedNodeIdSet.has(current) ? null : current))
@@ -2111,13 +2449,13 @@ function App() {
   }
 
   async function handleCreateNode(
-    payload: { type: 'empty' | 'template' | 'constant' | 'organizer' | 'area'; nodeId: string; title: string; dataType?: ConstantValueType; templateRef?: string; sourceText?: string; area?: { titlePosition: AreaTitlePosition; color: AreaColorKey; filled: boolean } },
+    payload: { type: 'empty' | 'template' | 'constant' | 'organizer' | 'area' | 'dashboard'; nodeId: string; title: string; dataType?: ConstantValueType; templateRef?: string; sourceText?: string; area?: { titlePosition: AreaTitlePosition; color: AreaColorKey; filled: boolean } },
     placement?: { x: number; y: number },
   ) {
     const baseX = 120 + ((liveSnapshot?.graph.nodes.length ?? 0) % 4) * 420
     const baseY = 120 + Math.floor((liveSnapshot?.graph.nodes.length ?? 0) / 4) * 280
-    const width = payload.type === 'constant' ? CONSTANT_NODE_WIDTH : payload.type === 'organizer' ? ORGANIZER_NODE_WIDTH : payload.type === 'area' ? AREA_NODE_WIDTH : NEW_NODE_WIDTH
-    const height = payload.type === 'constant' ? CONSTANT_NODE_HEIGHT : payload.type === 'organizer' ? ORGANIZER_NODE_HEIGHT : payload.type === 'area' ? AREA_NODE_HEIGHT : NEW_NODE_HEIGHT
+    const width = payload.type === 'constant' ? CONSTANT_NODE_WIDTH : payload.type === 'organizer' ? ORGANIZER_NODE_WIDTH : payload.type === 'area' ? AREA_NODE_WIDTH : payload.type === 'dashboard' ? DASHBOARD_NODE_WIDTH : NEW_NODE_WIDTH
+    const height = payload.type === 'constant' ? CONSTANT_NODE_HEIGHT : payload.type === 'organizer' ? ORGANIZER_NODE_HEIGHT : payload.type === 'area' ? AREA_NODE_HEIGHT : payload.type === 'dashboard' ? DASHBOARD_NODE_HEIGHT : NEW_NODE_HEIGHT
     const x = snapToGrid((placement?.x ?? baseX) - width / 2)
     const y = snapToGrid((placement?.y ?? baseY) - height / 2)
     if (payload.type === 'constant') {
@@ -2160,6 +2498,26 @@ function App() {
             y,
             w: width,
             h: height,
+          } satisfies GraphPatchOperation,
+        ],
+      }
+      await mutateGraph(redo.operations, {
+        history: liveSnapshot ? simpleHistoryEntryForPlan(liveSnapshot, redo) : null,
+        onSuccess: () => selectCreatedNodes([payload.nodeId]),
+      })
+      return
+    }
+    if (payload.type === 'dashboard') {
+      const redo = {
+        operations: [
+          {
+            type: 'add_dashboard_node',
+            node_id: payload.nodeId,
+            title: payload.title,
+            x,
+            y,
+            w: DASHBOARD_NODE_WIDTH,
+            h: DASHBOARD_NODE_HEIGHT,
           } satisfies GraphPatchOperation,
         ],
       }
@@ -2514,6 +2872,17 @@ function App() {
       await handleCreateNode(
         {
           type: 'empty',
+          nodeId: payload.nodeId,
+          title: payload.title,
+        },
+        { x, y },
+      )
+      return
+    }
+    if (entry.kind === 'dashboard') {
+      await handleCreateNode(
+        {
+          type: 'dashboard',
           nodeId: payload.nodeId,
           title: payload.title,
         },
@@ -3010,6 +3379,18 @@ function App() {
     if (!connection.source || !connection.target || !connection.sourceHandle || !connection.targetHandle) {
       return
     }
+    const dashboardLinkNodes = dashboardLinkConnectionNodes(connection)
+    if (dashboardLinkNodes) {
+      const dashboard = await ensureDashboardRecord(dashboardLinkNodes.dashboardId)
+      const currentSourceNodeIds = dashboard.sources.map((source) => source.node_id)
+      if (!currentSourceNodeIds.includes(dashboardLinkNodes.notebookId)) {
+        await updateDashboardSources(dashboardLinkNodes.dashboardId, {
+          title: dashboard.title,
+          sourceNodeIds: [...currentSourceNodeIds, dashboardLinkNodes.notebookId],
+        })
+      }
+      return
+    }
     const sourceGhost = isOrganizerGhostHandle(connection.sourceHandle)
     const targetGhost = isOrganizerGhostHandle(connection.targetHandle)
     if (sourceGhost || targetGhost) {
@@ -3435,6 +3816,8 @@ function App() {
         nodeOperations.push(organizerAddOperationForNode(item.node, nextLayout, nextNodeId, nextTitle))
       } else if (item.node.kind === 'area') {
         nodeOperations.push(areaAddOperationForNode(item.node, nextLayout, nextNodeId, nextTitle))
+      } else if (item.node.kind === 'dashboard') {
+        nodeOperations.push(dashboardAddOperationForNode(item.node, nextLayout, nextNodeId, nextTitle))
       } else {
         nodeOperations.push(fileInputAddOperationForNode(item.node, nextLayout, nextNodeId, nextTitle))
       }
@@ -3577,6 +3960,30 @@ function App() {
     )
   }
 
+  if (savedDashboardId) {
+    return (
+      <DashboardPage
+        dashboardId={savedDashboardId}
+        projectTitle={snapshot?.project.title ?? null}
+      />
+    )
+  }
+
+  if (notebookAssetsNodeId) {
+    const notebookNode = snapshot?.graph.nodes.find((node) => node.id === notebookAssetsNodeId) ?? null
+    return (
+      <NotebookAssetsPage
+        nodeId={notebookAssetsNodeId}
+        nodeTitle={notebookNode?.title ?? null}
+        projectTitle={snapshot?.project.title ?? null}
+        existingNodeIds={snapshot?.graph.nodes.map((node) => node.id) ?? []}
+        onOpenDashboard={(dashboardId) => {
+          navigateToPath(dashboardUrl(dashboardId))
+        }}
+      />
+    )
+  }
+
   return (
     <div className="app-shell">
       <div className="canvas-underlay" />
@@ -3676,6 +4083,10 @@ function App() {
                 onNodeSelect={handleNodeSelection}
                 onEdgeSelect={handleEdgeSelection}
                 onNodeContextMenu={(nodeId, position) => {
+                  const menuNode = liveSnapshot.graph.nodes.find((node) => node.id === nodeId)
+                  if (menuNode?.kind === 'notebook') {
+                    void preloadNotebookAssetCount(nodeId)
+                  }
                   const menuNodeIds = selectedNodeIds.includes(nodeId) && selectedNodeIds.length + selectedEdgeIds.length > 1
                     ? selectedNodeIds
                     : [nodeId]
@@ -3695,6 +4106,13 @@ function App() {
               onEditAreaNode={openAreaNodeEdit}
               activeEditorNodeIds={activeEditorNodeIds}
               onOpenEditor={(nodeId) => void handleOpenEditor(nodeId)}
+              onOpenDashboard={(nodeId, options) => {
+                if (options?.newTab) {
+                  window.open(dashboardUrl(nodeId), '_blank', 'noopener,noreferrer')
+                  return
+                }
+                navigateToPath(dashboardUrl(nodeId))
+              }}
               onKillEditor={(nodeId) => void handleKillEditor(nodeId)}
               onRunNode={handleRunNode}
               onOpenArtifacts={(nodeId) => {
@@ -3711,11 +4129,15 @@ function App() {
               onNodeResize={handleNodeResize}
               onNodesDelete={handleNodesDelete}
               draggedBlock={draggedPaletteEntry ? { title: draggedPaletteEntry.title, kind: draggedPaletteEntry.kind } : null}
-              onBlockDrop={handleBlockDrop}
-              onViewportChange={handlePaletteViewportChange}
-              nodeNoticeSeverityById={nodeNoticeSeverityById}
-              hoveredNoticeNodeId={hoveredNoticeNodeId}
-              focusedNotice={noticeFocusRequest}
+               onBlockDrop={handleBlockDrop}
+                onViewportChange={handlePaletteViewportChange}
+                dashboardPseudoLinks={dashboardPseudoLinks}
+                selectedDashboardId={selectedDashboardId}
+                selectedDashboardSourceNodeIds={selectedDashboard?.sources.map((source) => source.node_id) ?? []}
+                onToggleDashboardSource={(nodeId) => void handleToggleDashboardSource(nodeId)}
+                nodeNoticeSeverityById={nodeNoticeSeverityById}
+                hoveredNoticeNodeId={hoveredNoticeNodeId}
+                focusedNotice={noticeFocusRequest}
               />
           ) : (
             <div className="empty-state">
@@ -4244,6 +4666,42 @@ function App() {
       />
     </div>
   )
+}
+
+function resolveNotebookAssetsNodeId(pathname: string): string | null {
+  const basePath = appBasePath()
+  const relativePath = basePath && pathname.startsWith(`${basePath}/`)
+    ? pathname.slice(basePath.length)
+    : pathname === basePath
+      ? '/'
+      : pathname
+  const match = relativePath.match(/^\/notebooks\/([^/]+)\/assets\/?$/)
+  if (!match) {
+    return null
+  }
+  try {
+    return decodeURIComponent(match[1])
+  } catch {
+    return match[1]
+  }
+}
+
+function resolveDashboardPageId(pathname: string): string | null {
+  const basePath = appBasePath()
+  const relativePath = basePath && pathname.startsWith(`${basePath}/`)
+    ? pathname.slice(basePath.length)
+    : pathname === basePath
+      ? '/'
+      : pathname
+  const match = relativePath.match(/^\/dashboards\/([^/]+)\/?$/)
+  if (!match) {
+    return null
+  }
+  try {
+    return decodeURIComponent(match[1])
+  } catch {
+    return match[1]
+  }
 }
 
 function launchEditorTab(sessionId: string, nodeId: string) {

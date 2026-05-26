@@ -141,6 +141,7 @@ def validate_pipeline_template_definition(
                 NodeKind.FILE_INPUT.value,
                 NodeKind.ORGANIZER.value,
                 NodeKind.AREA.value,
+                NodeKind.DASHBOARD.value,
             }
         ):
             issues.append(
@@ -227,6 +228,21 @@ def validate_pipeline_template_definition(
         for layout_node_id in layout_rows
         if layout_node_id not in node_rows
     )
+
+    for raw_node in node_rows.values():
+        if str(raw_node.get('kind') or '').strip() != NodeKind.DASHBOARD.value:
+            continue
+        try:
+            _validate_dashboard_template_definition(raw_node, node_rows=node_rows)
+        except GraphValidationError as exc:
+            issues.append(
+                build_issue(
+                    node_id=node_id,
+                    severity=ValidationSeverity.ERROR,
+                    code='invalid_pipeline_node',
+                    message=str(exc),
+                ).to_dict()
+            )
 
     for raw_edge in edges_raw:
         if not isinstance(raw_edge, dict):
@@ -371,6 +387,8 @@ def _pipeline_node_interface(
         return interface.to_dict()
     if kind_value == NodeKind.AREA.value:
         return {'inputs': [], 'outputs': []}
+    if kind_value == NodeKind.DASHBOARD.value:
+        return {'inputs': [], 'outputs': []}
     template_ref = str(raw_node.get('template_ref') or '')
     template_path = notebook_paths_by_ref.get(template_ref)
     if template_path is None:
@@ -453,6 +471,65 @@ def _validate_pipeline_constant_value(raw_node: dict[str, Any], *, data_type: st
         raise GraphValidationError(
             f'Constant node `{node_id}` defines an invalid pre-populated `value`: {exc}'
         ) from exc
+
+
+def _validate_dashboard_template_definition(
+    raw_node: dict[str, Any],
+    *,
+    node_rows: dict[str, dict[str, Any]],
+) -> None:
+    node_id = str(raw_node.get('id') or 'dashboard').strip()
+    payload = raw_node.get('dashboard')
+    if not isinstance(payload, dict):
+        raise GraphValidationError(f'Dashboard node `{node_id}` must define a `dashboard` object.')
+    sources = payload.get('sources')
+    panels = payload.get('panels')
+    if not isinstance(sources, list) or not isinstance(panels, list):
+        raise GraphValidationError(f'Dashboard node `{node_id}` must define list fields `sources` and `panels`.')
+    source_ids: list[str] = []
+    for source in sources:
+        if not isinstance(source, dict):
+            raise GraphValidationError(f'Dashboard node `{node_id}` sources must be objects.')
+        source_node_id = str(source.get('node_id') or '').strip()
+        if not source_node_id:
+            raise GraphValidationError(f'Dashboard node `{node_id}` sources must define `node_id`.')
+        source_node = node_rows.get(source_node_id)
+        if source_node is None or str(source_node.get('kind') or '') != NodeKind.NOTEBOOK.value:
+            raise GraphValidationError(
+                f'Dashboard node `{node_id}` source `{source_node_id}` must reference a notebook in the same template.'
+            )
+        if source_node_id not in source_ids:
+            source_ids.append(source_node_id)
+    seen_panel_ids: set[str] = set()
+    for index, panel in enumerate(panels):
+        if not isinstance(panel, dict):
+            raise GraphValidationError(f'Dashboard node `{node_id}` panels must be objects.')
+        panel_node_id = str(panel.get('node_id') or '').strip()
+        asset_name = str(panel.get('asset_name') or '').strip()
+        if not panel_node_id or not asset_name:
+            raise GraphValidationError(f'Dashboard node `{node_id}` panels must define `node_id` and `asset_name`.')
+        panel_node = node_rows.get(panel_node_id)
+        if panel_node is None or str(panel_node.get('kind') or '') != NodeKind.NOTEBOOK.value:
+            raise GraphValidationError(
+                f'Dashboard node `{node_id}` panel `{panel_node_id}/{asset_name}` must reference a notebook node.'
+            )
+        if panel_node_id not in source_ids:
+            raise GraphValidationError(
+                f'Dashboard node `{node_id}` panel `{panel_node_id}/{asset_name}` must reference a node from `sources`.'
+            )
+        panel_id = str(panel.get('panel_id') or f'{panel_node_id}/{asset_name}').strip()
+        if not panel_id:
+            raise GraphValidationError(f'Dashboard node `{node_id}` contains an empty `panel_id`.')
+        if panel_id in seen_panel_ids:
+            raise GraphValidationError(f'Dashboard node `{node_id}` contains duplicate panel `{panel_id}`.')
+        seen_panel_ids.add(panel_id)
+        if 'modifier_overrides' in panel and not isinstance(panel.get('modifier_overrides'), dict):
+            raise GraphValidationError(
+                f'Dashboard node `{node_id}` panel `{panel_id}` must define `modifier_overrides` as an object.'
+            )
+        if 'position' in panel and not isinstance(panel.get('position'), int):
+            raise GraphValidationError(f'Dashboard node `{node_id}` panel `{panel_id}` must define integer `position`.')
+        _ = index
 
 
 def _port_data_type(ports: list[dict[str, Any]], name: str) -> str | None:

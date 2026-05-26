@@ -150,7 +150,7 @@ function buildPaletteSections(entries: PaletteEntry[], groupTemplatesByProvider:
     createSection(
       'palette:core',
       'Core blocks',
-      entries.filter((entry) => entry.kind === 'empty' || entry.kind === 'constant' || entry.kind === 'organizer' || entry.kind === 'area'),
+      entries.filter((entry) => entry.kind === 'empty' || entry.kind === 'constant' || entry.kind === 'organizer' || entry.kind === 'area' || entry.kind === 'dashboard'),
     ),
     createTemplateSection(
       'palette:pipelines',
@@ -292,7 +292,7 @@ function createPalettePreviewBlock(block: PalettePreviewBlock, scale: number): H
 
   const badge = document.createElement('div')
   badge.className = 'palette-drag-preview-badge'
-  badge.textContent = block.kind === 'organizer' ? 'O' : 'N'
+  badge.textContent = block.kind === 'organizer' ? 'O' : block.kind === 'dashboard' ? 'D' : 'N'
   header.appendChild(badge)
 
   const copy = document.createElement('div')
@@ -303,7 +303,7 @@ function createPalettePreviewBlock(block: PalettePreviewBlock, scale: number): H
   copy.appendChild(title)
 
   const subtitle = document.createElement('span')
-  subtitle.textContent = block.kind === 'organizer' ? 'Organizer' : 'Notebook'
+  subtitle.textContent = block.kind === 'organizer' ? 'Organizer' : block.kind === 'dashboard' ? 'Dashboard' : 'Notebook'
   copy.appendChild(subtitle)
   header.appendChild(copy)
 
@@ -323,10 +323,10 @@ function defaultPreviewBlock(entry: PaletteEntry): PalettePreviewBlock {
   return {
     key: entry.key,
     title: entry.title,
-    kind: entry.kind === 'constant' ? 'constant' : entry.kind === 'organizer' ? 'organizer' : entry.kind === 'area' ? 'area' : 'notebook',
+    kind: entry.kind === 'constant' ? 'constant' : entry.kind === 'organizer' ? 'organizer' : entry.kind === 'area' ? 'area' : entry.kind === 'dashboard' ? 'dashboard' : 'notebook',
     x: 0,
     y: 0,
-    width: entry.previewSize?.width ?? (entry.kind === 'constant' ? CONSTANT_NODE_WIDTH : entry.kind === 'organizer' ? 160 : entry.kind === 'area' ? 320 : 360),
-    height: entry.previewSize?.height ?? (entry.kind === 'constant' ? CONSTANT_NODE_HEIGHT : entry.kind === 'organizer' ? 140 : entry.kind === 'area' ? 220 : 220),
+    width: entry.previewSize?.width ?? (entry.kind === 'constant' ? CONSTANT_NODE_WIDTH : entry.kind === 'organizer' ? 160 : entry.kind === 'area' ? 320 : entry.kind === 'dashboard' ? 240 : 360),
+    height: entry.previewSize?.height ?? (entry.kind === 'constant' ? CONSTANT_NODE_HEIGHT : entry.kind === 'organizer' ? 140 : entry.kind === 'area' ? 220 : entry.kind === 'dashboard' ? 140 : 220),
   }
 }

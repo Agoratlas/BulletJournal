@@ -419,6 +419,104 @@ def test_validate_pipeline_template_reports_graph_validation_errors(
     ]
 
 
+def test_validate_pipeline_template_accepts_dashboard_node(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    template = tmp_path / 'pipeline.json'
+    _write_json(
+        template,
+        {
+            'nodes': [
+                {'id': 'analysis', 'title': 'Analysis', 'kind': 'notebook', 'template_ref': 'analysis.py'},
+                {
+                    'id': 'dashboard_view',
+                    'title': 'Dashboard View',
+                    'kind': 'dashboard',
+                    'dashboard': {
+                        'sources': [{'node_id': 'analysis'}],
+                        'panels': [
+                            {
+                                'panel_id': 'analysis/notes',
+                                'node_id': 'analysis',
+                                'asset_name': 'notes',
+                                'visible': True,
+                                'position': 0,
+                                'modifier_overrides': {},
+                            }
+                        ],
+                    },
+                },
+            ],
+            'edges': [],
+            'layout': [
+                {'node_id': 'analysis', 'x': 0, 'y': 0, 'w': 1, 'h': 1},
+                {'node_id': 'dashboard_view', 'x': 1, 'y': 0, 'w': 1, 'h': 1},
+            ],
+        },
+    )
+
+    analysis_path = tmp_path / 'analysis.py'
+    analysis_path.write_text('', encoding='utf-8')
+    monkeypatch.setattr(
+        validator,
+        'parse_notebook_interface',
+        lambda path, node_id: _interface(node_id),
+    )
+
+    issues = validator.validate_pipeline_template(template, notebook_paths_by_ref={'analysis.py': analysis_path})
+    assert issues == []
+
+
+def test_validate_pipeline_template_rejects_dashboard_panel_outside_sources(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    template = tmp_path / 'pipeline.json'
+    _write_json(
+        template,
+        {
+            'nodes': [
+                {'id': 'analysis', 'title': 'Analysis', 'kind': 'notebook', 'template_ref': 'analysis.py'},
+                {'id': 'other', 'title': 'Other', 'kind': 'notebook', 'template_ref': 'other.py'},
+                {
+                    'id': 'dashboard_view',
+                    'title': 'Dashboard View',
+                    'kind': 'dashboard',
+                    'dashboard': {
+                        'sources': [{'node_id': 'analysis'}],
+                        'panels': [
+                            {
+                                'panel_id': 'other/notes',
+                                'node_id': 'other',
+                                'asset_name': 'notes',
+                            }
+                        ],
+                    },
+                },
+            ],
+            'edges': [],
+            'layout': [
+                {'node_id': 'analysis', 'x': 0, 'y': 0, 'w': 1, 'h': 1},
+                {'node_id': 'other', 'x': 1, 'y': 0, 'w': 1, 'h': 1},
+                {'node_id': 'dashboard_view', 'x': 2, 'y': 0, 'w': 1, 'h': 1},
+            ],
+        },
+    )
+
+    analysis_path = tmp_path / 'analysis.py'
+    other_path = tmp_path / 'other.py'
+    analysis_path.write_text('', encoding='utf-8')
+    other_path.write_text('', encoding='utf-8')
+    monkeypatch.setattr(
+        validator,
+        'parse_notebook_interface',
+        lambda path, node_id: _interface(node_id),
+    )
+
+    issues = validator.validate_pipeline_template(
+        template,
+        notebook_paths_by_ref={'analysis.py': analysis_path, 'other.py': other_path},
+    )
+    assert any('must reference a node from `sources`' in str(issue['message']) for issue in issues)
+
+
 def test_load_pipeline_template_definition_requires_object_root(tmp_path: Path) -> None:
     template = tmp_path / 'pipeline.json'
     _write_json(template, ['not', 'an', 'object'])

@@ -165,6 +165,30 @@ def test_create_app_serves_assets_files_index_and_503(monkeypatch, tmp_path: Pat
     assert unavailable.json()['detail'].startswith('Frontend assets are not built yet')
 
 
+def test_create_app_injects_base_tag_before_relative_asset_urls(monkeypatch, tmp_path: Path) -> None:
+    web_root = tmp_path / 'web'
+    web_root.mkdir()
+    (web_root / 'index.html').write_text(
+        '<!doctype html><html><head><script type="module" src="./assets/app.js"></script></head><body></body></html>',
+        encoding='utf-8',
+    )
+
+    app, _ = _make_app(monkeypatch, web_root)
+
+    with TestClient(app) as client:
+        response = client.get('/notebooks/example_2/assets')
+
+    assert response.status_code == 200
+    assert '<base href="/">' in response.text
+    assert response.text.index('<base href="/">') < response.text.index('src="./assets/app.js"')
+
+    with TestClient(app) as client:
+        dashboard_response = client.get('/dashboards/example_dashboard')
+
+    assert dashboard_response.status_code == 200
+    assert '<base href="/">' in dashboard_response.text
+
+
 def test_create_app_downloads_execution_logs(monkeypatch, tmp_path: Path) -> None:
     web_root = tmp_path / 'web'
     web_root.mkdir()
@@ -532,7 +556,8 @@ def test_create_app_serves_assets_and_api_under_base_path(monkeypatch, tmp_path:
     assert asset.status_code == 200
     assert health.json() == {'status': 'ok'}
     assert root_health.json() == {'status': 'ok'}
-    assert "'/p/demo'" in fallback.text
+    assert '"/p/demo"' in fallback.text
+    assert '<base href="/p/demo/">' in fallback.text
 
 
 def test_create_app_proxies_editor_websocket(monkeypatch, tmp_path: Path) -> None:

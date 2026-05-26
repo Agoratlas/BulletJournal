@@ -71,6 +71,7 @@ class ProjectService:
     def __init__(self, event_service, template_service) -> None:
         self.event_service = event_service
         self.template_service = template_service
+        self.dashboard_service = None
         self.project: OpenProject | None = None
         self.run_service = None
         self.watcher = NotebookWatcher(self)
@@ -155,6 +156,8 @@ class ProjectService:
         if node.kind == NodeKind.ORGANIZER:
             return organizer_interface_for_node(node).to_dict()
         if node.kind == NodeKind.AREA:
+            return None
+        if node.kind == NodeKind.DASHBOARD:
             return None
         interface = self.require_project().state_db.latest_interface_json(node_id)
         if interface is None:
@@ -393,10 +396,13 @@ class ProjectService:
                 template_status = (
                     'template' if interface.get('source_hash') == template_source.source_hash else 'modified'
                 )
+            node_ui = dict(node.ui)
+            if node.kind == NodeKind.DASHBOARD and self.dashboard_service is not None:
+                node_ui = self._dashboard_ui_payload(node.id, base_ui=node_ui)
             orchestrator_state = orchestrator_state_by_node.get(node.id)
             node_payload.append(
                 {
-                    **node.to_dict(),
+                    **{**node.to_dict(), 'ui': node_ui},
                     'template': resolved_template.to_dict() if resolved_template else None,
                     'interface': interface,
                     'template_status': template_status,
@@ -532,7 +538,7 @@ class ProjectService:
             if node.kind == NodeKind.CONSTANT:
                 project.state_db.ensure_artifact_head(node.id, constant_artifact_name(node), ArtifactState.PENDING)
                 continue
-            if node.kind in {NodeKind.ORGANIZER, NodeKind.AREA}:
+            if node.kind in {NodeKind.ORGANIZER, NodeKind.AREA, NodeKind.DASHBOARD}:
                 continue
             notebook_service.reparse_notebook(node.id)
 
@@ -557,6 +563,33 @@ class ProjectService:
             project.state_db.set_project_meta('last_graph_edit_at', graph_timestamp)
         if project.state_db.get_project_meta('last_notebook_edit_at') is None:
             project.state_db.set_project_meta('last_notebook_edit_at', project.metadata.created_at)
+
+    def _dashboard_ui_payload(self, dashboard_id: str, *, base_ui: dict[str, Any]) -> dict[str, Any]:
+        if self.dashboard_service is None:
+            return base_ui
+        try:
+            dashboard = self.dashboard_service.get_dashboard(dashboard_id)
+        except (NotFoundError, FileNotFoundError, ValueError):
+            return base_ui
+        counts = {'pending': 0, 'stale': 0, 'ready': 0}
+        state_db = self.require_project().state_db
+        for panel in dashboard.get('panels', []):
+            if not isinstance(panel, dict):
+                continue
+            node_id = str(panel.get('node_id') or '').strip()
+            asset_name = str(panel.get('asset_name') or '').strip()
+            if not node_id or not asset_name:
+                continue
+            head = state_db.get_asset_head(node_id, asset_name)
+            state = str(head.get('state') or 'pending') if isinstance(head, dict) else 'pending'
+            if state in counts:
+                counts[state] += 1
+        return {
+            **base_ui,
+            'source_count': len(dashboard.get('sources', [])),
+            'panel_count': len(dashboard.get('panels', [])),
+            'asset_counts': counts,
+        }
 
 
 def _as_str(value: object) -> str:

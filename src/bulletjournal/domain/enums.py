@@ -9,6 +9,7 @@ class NodeKind(StrEnum):
     FILE_INPUT = 'file_input'
     ORGANIZER = 'organizer'
     AREA = 'area'
+    DASHBOARD = 'dashboard'
 
 
 class ArtifactRole(StrEnum):

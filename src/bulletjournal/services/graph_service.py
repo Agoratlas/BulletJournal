@@ -68,6 +68,11 @@ class GraphService:
         pending_notebook_creates: list[tuple[str, str]] = []
         pending_notebook_deletes: list[str] = []
         pending_notebook_renames: list[tuple[str, str, str | None]] = []
+        pending_dashboard_creates: list[dict[str, Any]] = []
+        pending_dashboard_deletes: list[str] = []
+        pending_dashboard_renames: list[tuple[str, str, str]] = []
+        pending_dashboard_ref_renames: list[tuple[str, str]] = []
+        pending_dashboard_ref_deletes: list[str] = []
         pending_editor_stops: list[str] = []
         pending_input_heads: list[tuple[str, str]] = []
         pending_constant_values: list[tuple[str, Any]] = []
@@ -99,9 +104,20 @@ class GraphService:
                 self._add_organizer_node(graph, operation)
             elif op_type == 'add_area_node':
                 self._add_area_node(graph, operation)
+            elif op_type == 'add_dashboard_node':
+                node_id = self._add_dashboard_node(graph, operation)
+                pending_dashboard_creates.append(
+                    {
+                        'dashboard_id': node_id,
+                        'title': str(operation.get('title') or 'Dashboard'),
+                        'sources': [],
+                        'panels': [],
+                    }
+                )
             elif op_type == 'add_pipeline_template':
                 created = self._add_pipeline_template(graph, operation)
                 pending_notebook_creates.extend(created['notebook_creates'])
+                pending_dashboard_creates.extend(created['dashboard_creates'])
                 pending_input_heads.extend(created['input_heads'])
                 pending_constant_values.extend(created['constant_values'])
                 reparse_all = True
@@ -123,6 +139,7 @@ class GraphService:
             elif op_type == 'rename_node':
                 renamed = self._rename_node(graph, operation)
                 pending_state_renames.append((renamed['old_node_id'], renamed['new_node_id']))
+                pending_dashboard_ref_renames.append((renamed['old_node_id'], renamed['new_node_id']))
                 if renamed['interface'] is not None:
                     pending_notebook_interfaces.pop(renamed['old_node_id'], None)
                     pending_notebook_interfaces[renamed['new_node_id']] = renamed['interface']
@@ -139,6 +156,8 @@ class GraphService:
                     )
                     pending_editor_stops.append(renamed['old_node_id'])
                     reparse_all = True
+                if renamed['rename_dashboard_file']:
+                    pending_dashboard_renames.append((renamed['old_node_id'], renamed['new_node_id'], renamed['title']))
                 interruption_roots.add(renamed['new_node_id'])
             elif op_type == 'update_constant_node':
                 updated = self._update_constant_node(graph, operation)
@@ -164,6 +183,9 @@ class GraphService:
                 if deleted['delete_notebook_file']:
                     pending_notebook_deletes.append(str(deleted['node_id']))
                     pending_editor_stops.append(str(deleted['node_id']))
+                if deleted['delete_dashboard_file']:
+                    pending_dashboard_deletes.append(str(deleted['node_id']))
+                pending_dashboard_ref_deletes.append(str(deleted['node_id']))
                 pending_state_deletes.append(str(deleted['node_id']))
                 reparse_all = True
             else:
@@ -175,6 +197,9 @@ class GraphService:
                 graph,
             )
         graph = self.project_service.write_graph(graph)
+        if self.project_service.dashboard_service is not None:
+            for dashboard in pending_dashboard_creates:
+                self.project_service.dashboard_service.materialize_template_dashboard(**dashboard)
         for node_id, source in pending_notebook_creates:
             self.project_service.require_project().paths.notebook_path(node_id).write_text(source, encoding='utf-8')
         for node_id in pending_editor_stops:
@@ -212,11 +237,21 @@ class GraphService:
                     continue
                 new_path.write_text(rewritten_source, encoding='utf-8')
                 old_path.unlink()
+        if self.project_service.dashboard_service is not None:
+            for old_node_id, new_node_id, title in pending_dashboard_renames:
+                self.project_service.dashboard_service.rename_dashboard(old_node_id, new_node_id, title=title)
         for old_node_id, new_node_id in pending_state_renames:
             self.project_service.require_project().state_db.rename_node_state(old_node_id, new_node_id)
         for node_id in pending_state_deletes:
             self.project_service.require_project().state_db.delete_node_state(node_id)
             self._delete_execution_logs(node_id)
+        if self.project_service.dashboard_service is not None:
+            for old_node_id, new_node_id in pending_dashboard_ref_renames:
+                self.project_service.dashboard_service.rename_node_references(old_node_id, new_node_id)
+            for node_id in pending_dashboard_ref_deletes:
+                self.project_service.dashboard_service.remove_node_references(node_id)
+            for dashboard_id in pending_dashboard_deletes:
+                self.project_service.dashboard_service.delete_dashboard_file(dashboard_id)
         if reparse_all:
             self.project_service.reparse_all_notebooks()
         if stale_roots:
@@ -548,6 +583,26 @@ class GraphService:
         graph.layout.append(self._layout_entry(node_id, operation))
         return node_id
 
+    def _add_dashboard_node(self, graph: GraphData, operation: dict[str, Any]) -> str:
+        node_id = str(operation['node_id'])
+        title = str(operation.get('title') or 'Dashboard')
+        if any(node.id == node_id for node in graph.nodes):
+            raise GraphValidationError(f'Node `{node_id}` already exists.')
+        ui = operation.get('ui') if isinstance(operation.get('ui'), dict) else {}
+        graph.nodes.append(
+            Node(
+                id=node_id,
+                kind=NodeKind.DASHBOARD,
+                title=title,
+                ui={
+                    'source_count': int(ui.get('source_count', 0)),
+                    'panel_count': int(ui.get('panel_count', 0)),
+                },
+            )
+        )
+        graph.layout.append(self._layout_entry(node_id, operation))
+        return node_id
+
     def _add_pipeline_template(self, graph: GraphData, operation: dict[str, Any]) -> dict[str, list[Any]]:
         template_ref = str(operation['template_ref'])
         pipeline = self.project_service.template_service.resolve_pipeline_template(template_ref, allow_inactive=False)
@@ -573,7 +628,9 @@ class GraphService:
         notebook_creates: list[tuple[str, str]] = []
         input_heads: list[tuple[str, str]] = []
         constant_values: list[tuple[str, Any]] = []
+        dashboard_creates: list[dict[str, Any]] = []
         node_id_map: dict[str, str] = {}
+        dashboard_templates: list[tuple[str, str, dict[str, Any]]] = []
         interfaces_by_node: dict[str, dict[str, Any]] = self.project_service.template_service.pipeline_node_interfaces(
             definition
         )
@@ -678,6 +735,23 @@ class GraphService:
                     'h': int(layout.get('h', 280)),
                 }
                 self._add_area_node(graph, add_operation)
+            elif kind == NodeKind.DASHBOARD.value:
+                add_operation = {
+                    'node_id': resolved_node_id,
+                    'title': resolved_title,
+                    'x': int(layout.get('x', 80)) + offset_x,
+                    'y': int(layout.get('y', 80)) + offset_y,
+                    'w': int(layout.get('w', 240)),
+                    'h': int(layout.get('h', 140)),
+                }
+                self._add_dashboard_node(graph, add_operation)
+                dashboard_payload = raw_node.get('dashboard')
+                if not isinstance(dashboard_payload, dict):
+                    raise GraphValidationError(
+                        f'Pipeline template `{template_ref}` dashboard node '
+                        f'`{template_node_id}` is missing `dashboard`.'
+                    )
+                dashboard_templates.append((resolved_node_id, resolved_title, dashboard_payload))
             else:
                 raise GraphValidationError(
                     f'Pipeline template `{template_ref}` contains unsupported node kind `{kind}`.'
@@ -707,8 +781,39 @@ class GraphService:
                 target_interface=target_interface,
             )
 
+        for dashboard_id, dashboard_title, dashboard_payload in dashboard_templates:
+            dashboard_creates.append(
+                {
+                    'dashboard_id': dashboard_id,
+                    'title': dashboard_title,
+                    'sources': [
+                        {'node_id': node_id_map[str(source.get('node_id') or '')]}
+                        for source in dashboard_payload.get('sources', [])
+                        if isinstance(source, dict) and str(source.get('node_id') or '') in node_id_map
+                    ],
+                    'panels': [
+                        {
+                            'panel_id': (
+                                f'{node_id_map[str(panel.get("node_id") or "")]}/{panel.get("asset_name") or ""!s}'
+                            ),
+                            'node_id': node_id_map[str(panel.get('node_id') or '')],
+                            'asset_name': str(panel.get('asset_name') or ''),
+                            'visible': bool(panel.get('visible', True)),
+                            'position': int(panel.get('position', index)),
+                            'modifier_overrides': panel.get('modifier_overrides')
+                            if isinstance(panel.get('modifier_overrides'), dict)
+                            else {},
+                            'override_schema_hash': panel.get('override_schema_hash'),
+                        }
+                        for index, panel in enumerate(dashboard_payload.get('panels', []))
+                        if isinstance(panel, dict) and str(panel.get('node_id') or '') in node_id_map
+                    ],
+                }
+            )
+
         return {
             'notebook_creates': notebook_creates,
+            'dashboard_creates': dashboard_creates,
             'input_heads': input_heads,
             'constant_values': constant_values,
         }
@@ -762,7 +867,7 @@ class GraphService:
             return self.project_service.synthetic_file_input_interface(node).to_dict()
         if node.kind == NodeKind.ORGANIZER:
             return organizer_interface_for_node(node).to_dict()
-        if node.kind == NodeKind.AREA:
+        if node.kind in {NodeKind.AREA, NodeKind.DASHBOARD}:
             return {'inputs': [], 'outputs': []}
         return self.project_service.latest_interface(node_id)
 
@@ -906,6 +1011,8 @@ class GraphService:
                 'old_node_id': old_node_id,
                 'new_node_id': new_node_id,
                 'rename_notebook_file': False,
+                'rename_dashboard_file': False,
+                'title': title,
                 'interface': self._interface_for_graph_node(graph, new_node_id),
             }
         node.id = new_node_id
@@ -925,6 +1032,8 @@ class GraphService:
             'old_node_id': old_node_id,
             'new_node_id': new_node_id,
             'rename_notebook_file': node.kind == NodeKind.NOTEBOOK,
+            'rename_dashboard_file': node.kind == NodeKind.DASHBOARD,
+            'title': title,
             'interface': self._renamed_notebook_interface(node=node, old_node_id=old_node_id),
         }
 
@@ -1110,6 +1219,7 @@ class GraphService:
         return {
             'node_id': node_id,
             'delete_notebook_file': existing.kind == NodeKind.NOTEBOOK,
+            'delete_dashboard_file': existing.kind == NodeKind.DASHBOARD,
             'stale_roots': stale_roots,
         }
 

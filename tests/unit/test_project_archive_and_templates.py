@@ -30,6 +30,34 @@ def test_project_archive_round_trip_preserves_project_id(tmp_path: Path) -> None
     assert (tmp_path / 'imported' / 'uv.lock').is_file()
 
 
+def test_project_archive_round_trip_preserves_dashboards(tmp_path: Path) -> None:
+    project_root = init_project_root(tmp_path / 'project', project_id='study-a').root
+    dashboard_path = project_root / 'dashboards' / 'study_a.json'
+    dashboard_path.write_text(
+        json.dumps(
+            {
+                'schema_version': 1,
+                'dashboard_id': 'study_a',
+                'version': 1,
+                'title': 'Study Dashboard',
+                'created_at': '2026-01-01T00:00:00Z',
+                'updated_at': '2026-01-01T00:00:00Z',
+                'sources': [],
+                'panels': [],
+            }
+        ),
+        encoding='utf-8',
+    )
+    archive_path = tmp_path / 'study-a.zip'
+
+    export_project_archive(project_root, archive_path, include_artifacts=False)
+    import_project_archive(archive_path, tmp_path / 'imported')
+
+    imported_dashboard = tmp_path / 'imported' / 'dashboards' / 'study_a.json'
+    assert imported_dashboard.is_file()
+    assert json.loads(imported_dashboard.read_text(encoding='utf-8'))['title'] == 'Study Dashboard'
+
+
 def test_project_archive_export_ignores_missing_sqlite_sidecars(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

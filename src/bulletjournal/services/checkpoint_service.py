@@ -19,6 +19,7 @@ class CheckpointService:
         checkpoint_dir = project.paths.checkpoints_dir / checkpoint_id
         copy_tree(project.paths.graph_dir, checkpoint_dir / 'graph')
         copy_tree(project.paths.notebooks_dir, checkpoint_dir / 'notebooks')
+        copy_tree(project.paths.dashboards_dir, checkpoint_dir / 'dashboards')
         graph_version = int(self.project_service.graph().meta['graph_version'])
         project.state_db.create_checkpoint(checkpoint_id, graph_version, str(checkpoint_dir))
         self.project_service.event_service.publish(
@@ -47,8 +48,14 @@ class CheckpointService:
             shutil.rmtree(project.paths.graph_dir)
         if project.paths.notebooks_dir.exists():
             shutil.rmtree(project.paths.notebooks_dir)
+        if project.paths.dashboards_dir.exists():
+            shutil.rmtree(project.paths.dashboards_dir)
         copy_tree(checkpoint_path / 'graph', project.paths.graph_dir)
         copy_tree(checkpoint_path / 'notebooks', project.paths.notebooks_dir)
+        if (checkpoint_path / 'dashboards').exists():
+            copy_tree(checkpoint_path / 'dashboards', project.paths.dashboards_dir)
+        else:
+            project.paths.dashboards_dir.mkdir(parents=True, exist_ok=True)
         self._drop_state_for_missing_nodes()
         graph = self.project_service.graph()
         self.project_service.write_graph(graph)
@@ -87,7 +94,7 @@ class CheckpointService:
                 allowed_artifacts[node.id] = {artifact_name}
                 project.state_db.ensure_artifact_head(node.id, artifact_name, ArtifactState.PENDING)
                 continue
-            if node.kind in {NodeKind.ORGANIZER, NodeKind.AREA}:
+            if node.kind in {NodeKind.ORGANIZER, NodeKind.AREA, NodeKind.DASHBOARD}:
                 allowed_artifacts[node.id] = set()
                 continue
             interface = self.project_service.latest_interface(node.id)

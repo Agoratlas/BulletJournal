@@ -72,6 +72,17 @@ class AddAreaNodeOperation(StrictModel):
     ui: dict[str, Any] | None = None
 
 
+class AddDashboardNodeOperation(StrictModel):
+    type: Literal['add_dashboard_node']
+    node_id: str
+    title: str = 'Dashboard'
+    x: int = 80
+    y: int = 80
+    w: int = 240
+    h: int = 140
+    ui: dict[str, Any] | None = None
+
+
 class AddPipelineTemplateOperation(StrictModel):
     type: Literal['add_pipeline_template']
     template_ref: str
@@ -152,6 +163,7 @@ GraphOperation = Annotated[
     | AddFileInputNodeOperation
     | AddOrganizerNodeOperation
     | AddAreaNodeOperation
+    | AddDashboardNodeOperation
     | AddPipelineTemplateOperation
     | AddEdgeOperation
     | RemoveEdgeOperation
@@ -239,3 +251,46 @@ class ArtifactStateChangeRequest(StrictModel):
 class NodeOutputsStateChangeRequest(StrictModel):
     state: ArtifactState
     only_current_state: ArtifactState | None = None
+
+
+class AssetPrepareRequest(StrictModel):
+    asset_version_id: int | None = None
+    modifier_overrides: dict[str, Any] = Field(default_factory=dict)
+    transient_modifiers: dict[str, Any] = Field(default_factory=dict)
+    panel_context: dict[str, Any] | None = None
+
+
+class DashboardSourceInput(StrictModel):
+    node_id: str
+
+
+class DashboardPanelInput(StrictModel):
+    panel_id: str | None = None
+    node_id: str
+    asset_name: str
+    visible: bool = True
+    position: int | None = None
+    modifier_overrides: dict[str, Any] = Field(default_factory=dict)
+    override_schema_hash: str | None = None
+
+
+class DashboardCreateRequest(StrictModel):
+    dashboard_id: str | None = None
+    title: str
+    sources: list[DashboardSourceInput]
+    panels: list[DashboardPanelInput]
+    x: int = 80
+    y: int = 80
+
+
+class DashboardPatchRequest(StrictModel):
+    dashboard_version: int
+    title: str | None = None
+    sources: list[DashboardSourceInput] | None = None
+    panels: list[DashboardPanelInput] | None = None
+
+
+class SaveNotebookDashboardRequest(StrictModel):
+    dashboard_id: str | None = None
+    title: str | None = None
+    panels: list[DashboardPanelInput] | None = None

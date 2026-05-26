@@ -139,6 +139,9 @@ export function badgeForNode(snapshot: ProjectSnapshot, node: NodeRecord): { lab
   if (node.kind === 'area') {
     return { label: 'A', title: 'Area block', tone: 'custom' }
   }
+  if (node.kind === 'dashboard') {
+    return { label: 'D', title: 'Saved dashboard', tone: 'custom' }
+  }
   if (node.template?.ref) {
     const unchanged = node.template_status === 'template'
     return {

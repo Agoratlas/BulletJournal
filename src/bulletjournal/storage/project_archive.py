@@ -105,6 +105,7 @@ def _iter_project_files(paths: ProjectPaths, *, include_artifacts: bool) -> list
     included_roots = [
         paths.graph_dir,
         paths.notebooks_dir,
+        paths.dashboards_dir,
         paths.metadata_dir,
         paths.checkpoints_dir,
         paths.root / 'uploads',
@@ -136,6 +137,7 @@ def _restore_required_directories(root: Path) -> None:
     for directory in [
         paths.graph_dir,
         paths.notebooks_dir,
+        paths.dashboards_dir,
         paths.metadata_dir,
         paths.object_store_dir,
         paths.checkpoints_dir,

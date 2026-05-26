@@ -156,6 +156,206 @@ def _():
     assert table_asset.json()['objects'][0]['object_role'] == 'backing_dataset'
 
 
+def test_dataframe_asset_prepare_returns_paginated_sorted_table(tmp_path) -> None:
+    project_root = init_project_root(tmp_path / 'project').root
+    app = create_app(project_path=project_root)
+    client = TestClient(app)
+    container = app.state.container
+
+    opened = client.get('/api/v1/project/snapshot')
+    graph_version = opened.json()['graph']['meta']['graph_version']
+
+    patched = client.patch(
+        '/api/v1/graph',
+        json={
+            'graph_version': graph_version,
+            'operations': [
+                {
+                    'type': 'add_notebook_node',
+                    'node_id': 'asset_node',
+                    'title': 'Asset Node',
+                }
+            ],
+        },
+    )
+    assert patched.status_code == 200
+
+    notebook_path = project_root / 'notebooks' / 'asset_node.py'
+    notebook_path.write_text(
+        """
+import marimo
+
+app = marimo.App()
+
+with app.setup:
+    import pandas as pd
+    from bulletjournal.runtime import assets
+
+@app.cell
+def _():
+    frame = pd.DataFrame({
+        'value': list(range(12, 0, -1)),
+        'label': [f'row_{value}' for value in range(12, 0, -1)],
+    })
+    assets.push(assets.DataFrame(frame), name='table', title='Table', asset_type=assets.DataFrame)
+    return
+""".strip()
+        + '\n',
+        encoding='utf-8',
+    )
+    container.project_service.reparse_notebook_by_path(notebook_path)
+
+    run = client.post('/api/v1/nodes/asset_node/run', json={'mode': 'run_stale', 'action': 'use_stale'})
+    assert run.status_code == 200
+    assert run.json()['status'] == 'succeeded'
+
+    prepared = client.post(
+        '/api/v1/assets/asset_node/table/prepare',
+        json={
+            'modifier_overrides': {
+                'page': {'index': 1, 'size': 10},
+                'sort': [{'column': 'value', 'direction': 'asc'}],
+            }
+        },
+    )
+
+    assert prepared.status_code == 200
+    payload = prepared.json()
+    assert payload['state'] == 'ready'
+    assert payload['resolved_modifiers']['page'] == {'index': 1, 'size': 10}
+    assert payload['resolved_modifiers']['sort'] == [{'column': 'value', 'direction': 'asc'}]
+    assert payload['payloads']['table'] == {
+        'kind': 'table',
+        'rows_total': 12,
+        'columns': [
+            {'id': 'value', 'title': 'value', 'data_type': 'Int64', 'sortable': True},
+            {'id': 'label', 'title': 'label', 'data_type': 'String', 'sortable': True},
+        ],
+        'page': {'index': 1, 'size': 10},
+        'sort': [{'column': 'value', 'direction': 'asc'}],
+        'rows': [
+            {'value': 11, 'label': 'row_11'},
+            {'value': 12, 'label': 'row_12'},
+        ],
+    }
+
+
+def test_saved_dashboard_crud_and_conflict_flow(tmp_path) -> None:
+    project_root = init_project_root(tmp_path / 'project').root
+    app = create_app(project_path=project_root)
+    client = TestClient(app)
+    container = app.state.container
+
+    opened = client.get('/api/v1/project/snapshot')
+    graph_version = opened.json()['graph']['meta']['graph_version']
+
+    patched = client.patch(
+        '/api/v1/graph',
+        json={
+            'graph_version': graph_version,
+            'operations': [
+                {
+                    'type': 'add_notebook_node',
+                    'node_id': 'asset_node',
+                    'title': 'Asset Node',
+                }
+            ],
+        },
+    )
+    assert patched.status_code == 200
+
+    notebook_path = project_root / 'notebooks' / 'asset_node.py'
+    notebook_path.write_text(
+        """
+import marimo
+
+app = marimo.App()
+
+with app.setup:
+    from bulletjournal.runtime import assets
+
+@app.cell
+def _():
+    assets.push(assets.Markdown('hello'), name='notes', title='Notes')
+    return
+""".strip()
+        + '\n',
+        encoding='utf-8',
+    )
+    container.project_service.reparse_notebook_by_path(notebook_path)
+    run = client.post('/api/v1/nodes/asset_node/run', json={'mode': 'run_stale', 'action': 'use_stale'})
+    assert run.status_code == 200
+
+    saved = client.post(
+        '/api/v1/nodes/asset_node/dashboards',
+        json={
+            'title': 'Evaluation Dashboard',
+            'panels': [
+                {
+                    'node_id': 'asset_node',
+                    'asset_name': 'notes',
+                    'visible': True,
+                    'position': 0,
+                    'modifier_overrides': {},
+                }
+            ],
+        },
+    )
+    assert saved.status_code == 200
+    created = saved.json()
+    dashboard_id = created['dashboard_id']
+    assert created['dashboard_url'] == f'/dashboards/{dashboard_id}'
+    assert (project_root / 'dashboards' / f'{dashboard_id}.json').is_file()
+
+    snapshot = client.get('/api/v1/project/snapshot').json()
+    dashboard_node = next(node for node in snapshot['graph']['nodes'] if node['id'] == dashboard_id)
+    assert dashboard_node['kind'] == 'dashboard'
+    assert dashboard_node['title'] == 'Evaluation Dashboard'
+
+    loaded = client.get(f'/api/v1/dashboards/{dashboard_id}')
+    assert loaded.status_code == 200
+    assert loaded.json()['sources'] == [{'node_id': 'asset_node'}]
+    assert loaded.json()['panels'][0]['panel_id'] == 'asset_node/notes'
+
+    updated = client.patch(
+        f'/api/v1/dashboards/{dashboard_id}',
+        json={
+            'dashboard_version': loaded.json()['version'],
+            'title': 'Updated Dashboard',
+            'panels': [
+                {
+                    'panel_id': 'asset_node/notes',
+                    'node_id': 'asset_node',
+                    'asset_name': 'notes',
+                    'visible': False,
+                    'position': 0,
+                    'modifier_overrides': {},
+                }
+            ],
+        },
+    )
+    assert updated.status_code == 200
+    assert updated.json()['version'] == 2
+    assert updated.json()['title'] == 'Updated Dashboard'
+    assert updated.json()['panels'][0]['visible'] is False
+
+    conflict = client.patch(
+        f'/api/v1/dashboards/{dashboard_id}',
+        json={
+            'dashboard_version': 1,
+            'title': 'Conflicting Title',
+        },
+    )
+    assert conflict.status_code == 409
+    assert conflict.json()['dashboard']['version'] == 2
+
+    deleted = client.delete(f'/api/v1/dashboards/{dashboard_id}')
+    assert deleted.status_code == 200
+    assert not (project_root / 'dashboards' / f'{dashboard_id}.json').exists()
+    refreshed_snapshot = client.get('/api/v1/project/snapshot').json()
+    assert all(node['id'] != dashboard_id for node in refreshed_snapshot['graph']['nodes'])
+
+
 def test_graph_patch_rejects_unknown_operation_fields(tmp_path) -> None:
     project_root = init_project_root(tmp_path / 'project').root
     app = create_app(project_path=project_root)

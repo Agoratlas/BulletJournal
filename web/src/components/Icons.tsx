@@ -80,6 +80,15 @@ export function Check(props: SVGProps<SVGSVGElement>) {
   )
 }
 
+export function Eye(props: SVGProps<SVGSVGElement>) {
+  return (
+    <IconBase {...props}>
+      <path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z" />
+      <circle cx="12" cy="12" r="2.5" />
+    </IconBase>
+  )
+}
+
 export function X(props: SVGProps<SVGSVGElement>) {
   return (
     <IconBase {...props}>

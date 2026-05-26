@@ -37,7 +37,7 @@ export type TemplateRef = {
 
 export type NodeRecord = {
   id: string
-  kind: 'notebook' | 'constant' | 'file_input' | 'organizer' | 'area'
+  kind: 'notebook' | 'constant' | 'file_input' | 'organizer' | 'area' | 'dashboard'
   title: string
   path?: string | null
   template?: TemplateRef | null
@@ -54,6 +54,13 @@ export type NodeRecord = {
     title_position?: string
     area_color?: string
     area_filled?: boolean
+    source_count?: number
+    panel_count?: number
+    asset_counts?: {
+      pending: number
+      stale: number
+      ready: number
+    }
   }
   interface?: {
     node_id: string
@@ -145,6 +152,110 @@ export type ArtifactRecord = {
   preview: ArtifactPreview | null
 }
 
+export type AssetObjectRecord = {
+  object_role: string
+  object_index: number
+  artifact_hash: string
+  metadata: Record<string, unknown> | null
+}
+
+export type AssetRecord = {
+  node_id: string
+  asset_name: string
+  title: string | null
+  description: string | null
+  declared_asset_type: string | null
+  declaration_index: number | null
+  current_asset_version_id: number | null
+  state: ArtifactState
+  asset_type: string | null
+  interactive: boolean | null
+  source_hash: string | null
+  upstream_code_hash: string | null
+  upstream_data_hash: string | null
+  run_id: string | null
+  lineage_mode: string | null
+  definition: Record<string, unknown> | null
+  modifier_schema: Array<Record<string, unknown>>
+  default_modifiers: Record<string, unknown>
+  override_schema_hash: string | null
+  warnings: Array<Record<string, unknown>>
+  created_at: string | null
+  objects: AssetObjectRecord[]
+}
+
+export type AssetSortDirection = 'asc' | 'desc'
+
+export type AssetSort = {
+  column: string
+  direction: AssetSortDirection
+}
+
+export type PreparedTableColumn = {
+  id: string
+  title: string
+  data_type: string
+  sortable: boolean
+}
+
+export type PreparedTablePayload = {
+  kind: 'table'
+  rows_total: number
+  columns: PreparedTableColumn[]
+  page: {
+    index: number
+    size: number
+  }
+  sort: AssetSort[]
+  rows: Array<Record<string, unknown>>
+}
+
+export type AssetPrepareResponse = {
+  asset_version_id: number
+  state: ArtifactState
+  resolved_modifiers: {
+    page?: {
+      index: number
+      size: number
+    }
+    sort?: AssetSort[]
+    [key: string]: unknown
+  }
+  override_schema_hash: string | null
+  payloads: {
+    table?: PreparedTablePayload
+  }
+  errors: Array<{
+    code: string
+    message: string
+  }>
+}
+
+export type DashboardSourceRecord = {
+  node_id: string
+}
+
+export type DashboardPanelRecord = {
+  panel_id: string
+  node_id: string
+  asset_name: string
+  visible: boolean
+  position: number
+  modifier_overrides: Record<string, unknown>
+  override_schema_hash: string | null
+}
+
+export type DashboardRecord = {
+  schema_version: number
+  dashboard_id: string
+  version: number
+  title: string
+  created_at: string
+  updated_at: string
+  sources: DashboardSourceRecord[]
+  panels: DashboardPanelRecord[]
+}
+
 export type RunRecord = {
   run_id: string
   project_id: string
@@ -183,12 +294,16 @@ export type TemplateRecord = {
       documentation?: string
       nodes?: Array<{
         id: string
-        kind: 'notebook' | 'constant' | 'file_input' | 'organizer' | 'area'
+        kind: 'notebook' | 'constant' | 'file_input' | 'organizer' | 'area' | 'dashboard'
         title: string
         template_ref?: string
         data_type?: string
         value?: unknown
         artifact_name?: string
+        dashboard?: {
+          sources?: DashboardSourceRecord[]
+          panels?: DashboardPanelRecord[]
+        }
         ui?: {
           artifact_name?: string
           data_type?: string
@@ -268,6 +383,7 @@ export type GraphPatchOperation =
   | { type: 'add_file_input_node'; node_id: string; title: string; artifact_name?: string; ui?: { frozen?: boolean }; x?: number; y?: number; w?: number; h?: number }
   | { type: 'add_organizer_node'; node_id: string; title?: string; ui?: { frozen?: boolean; organizer_ports?: Array<{ key: string; name: string; data_type: string }> }; x?: number; y?: number; w?: number; h?: number }
   | { type: 'add_area_node'; node_id: string; title?: string; ui?: { frozen?: boolean; title_position?: string; area_color?: string; area_filled?: boolean }; x?: number; y?: number; w?: number; h?: number }
+  | { type: 'add_dashboard_node'; node_id: string; title?: string; ui?: { source_count?: number; panel_count?: number }; x?: number; y?: number; w?: number; h?: number }
   | { type: 'add_pipeline_template'; template_ref: string; x?: number; y?: number; node_id_prefix?: string | null }
   | { type: 'add_edge'; source_node: string; source_port: string; target_node: string; target_port: string }
   | { type: 'remove_edge'; edge_id: string }

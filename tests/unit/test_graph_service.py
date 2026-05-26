@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 from bulletjournal.domain.errors import GraphValidationError
+from bulletjournal.services.dashboard_service import DashboardService
 from bulletjournal.services.graph_service import GraphService
 from bulletjournal.services.project_service import ProjectService
 from bulletjournal.services.template_service import TemplateService
@@ -49,6 +50,7 @@ def test_graph_service_restores_deleted_notebook_and_edges_in_same_request(tmp_p
     project_root = init_project_root(tmp_path / 'project').root
     project_service = ProjectService(_FakeEventService(), TemplateService())
     project_service.open_project(project_root)
+    project_service.dashboard_service = DashboardService(project_service)
     graph_service = GraphService(project_service)
 
     created = graph_service.apply_operations(
@@ -309,3 +311,100 @@ def test_graph_service_blocks_notebook_id_change_while_running(tmp_path) -> None
     )
 
     assert any(node['id'] == 'sample_node' and node['title'] == 'Renamed Sample' for node in updated['nodes'])
+
+
+def test_graph_service_materializes_dashboard_nodes_from_pipeline_templates(tmp_path) -> None:
+    project_root = init_project_root(tmp_path / 'project').root
+    project_service = ProjectService(_FakeEventService(), TemplateService())
+    project_service.open_project(project_root)
+    project_service.dashboard_service = DashboardService(project_service)
+    graph_service = GraphService(project_service)
+
+    template_source = SimpleNamespace(
+        source_text=(
+            """
+import marimo
+
+app = marimo.App()
+
+with app.setup:
+    from bulletjournal.runtime import assets
+
+@app.cell
+def _():
+    assets.push(assets.Markdown('hello'), name='notes', title='Notes')
+    return
+""".strip()
+            + '\n'
+        ),
+        source_hash='hash',
+    )
+    project_service.template_service.resolve_pipeline_template = lambda ref, allow_inactive=False: SimpleNamespace(
+        definition={
+            'nodes': [
+                {'id': 'analysis', 'title': 'Analysis', 'kind': 'notebook', 'template_ref': 'builtin/example'},
+                {
+                    'id': 'dashboard_view',
+                    'title': 'Dashboard View',
+                    'kind': 'dashboard',
+                    'dashboard': {
+                        'sources': [{'node_id': 'analysis'}],
+                        'panels': [
+                            {
+                                'panel_id': 'analysis/notes',
+                                'node_id': 'analysis',
+                                'asset_name': 'notes',
+                                'visible': True,
+                                'position': 0,
+                                'modifier_overrides': {},
+                            }
+                        ],
+                    },
+                },
+            ],
+            'edges': [],
+            'layout': [
+                {'node_id': 'analysis', 'x': 80, 'y': 220, 'w': 320, 'h': 220},
+                {'node_id': 'dashboard_view', 'x': 80, 'y': 0, 'w': 360, 'h': 220},
+            ],
+        }
+    )
+    project_service.template_service.resolve_template_source = lambda ref, allow_inactive=False: template_source
+    project_service.template_service.template_ref = lambda ref: SimpleNamespace(
+        kind='notebook',
+        provider='builtin',
+        name='example',
+        ref=ref,
+        origin_revision=None,
+        to_dict=lambda: {
+            'kind': 'notebook',
+            'provider': 'builtin',
+            'name': 'example',
+            'ref': ref,
+            'origin_revision': None,
+        },
+    )
+    project_service.template_service.pipeline_node_interfaces = lambda definition: {
+        'analysis': {'inputs': [], 'outputs': []},
+        'dashboard_view': {'inputs': [], 'outputs': []},
+    }
+    project_service.template_service.list_templates = lambda: []
+
+    created = graph_service.apply_operations(
+        int(project_service.graph().meta['graph_version']),
+        [
+            {
+                'type': 'add_pipeline_template',
+                'template_ref': 'builtin/pipeline_with_dashboard',
+                'x': 80,
+                'y': 80,
+                'node_id_prefix': 'demo',
+            }
+        ],
+    )
+
+    assert any(node['id'] == 'demo_dashboard_view' and node['kind'] == 'dashboard' for node in created['nodes'])
+    dashboard_payload = project_service.dashboard_service.get_dashboard('demo_dashboard_view')
+    assert dashboard_payload['sources'] == [{'node_id': 'demo_analysis'}]
+    assert dashboard_payload['panels'][0]['node_id'] == 'demo_analysis'
+    assert dashboard_payload['panels'][0]['panel_id'] == 'demo_analysis/notes'

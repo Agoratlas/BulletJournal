@@ -61,6 +61,28 @@ def serialize_asset(
         )
     if isinstance(asset, DataFrameAsset):
         persisted = object_store.persist_value(asset.dataframe, 'pandas.DataFrame')
+        default_modifiers = {
+            'page': {'index': 0, 'size': 25},
+            'sort': [],
+        }
+        modifier_schema = [
+            {
+                'id': 'page',
+                'title': 'Page',
+                'kind': 'page',
+                'category': 'saved_query',
+                'server_targets': ['table'],
+                'default_value': default_modifiers['page'],
+            },
+            {
+                'id': 'sort',
+                'title': 'Sort',
+                'kind': 'sort',
+                'category': 'saved_query',
+                'server_targets': ['table'],
+                'default_value': default_modifiers['sort'],
+            },
+        ]
         return SerializedAssetVersion(
             asset_type=asset_type,
             interactive=True,
@@ -68,6 +90,8 @@ def serialize_asset(
                 **base_definition,
                 'interactive': True,
                 'supports_table_view': True,
+                'modifier_defaults': default_modifiers,
+                'modifier_schema': modifier_schema,
                 'data_dependencies': ['backing_dataset'],
                 'table_columns': [str(column) for column in asset.dataframe.columns],
                 'row_count': int(asset.dataframe.shape[0]),

@@ -88,7 +88,7 @@ class RunService:
         self.project_service.require_project()
         run_mode = RunMode(mode)
         node = self.project_service.get_node(node_id)
-        if node.kind in {NodeKind.CONSTANT, NodeKind.FILE_INPUT, NodeKind.ORGANIZER, NodeKind.AREA}:
+        if node.kind in {NodeKind.CONSTANT, NodeKind.FILE_INPUT, NodeKind.ORGANIZER, NodeKind.AREA, NodeKind.DASHBOARD}:
             return {'status': 'noop', 'node_id': node_id}
         if run_mode == RunMode.EDIT_RUN:
             return self._start_edit_session(node_id)
@@ -190,7 +190,7 @@ class RunService:
 
     def preflight(self, node_id: str) -> dict[str, Any]:
         node = self.project_service.get_node(node_id)
-        if node.kind in {NodeKind.CONSTANT, NodeKind.FILE_INPUT, NodeKind.ORGANIZER, NodeKind.AREA}:
+        if node.kind in {NodeKind.CONSTANT, NodeKind.FILE_INPUT, NodeKind.ORGANIZER, NodeKind.AREA, NodeKind.DASHBOARD}:
             return {'blocked_inputs': [], 'upstream_nodes': [], 'total_nodes': 0}
         blocked_inputs = self._blocked_inputs_for_node(node_id)
         upstream_nodes = upstream_closure(self.project_service.graph(), node_id)
@@ -395,7 +395,7 @@ class RunService:
     def _run_single_node(self, run_id: str, node_id: str, active_run: ActiveRun) -> dict[str, Any]:
         project = self.project_service.require_project()
         node = self.project_service.get_node(node_id)
-        if node.kind in {NodeKind.CONSTANT, NodeKind.FILE_INPUT, NodeKind.ORGANIZER, NodeKind.AREA}:
+        if node.kind in {NodeKind.CONSTANT, NodeKind.FILE_INPUT, NodeKind.ORGANIZER, NodeKind.AREA, NodeKind.DASHBOARD}:
             return {'status': 'ok', 'outputs': []}
         interface = self.project_service.latest_interface(node_id)
         if interface is None:

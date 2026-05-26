@@ -15,7 +15,7 @@ export function ActionButtons({
           : action.tone === 'success'
             ? ' success-text'
             : ''
-        const className = `${itemClassName}${toneClassName}`
+        const className = `${itemClassName}${toneClassName}${action.className ? ` ${action.className}` : ''}`
         if (action.href) {
           if (action.disabled) {
             return (
@@ -25,7 +25,15 @@ export function ActionButtons({
             )
           }
           return (
-            <a key={action.key} className={`${className} link-button`} href={action.href} onClick={action.onClick} title={action.title}>
+            <a
+              key={action.key}
+              className={`${className} link-button`}
+              href={action.href}
+              onClick={action.onClick}
+              title={action.title}
+              target={action.newTab ? '_blank' : undefined}
+              rel={action.newTab ? 'noreferrer noopener' : undefined}
+            >
               {action.label}
             </a>
           )

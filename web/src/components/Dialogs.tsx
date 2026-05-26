@@ -145,6 +145,108 @@ type CreateNotebookDialogProps = {
   onCreate: (payload: { nodeId: string; title: string }) => Promise<void>
 }
 
+type SaveDashboardDialogProps = {
+  initialTitle: string
+  initialDashboardId?: string
+  existingIds: string[]
+  submitLabel?: string
+  onClose: () => void
+  onSave: (payload: { title: string; dashboardId: string }) => Promise<void>
+}
+
+export function SaveDashboardDialog({
+  initialTitle,
+  initialDashboardId,
+  existingIds,
+  submitLabel = 'Save dashboard',
+  onClose,
+  onSave,
+}: SaveDashboardDialogProps) {
+  const [title, setTitle] = useState(initialTitle)
+  const [dashboardId, setDashboardId] = useState(initialDashboardId ?? normalizeNodeId(initialTitle))
+  const [nodeIdTouched, setNodeIdTouched] = useState(false)
+  const [busy, setBusy] = useState(false)
+
+  useEffect(() => {
+    setTitle(initialTitle)
+    setDashboardId(initialDashboardId ?? normalizeNodeId(initialTitle))
+    setNodeIdTouched(false)
+    setBusy(false)
+  }, [initialDashboardId, initialTitle])
+
+  const invalidTitle = !title.trim()
+  const resolvedDashboardId = useMemo(() => normalizeNodeId(dashboardId), [dashboardId])
+  const duplicateId = existingIds.includes(resolvedDashboardId)
+  const invalidDashboardId = !resolvedDashboardId
+
+  async function submit() {
+    const resolvedTitle = title.trim()
+    if (!resolvedTitle || !resolvedDashboardId || duplicateId) {
+      return
+    }
+    setBusy(true)
+    try {
+      await onSave({ title: resolvedTitle, dashboardId: resolvedDashboardId })
+      onClose()
+    } catch {
+      return
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    void submit()
+  }
+
+  return (
+    <Modal title="Save as dashboard" onClose={onClose}>
+      <form className="form-grid" onSubmit={handleSubmit}>
+        <label>
+          <span>Dashboard title</span>
+          <input
+            value={title}
+            onChange={(event) => {
+              const nextTitle = event.target.value
+              setTitle(nextTitle)
+              if (!nodeIdTouched) {
+                setDashboardId(normalizeNodeId(nextTitle))
+              }
+            }}
+            placeholder="Evaluation dashboard"
+          />
+          {invalidTitle ? <span className="field-note error">Dashboard title is required.</span> : <span className="field-note">A dashboard node and JSON document will be created from this standalone view.</span>}
+        </label>
+        <label>
+          <span>Dashboard ID</span>
+          <input
+            className={duplicateId || invalidDashboardId ? 'invalid' : ''}
+            value={dashboardId}
+            onChange={(event) => {
+              setNodeIdTouched(true)
+              setDashboardId(normalizeNodeId(event.target.value))
+            }}
+            placeholder="evaluation_dashboard"
+            spellCheck={false}
+          />
+          {duplicateId ? (
+            <span className="field-note error">This dashboard ID is already used by another block.</span>
+          ) : invalidDashboardId ? (
+            <span className="field-note error">Dashboard ID is required.</span>
+          ) : (
+            <span className="field-note">This becomes the dashboard block ID and JSON filename.</span>
+          )}
+        </label>
+        <div className="dialog-actions">
+          <button type="button" className="secondary" onClick={onClose}>Cancel</button>
+          <button type="submit" disabled={busy || invalidTitle || invalidDashboardId || duplicateId}>{busy ? 'Saving...' : submitLabel}</button>
+        </div>
+      </form>
+    </Modal>
+  )
+}
+
 export function CreateNotebookDialog({ blockLabel, suggestedTitle, existingIds, submitLabel = 'Create block', onClose, onCreate }: CreateNotebookDialogProps) {
   const [title, setTitle] = useState(suggestedTitle)
   const [nodeId, setNodeId] = useState(normalizeNodeId(suggestedTitle))
