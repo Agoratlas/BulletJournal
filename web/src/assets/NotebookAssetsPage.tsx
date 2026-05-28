@@ -3,8 +3,8 @@ import { useQuery } from '@tanstack/react-query'
 
 import { saveNotebookDashboard, listNodeAssets } from '../lib/api'
 import { SaveDashboardDialog } from '../components/Dialogs'
-import type { PersistedAssetPanelState } from './AssetPanels'
-import { AssetPanel } from './AssetPanels'
+import type { PersistedAssetPanelState } from './AssetPanel'
+import { AssetPanel } from './AssetPanel'
 
 export function NotebookAssetsPage({
   nodeId,

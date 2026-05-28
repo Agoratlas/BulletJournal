@@ -3,7 +3,7 @@ import { useQueries, useQuery, useQueryClient, type QueryClient } from '@tanstac
 
 import { ApiError, appUrl, getDashboard, listNodeAssets, patchDashboard } from '../lib/api'
 import type { AssetRecord, DashboardPanelRecord, DashboardRecord } from '../lib/types'
-import { AssetPanel, type PersistedAssetPanelState } from '../assets/AssetPanels'
+import { AssetPanel, type PersistedAssetPanelState } from '../assets/AssetPanel'
 
 const DASHBOARD_SAVE_DEBOUNCE_MS = 250
 

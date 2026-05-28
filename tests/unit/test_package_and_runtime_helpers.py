@@ -91,6 +91,34 @@ def test_runtime_assets_module_exposes_helper_functions_after_submodule_import()
     assert imported is runtime_module
 
 
+def test_asset_packages_only_expose_canonical_asset_class_names() -> None:
+    assets_module = importlib.import_module('bulletjournal.assets')
+    asset_types_module = importlib.import_module('bulletjournal.assets.types')
+    runtime_types_module = importlib.import_module('bulletjournal.assets.runtime_types')
+
+    for module in (assets_module, asset_types_module, runtime_types_module):
+        assert module.BarChart is not None
+        assert module.DataFrame is not None
+        assert module.Histogram is not None
+        assert module.Markdown is not None
+        assert module.PieChart is not None
+        assert module.ScatterPlot is not None
+        assert module.TimeHistogram is not None
+
+    for alias_name in (
+        'BarChartAsset',
+        'DataFrameAsset',
+        'HistogramAsset',
+        'MarkdownAsset',
+        'PieChartAsset',
+        'ScatterPlotAsset',
+        'TimeHistogramAsset',
+    ):
+        assert not hasattr(assets_module, alias_name)
+        assert not hasattr(asset_types_module, alias_name)
+        assert not hasattr(runtime_types_module, alias_name)
+
+
 def test_runtime_helpers_return_active_context_ids(tmp_path: Path) -> None:
     import bulletjournal.runtime as runtime_package
 
@@ -252,6 +280,18 @@ def test_pie_chart_rejects_inconsistent_color_column() -> None:
 
     with pytest.raises(ValueError, match='assigns multiple colors to category `a`'):
         runtime_assets.PieChart(frame, category='segment', color='segment_color')
+
+
+def test_bar_chart_rejects_unsupported_aggregation() -> None:
+    frame = pd.DataFrame(
+        {
+            'segment': ['a', 'b'],
+            'value': [1, 2],
+        }
+    )
+
+    with pytest.raises(ValueError, match='Bar chart `aggregation` must be one of'):
+        runtime_assets.BarChart(frame, category='segment', value='value', aggregation='total')
 
 
 def test_artifacts_pull_file_returns_none_for_optional_missing_binding(monkeypatch: pytest.MonkeyPatch) -> None:

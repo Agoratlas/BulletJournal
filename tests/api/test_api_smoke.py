@@ -397,6 +397,104 @@ def _():
     assert [row['value'] for row in table_payload['rows']] == [5, 6]
 
 
+def test_time_histogram_asset_prepare_returns_chart_and_linked_table(tmp_path) -> None:
+    project_root = init_project_root(tmp_path / 'project').root
+    app = create_app(project_path=project_root)
+    client = TestClient(app)
+    container = app.state.container
+
+    opened = client.get('/api/v1/project/snapshot')
+    graph_version = opened.json()['graph']['meta']['graph_version']
+
+    patched = client.patch(
+        '/api/v1/graph',
+        json={
+            'graph_version': graph_version,
+            'operations': [
+                {
+                    'type': 'add_notebook_node',
+                    'node_id': 'asset_node',
+                    'title': 'Asset Node',
+                }
+            ],
+        },
+    )
+    assert patched.status_code == 200
+
+    notebook_path = project_root / 'notebooks' / 'asset_node.py'
+    notebook_path.write_text(
+        """
+import marimo
+
+app = marimo.App()
+
+with app.setup:
+    import pandas as pd
+    from bulletjournal.runtime import assets
+
+@app.cell
+def _():
+    frame = pd.DataFrame({
+        'created_at': pd.date_range('2024-01-01', periods=12, freq='MS') + pd.Timedelta(days=14, hours=9, minutes=30),
+        'label': [f'row_{index}' for index in range(12)],
+    })
+    assets.push(
+        assets.TimeHistogram(frame, x='created_at', granularity='auto'),
+        name='created_hist',
+        title='Created histogram',
+        asset_type=assets.TimeHistogram,
+    )
+    return
+""".strip()
+        + '\n',
+        encoding='utf-8',
+    )
+    container.project_service.reparse_notebook_by_path(notebook_path)
+
+    run = client.post('/api/v1/nodes/asset_node/run', json={'mode': 'run_stale', 'action': 'use_stale'})
+    assert run.status_code == 200
+    assert run.json()['status'] == 'succeeded'
+
+    prepared = client.post(
+        '/api/v1/assets/asset_node/created_hist/prepare',
+        json={
+            'modifier_overrides': {
+                'page': {'index': 0, 'size': 10},
+                'sort': [{'column': 'created_at', 'direction': 'asc'}],
+                'filters': [
+                    {
+                        'kind': 'range',
+                        'column': 'created_at',
+                        'lower': '2024-02-01T00:00:00',
+                        'upper': '2024-11-30T23:59:59',
+                    }
+                ],
+                'granularity': 'auto',
+            },
+            'transient_modifiers': {
+                'selection_range': {'lower': '2024-03-01T00:00:00', 'upper': '2024-05-01T00:00:00'},
+            },
+        },
+    )
+
+    assert prepared.status_code == 200
+    payload = prepared.json()
+    assert payload['resolved_modifiers']['granularity'] == 'auto'
+    time_histogram_payload = payload['payloads']['main']
+    assert time_histogram_payload['kind'] == 'histogram'
+    assert time_histogram_payload['x_column'] == 'created_at'
+    assert time_histogram_payload['rows_total'] == 10
+    assert time_histogram_payload['non_null_rows'] == 10
+    assert time_histogram_payload['time_granularity'] == 'month'
+    assert len(time_histogram_payload['bins']) == 10
+    assert time_histogram_payload['bins'][0]['label'] == 'Feb 1, 2024 to Feb 29, 2024'
+    assert time_histogram_payload['bins'][-1]['label'] == 'Nov 1, 2024 to Nov 30, 2024'
+    table_payload = payload['payloads']['table']
+    assert table_payload['kind'] == 'table'
+    assert table_payload['rows_total'] == 2
+    assert [row['label'] for row in table_payload['rows']] == ['row_2', 'row_3']
+
+
 def test_scatter_plot_asset_prepare_returns_chart_and_linked_table(tmp_path) -> None:
     project_root = init_project_root(tmp_path / 'project').root
     app = create_app(project_path=project_root)
@@ -616,6 +714,102 @@ def _():
         {'value': 'c', 'label': 'c', 'count': 3, 'share': 0.6, 'color': '#00f'},
         {'value': 'a', 'label': 'a', 'count': 1, 'share': 0.2, 'color': '#f00'},
         {'value': 'b', 'label': 'b', 'count': 1, 'share': 0.2, 'color': '#94a3b8'},
+    ]
+    table_payload = payload['payloads']['table']
+    assert table_payload['kind'] == 'table'
+    assert table_payload['rows_total'] == 3
+    assert [row['label'] for row in table_payload['rows']] == ['row_4', 'row_5', 'row_6']
+
+
+def test_bar_chart_asset_prepare_returns_chart_and_linked_table(tmp_path) -> None:
+    project_root = init_project_root(tmp_path / 'project').root
+    app = create_app(project_path=project_root)
+    client = TestClient(app)
+    container = app.state.container
+
+    opened = client.get('/api/v1/project/snapshot')
+    graph_version = opened.json()['graph']['meta']['graph_version']
+
+    patched = client.patch(
+        '/api/v1/graph',
+        json={
+            'graph_version': graph_version,
+            'operations': [
+                {
+                    'type': 'add_notebook_node',
+                    'node_id': 'asset_node',
+                    'title': 'Asset Node',
+                }
+            ],
+        },
+    )
+    assert patched.status_code == 200
+
+    notebook_path = project_root / 'notebooks' / 'asset_node.py'
+    notebook_path.write_text(
+        """
+import marimo
+
+app = marimo.App()
+
+with app.setup:
+    import pandas as pd
+    from bulletjournal.runtime import assets
+
+@app.cell
+def _():
+    frame = pd.DataFrame({
+        'segment': ['a', 'a', 'b', 'c', 'c', 'c', None],
+        'value': [1, 2, 3, 4, 5, 6, 7],
+        'label': ['row_1', 'row_2', 'row_3', 'row_4', 'row_5', 'row_6', 'row_7'],
+    })
+    assets.push(
+        assets.BarChart(frame, category='segment', color={'a': '#f00', 'c': '#00f'}, value='value'),
+        name='segment_totals',
+        title='Segment totals',
+        asset_type=assets.BarChart,
+    )
+    return
+""".strip()
+        + '\n',
+        encoding='utf-8',
+    )
+    container.project_service.reparse_notebook_by_path(notebook_path)
+
+    run = client.post('/api/v1/nodes/asset_node/run', json={'mode': 'run_stale', 'action': 'use_stale'})
+    assert run.status_code == 200
+    assert run.json()['status'] == 'succeeded'
+
+    prepared = client.post(
+        '/api/v1/assets/asset_node/segment_totals/prepare',
+        json={
+            'modifier_overrides': {
+                'page': {'index': 0, 'size': 10},
+                'sort': [{'column': 'value', 'direction': 'asc'}],
+                'filters': [{'kind': 'range', 'column': 'value', 'lower': 2, 'upper': 6}],
+            },
+            'transient_modifiers': {
+                'selected_categories': ['c'],
+            },
+        },
+    )
+
+    assert prepared.status_code == 200
+    payload = prepared.json()
+    assert payload['resolved_modifiers']['filters'] == [
+        {'kind': 'range', 'column': 'value', 'value_type': 'numeric', 'lower': 2, 'upper': 6}
+    ]
+    bar_payload = payload['payloads']['main']
+    assert bar_payload['kind'] == 'bar_chart'
+    assert bar_payload['category_column'] == 'segment'
+    assert bar_payload['value_column'] == 'value'
+    assert bar_payload['aggregation'] == 'sum'
+    assert bar_payload['rows_total'] == 5
+    assert bar_payload['non_null_rows'] == 5
+    assert bar_payload['bars'] == [
+        {'value': 'c', 'label': 'c', 'aggregate_value': 15, 'color': '#00f'},
+        {'value': 'b', 'label': 'b', 'aggregate_value': 3, 'color': '#94a3b8'},
+        {'value': 'a', 'label': 'a', 'aggregate_value': 2, 'color': '#f00'},
     ]
     table_payload = payload['payloads']['table']
     assert table_payload['kind'] == 'table'

@@ -199,6 +199,34 @@ def _(pd=__import__('pandas')):
     assert not any(issue.severity == ValidationSeverity.ERROR for issue in contract.issues)
 
 
+def test_parser_accepts_time_histogram_asset_type_reference(tmp_path) -> None:
+    notebook = tmp_path / 'time_histogram_asset_notebook.py'
+    notebook.write_text(
+        """
+import marimo
+
+app = marimo.App()
+
+with app.setup:
+    from bulletjournal.runtime import assets
+
+@app.cell
+def _(pd=__import__('pandas')):
+    frame = pd.DataFrame({'created_at': pd.date_range('2024-01-01', periods=3, freq='D')})
+    assets.push(assets.TimeHistogram(frame, x='created_at'), name='created_hist', title='Created histogram', asset_type=assets.TimeHistogram)
+    return frame
+""".strip()
+        + '\n',
+        encoding='utf-8',
+    )
+
+    contract = parse_notebook_contract(notebook, node_id='time_histogram_asset_notebook')
+
+    assert [declaration.name for declaration in contract.asset_declarations] == ['created_hist']
+    assert contract.asset_declarations[0].declared_asset_type == 'time_histogram'
+    assert not any(issue.severity == ValidationSeverity.ERROR for issue in contract.issues)
+
+
 def test_parser_accepts_scatter_plot_asset_type_reference(tmp_path) -> None:
     notebook = tmp_path / 'scatter_plot_asset_notebook.py'
     notebook.write_text(
@@ -252,6 +280,34 @@ def _(pd=__import__('pandas')):
 
     assert [declaration.name for declaration in contract.asset_declarations] == ['category_share']
     assert contract.asset_declarations[0].declared_asset_type == 'pie_chart'
+    assert not any(issue.severity == ValidationSeverity.ERROR for issue in contract.issues)
+
+
+def test_parser_accepts_bar_chart_asset_type_reference(tmp_path) -> None:
+    notebook = tmp_path / 'bar_chart_asset_notebook.py'
+    notebook.write_text(
+        """
+import marimo
+
+app = marimo.App()
+
+with app.setup:
+    from bulletjournal.runtime import assets
+
+@app.cell
+def _(pd=__import__('pandas')):
+    frame = pd.DataFrame({'category': ['a', 'b', 'a'], 'value': [1, 2, 3]})
+    assets.push(assets.BarChart(frame, category='category', value='value'), name='category_totals', title='Category totals', asset_type=assets.BarChart)
+    return frame
+""".strip()
+        + '\n',
+        encoding='utf-8',
+    )
+
+    contract = parse_notebook_contract(notebook, node_id='bar_chart_asset_notebook')
+
+    assert [declaration.name for declaration in contract.asset_declarations] == ['category_totals']
+    assert contract.asset_declarations[0].declared_asset_type == 'bar_chart'
     assert not any(issue.severity == ValidationSeverity.ERROR for issue in contract.issues)
 
 

@@ -7,6 +7,7 @@ from pathlib import Path
 from textwrap import dedent
 from typing import TYPE_CHECKING
 
+from bulletjournal.assets.registry import asset_type_ids_by_public_class_name
 from bulletjournal.domain.enums import ArtifactRole, ValidationSeverity
 from bulletjournal.domain.models import (
     AssetDeclaration,
@@ -32,13 +33,7 @@ else:
 ARTIFACT_CALLS = {'pull', 'pull_file', 'push', 'push_file'}
 ASSET_CALLS = {'push'}
 ARTIFACT_NAME_PATTERN = re.compile(r'^[a-z0-9_]+$')
-ASSET_TYPE_IDS_BY_CLASS_NAME = {
-    'Markdown': 'markdown',
-    'DataFrame': 'dataframe',
-    'Histogram': 'histogram',
-    'PieChart': 'pie_chart',
-    'ScatterPlot': 'scatter_plot',
-}
+ASSET_TYPE_IDS_BY_CLASS_NAME = asset_type_ids_by_public_class_name()
 
 
 def is_valid_artifact_name(value: str) -> bool:

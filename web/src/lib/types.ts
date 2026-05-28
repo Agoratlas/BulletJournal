@@ -243,6 +243,7 @@ export type PreparedHistogramBin = {
   start: number
   end: number
   count: number
+  label?: string
 }
 
 export type PreparedHistogramPayload = {
@@ -256,6 +257,8 @@ export type PreparedHistogramPayload = {
     max: number
   } | null
   bins: PreparedHistogramBin[]
+  x_value_kind?: 'numeric' | 'temporal'
+  time_granularity?: 'year' | 'month' | 'week' | 'day' | 'hour'
 }
 
 export type PreparedScatterPlotPoint = {
@@ -293,6 +296,23 @@ export type PreparedScatterPlotPayload = {
   points: PreparedScatterPlotPoint[]
 }
 
+export type PreparedBarChartBar = {
+  value: string | number | boolean
+  label: string
+  aggregate_value: number
+  color: string
+}
+
+export type PreparedBarChartPayload = {
+  kind: 'bar_chart'
+  category_column: string
+  value_column: string
+  aggregation: string
+  rows_total: number
+  non_null_rows: number
+  bars: PreparedBarChartBar[]
+}
+
 export type PreparedPieChartSlice = {
   value: string | number | boolean
   label: string
@@ -320,11 +340,12 @@ export type AssetPrepareResponse = {
     sort?: AssetSort[]
     filters?: AssetFilter[]
     bin_count?: number
+    granularity?: string
     [key: string]: unknown
   }
   override_schema_hash: string | null
   payloads: {
-    main?: PreparedHistogramPayload | PreparedPieChartPayload | PreparedScatterPlotPayload
+    main?: PreparedBarChartPayload | PreparedHistogramPayload | PreparedPieChartPayload | PreparedScatterPlotPayload
     table?: PreparedTablePayload
   }
   errors: Array<{

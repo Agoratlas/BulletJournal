@@ -550,6 +550,70 @@ def test_runtime_context_finalize_asset_push_persists_histogram_asset(tmp_path) 
     assert head['objects'][0]['object_role'] == 'backing_dataset'
 
 
+def test_runtime_context_finalize_asset_push_persists_time_histogram_asset(tmp_path) -> None:
+    project_root = init_project_root(tmp_path / 'project').root
+    context = RuntimeContext(
+        project_root=project_root,
+        node_id='producer',
+        run_id='run-time-histogram-asset',
+        source_hash='producer-source',
+        lineage_mode=LineageMode.MANAGED,
+        bindings={},
+        outputs={},
+        asset_declarations={
+            'created_hist': AssetDeclaration(
+                node_id='producer',
+                name='created_hist',
+                title='Created histogram',
+                description='Temporal distribution',
+                declared_asset_type='time_histogram',
+                declaration_index=0,
+            )
+        },
+    )
+
+    pushed = context.finalize_asset_push(
+        asset=runtime_assets.TimeHistogram(
+            pd.DataFrame(
+                {
+                    'created_at': pd.date_range('2024-01-01', periods=4, freq='MS'),
+                    'segment': ['a', 'a', 'b', 'b'],
+                    'weight': [0.1, 0.3, 0.7, 0.9],
+                    'palette': ['red', 'blue', 'red', 'green'],
+                }
+            ),
+            x='created_at',
+            granularity='month',
+            shape='segment',
+            size='weight',
+            color='palette',
+        ),
+        name='created_hist',
+        title='Created histogram',
+        description='Temporal distribution',
+        asset_type=runtime_assets.TimeHistogram,
+    )
+    head = context.db.get_asset_head('producer', 'created_hist')
+
+    assert pushed['asset_name'] == 'created_hist'
+    assert head is not None
+    assert head['asset_type'] == 'time_histogram'
+    assert head['definition']['histogram_column'] == 'created_at'
+    assert head['definition']['default_granularity'] == 'month'
+    assert head['definition']['encodings']['x']['kind'] == 'temporal_binned'
+    assert head['default_modifiers']['granularity'] == 'month'
+    assert head['default_modifiers']['x_axis']['tick_count'] == 20
+    assert {entry['id'] for entry in head['modifier_schema']} >= {
+        'granularity',
+        'bar_width',
+        'border_thickness',
+        'x_axis',
+        'y_axis',
+        'title',
+    }
+    assert head['objects'][0]['object_role'] == 'backing_dataset'
+
+
 def test_runtime_context_finalize_asset_push_persists_scatter_plot_asset(tmp_path) -> None:
     project_root = init_project_root(tmp_path / 'project').root
     context = RuntimeContext(
@@ -731,6 +795,97 @@ def test_runtime_context_finalize_asset_push_persists_pie_chart_asset(tmp_path) 
         'merged_category_label',
         'show_merged_category',
         'show_percentages',
+        'title',
+    }
+    assert head['objects'][0]['object_role'] == 'backing_dataset'
+
+
+def test_runtime_context_finalize_asset_push_persists_bar_chart_asset(tmp_path) -> None:
+    project_root = init_project_root(tmp_path / 'project').root
+    context = RuntimeContext(
+        project_root=project_root,
+        node_id='producer',
+        run_id='run-bar-chart-asset',
+        source_hash='producer-source',
+        lineage_mode=LineageMode.MANAGED,
+        bindings={},
+        outputs={},
+        asset_declarations={
+            'category_totals': AssetDeclaration(
+                node_id='producer',
+                name='category_totals',
+                title='Category totals',
+                description='Category totals description',
+                declared_asset_type='bar_chart',
+                declaration_index=0,
+            )
+        },
+    )
+
+    pushed = context.finalize_asset_push(
+        asset=runtime_assets.BarChart(
+            pd.DataFrame(
+                {
+                    'segment': ['a', 'a', 'b', 'c'],
+                    'tone': ['#ff0000', '#ff0000', '#00ff00', '#0000ff'],
+                    'value': [1, 2, 3, 4],
+                }
+            ),
+            category='segment',
+            color='tone',
+            value='value',
+            aggregation='mean',
+            bar_width=75,
+            border_thickness=1.5,
+            x_axis={
+                'label_size': 11,
+                'label': 'Segment',
+                'hide_label': False,
+                'tick_count': None,
+                'tick_size': None,
+                'show_grid_lines': False,
+                'scale': 'lin',
+            },
+            y_axis={
+                'label_size': 12,
+                'label': 'Average value',
+                'hide_label': False,
+                'tick_count': 5,
+                'tick_size': 4,
+                'show_grid_lines': True,
+                'scale': 'lin',
+            },
+            title={'size': 18, 'text': 'Custom bar', 'hide_title': False, 'position': 'bottom'},
+        ),
+        name='category_totals',
+        title='Category totals',
+        description='Category totals description',
+        asset_type=runtime_assets.BarChart,
+    )
+    head = context.db.get_asset_head('producer', 'category_totals')
+
+    assert pushed['asset_name'] == 'category_totals'
+    assert head is not None
+    assert head['asset_type'] == 'bar_chart'
+    assert head['definition']['bar_category_column'] == 'segment'
+    assert head['definition']['bar_value_column'] == 'value'
+    assert head['definition']['bar_aggregation'] == 'mean'
+    assert head['definition']['bar_color_column'] == 'tone'
+    assert head['definition']['bar_color_mapping'] == [
+        {'value': 'a', 'color': '#ff0000'},
+        {'value': 'b', 'color': '#00ff00'},
+        {'value': 'c', 'color': '#0000ff'},
+    ]
+    assert head['default_modifiers']['bar_width'] == 75
+    assert head['default_modifiers']['border_thickness'] == 1.5
+    assert head['default_modifiers']['x_axis']['label'] == 'Segment'
+    assert head['default_modifiers']['y_axis']['label'] == 'Average value'
+    assert head['default_modifiers']['title']['position'] == 'bottom'
+    assert {entry['id'] for entry in head['modifier_schema']} >= {
+        'bar_width',
+        'border_thickness',
+        'x_axis',
+        'y_axis',
         'title',
     }
     assert head['objects'][0]['object_role'] == 'backing_dataset'
