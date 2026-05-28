@@ -32,7 +32,6 @@ from bulletjournal.assets.validation import (
     validate_axis_modifier_defaults,
     validate_modifier_defaults,
     validate_number,
-    validate_optional_asset_column,
     validate_title_modifier_defaults,
 )
 from bulletjournal.domain.errors import InvalidRequestError
@@ -47,9 +46,6 @@ class TimeHistogram(BaseAsset):
     dataframe: pd.DataFrame
     x: str
     granularity: str
-    shape: str | None
-    size: str | None
-    color: str | None
     modifier_defaults: dict[str, object] | None
 
     asset_type_id = 'time_histogram'
@@ -61,19 +57,17 @@ class TimeHistogram(BaseAsset):
         *,
         x,
         granularity: str = DEFAULT_TIME_HISTOGRAM_GRANULARITY,
-        shape=None,
-        size=None,
-        color=None,
         **modifier_kwargs: Any,
     ) -> None:
         if 'bins' in modifier_kwargs:
             raise TypeError('TimeHistogram assets do not support a `bins` argument. Use `granularity` instead.')
+        unsupported_encodings = sorted(set(modifier_kwargs) & {'shape', 'size', 'color'})
+        if unsupported_encodings:
+            joined = ', '.join(f'`{key}`' for key in unsupported_encodings)
+            raise TypeError(f'TimeHistogram assets do not support {joined} arguments.')
         self.dataframe = dataframe
         self.x = x
         self.granularity = granularity
-        self.shape = shape
-        self.size = size
-        self.color = color
         self.modifier_defaults = modifier_kwargs or None
         self.__post_init__()
 
@@ -93,33 +87,17 @@ class TimeHistogram(BaseAsset):
             raise TypeError(f'TimeHistogram `granularity` must be one of: {allowed}.')
         if self.granularity != 'auto' and self.granularity not in supported_time_histogram_granularities(category):
             raise TypeError(f'TimeHistogram granularity `{self.granularity}` is not supported for {category} columns.')
-        validate_optional_asset_column(self.dataframe, self.shape, label='TimeHistogram `shape`')
-        validate_optional_asset_column(self.dataframe, self.size, label='TimeHistogram `size`')
-        validate_optional_asset_column(self.dataframe, self.color, label='TimeHistogram `color`')
         validate_time_histogram_modifier_defaults(self.modifier_defaults)
-        default_granularity = (
-            self.modifier_defaults.get('granularity')
-            if isinstance(self.modifier_defaults, dict) and 'granularity' in self.modifier_defaults
-            else self.granularity
-        )
-        if default_granularity != 'auto' and default_granularity not in supported_time_histogram_granularities(
-            category
-        ):
-            raise TypeError(
-                f'TimeHistogram modifier `granularity` `{default_granularity}` is not supported for {category} columns.'
-            )
 
 
 def validate_time_histogram_modifier_defaults(value: dict[str, object] | None) -> None:
     validate_modifier_defaults(
         value,
-        allowed_keys={'granularity', 'bar_width', 'border_thickness', 'x_axis', 'y_axis', 'title'},
+        allowed_keys={'bar_width', 'border_thickness', 'x_axis', 'y_axis', 'title'},
         context='TimeHistogram assets',
     )
     if value is None:
         return
-    if 'granularity' in value:
-        coerce_time_histogram_granularity(value['granularity'])
     if 'bar_width' in value:
         validate_number(value['bar_width'], label='TimeHistogram modifier `bar_width`')
     if 'border_thickness' in value:
@@ -213,37 +191,6 @@ def serialize_time_histogram(
 ) -> SerializedAssetVersion:
     persisted = object_store.persist_value(asset.dataframe, 'pandas.DataFrame')
     column_definitions = dataframe_column_definitions(asset.dataframe)
-    encodings = {
-        'x': {
-            'column': str(asset.x),
-            'data_type': str(asset.dataframe.dtypes[asset.x]),
-            'kind': 'temporal_binned',
-        },
-        'y': {
-            'aggregate': 'count',
-            'kind': 'quantitative',
-        },
-    }
-    if asset.shape is not None:
-        encodings['shape'] = {
-            'column': str(asset.shape),
-            'data_type': str(asset.dataframe.dtypes[asset.shape]),
-            'kind': 'nominal',
-        }
-    if asset.size is not None:
-        size_dtype = asset.dataframe.dtypes[asset.size]
-        encodings['size'] = {
-            'column': str(asset.size),
-            'data_type': str(size_dtype),
-            'kind': 'quantitative' if pd.api.types.is_numeric_dtype(size_dtype) else 'nominal',
-        }
-    if asset.color is not None:
-        color_dtype = asset.dataframe.dtypes[asset.color]
-        encodings['color'] = {
-            'column': str(asset.color),
-            'data_type': str(color_dtype),
-            'kind': 'quantitative' if pd.api.types.is_numeric_dtype(color_dtype) else 'nominal',
-        }
     default_modifiers = {
         'page': {'index': 0, 'size': 10},
         'sort': [],
@@ -282,42 +229,9 @@ def serialize_time_histogram(
                 modifier_schema=modifier_schema,
                 default_modifiers=default_modifiers,
             ),
-            'supports_table_view': True,
-            'interaction_bindings': [
-                {
-                    'modifier_id': 'selection_range',
-                    'source': 'vega_signal',
-                    'signal_name': 'selection_range_start',
-                    'category': 'transient_view',
-                    'server_targets': ['table'],
-                }
-            ],
-            'data_dependencies': ['backing_dataset'],
             'table_columns': [str(column) for column in asset.dataframe.columns],
-            'table_column_types': {column['id']: column['data_type'] for column in column_definitions},
             'row_count': int(asset.dataframe.shape[0]),
-            'dataset_binding': {'object_role': 'backing_dataset'},
-            'encodings': encodings,
-            'visual_defaults': {
-                'granularity': asset.granularity,
-                'y_scale_type': 'linear',
-                'bar_corner_radius': 3,
-            },
-            'vega_template_kind': 'histogram',
             'histogram_column': str(asset.x),
-            'histogram_column_type': str(asset.dataframe.dtypes[asset.x]),
-            'histogram_shape_column': str(asset.shape) if asset.shape is not None else None,
-            'histogram_shape_column_type': str(asset.dataframe.dtypes[asset.shape])
-            if asset.shape is not None
-            else None,
-            'histogram_size_column': str(asset.size) if asset.size is not None else None,
-            'histogram_size_column_type': str(asset.dataframe.dtypes[asset.size]) if asset.size is not None else None,
-            'histogram_color_column': str(asset.color) if asset.color is not None else None,
-            'histogram_color_column_type': str(asset.dataframe.dtypes[asset.color])
-            if asset.color is not None
-            else None,
-            'default_granularity': asset.granularity,
-            'object_role': 'backing_dataset',
         },
         modifier_schema=modifier_schema,
         default_modifiers=default_modifiers,

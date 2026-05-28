@@ -347,7 +347,7 @@ def _():
         'palette': ['red', 'red', 'blue', 'blue', 'green', 'green', 'red', 'blue', 'green', 'red'],
     })
     assets.push(
-        assets.Histogram(frame, x='value', bins=4, shape='segment', size='weight', color='palette'),
+        assets.Histogram(frame, x='value', bin_count=4),
         name='value_hist',
         title='Value histogram',
         asset_type=assets.Histogram,

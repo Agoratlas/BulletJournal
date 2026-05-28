@@ -207,38 +207,6 @@ def serialize_scatter_plot(
 ) -> SerializedAssetVersion:
     persisted = object_store.persist_value(asset.dataframe, 'pandas.DataFrame')
     column_definitions = dataframe_column_definitions(asset.dataframe)
-    encodings = {
-        'x': {
-            'column': str(asset.x),
-            'data_type': str(asset.dataframe.dtypes[asset.x]),
-            'kind': 'quantitative',
-        },
-        'y': {
-            'column': str(asset.y),
-            'data_type': str(asset.dataframe.dtypes[asset.y]),
-            'kind': 'quantitative',
-        },
-    }
-    if asset.shape is not None:
-        encodings['shape'] = {
-            'column': str(asset.shape),
-            'data_type': str(asset.dataframe.dtypes[asset.shape]),
-            'kind': 'nominal',
-        }
-    if asset.size is not None:
-        size_dtype = asset.dataframe.dtypes[asset.size]
-        encodings['size'] = {
-            'column': str(asset.size),
-            'data_type': str(size_dtype),
-            'kind': 'quantitative' if pd.api.types.is_numeric_dtype(size_dtype) else 'nominal',
-        }
-    if asset.color is not None:
-        color_dtype = asset.dataframe.dtypes[asset.color]
-        encodings['color'] = {
-            'column': str(asset.color),
-            'data_type': str(color_dtype),
-            'kind': 'quantitative' if pd.api.types.is_numeric_dtype(color_dtype) else 'nominal',
-        }
     default_modifiers = {
         'page': {'index': 0, 'size': 10},
         'sort': [],
@@ -281,45 +249,13 @@ def serialize_scatter_plot(
                 modifier_schema=modifier_schema,
                 default_modifiers=default_modifiers,
             ),
-            'supports_table_view': True,
-            'interaction_bindings': [
-                {
-                    'modifier_id': 'selection_bounds',
-                    'source': 'vega_signal',
-                    'signal_name': 'selection_bounds',
-                    'category': 'transient_view',
-                    'server_targets': ['table'],
-                },
-                {
-                    'modifier_id': 'selected_row_index',
-                    'source': 'vega_event',
-                    'event_name': 'point_click',
-                    'category': 'transient_view',
-                    'server_targets': ['table'],
-                },
-            ],
-            'data_dependencies': ['backing_dataset'],
             'table_columns': [str(column) for column in asset.dataframe.columns],
-            'table_column_types': {column['id']: column['data_type'] for column in column_definitions},
             'row_count': int(asset.dataframe.shape[0]),
-            'dataset_binding': {'object_role': 'backing_dataset'},
-            'encodings': encodings,
-            'visual_defaults': {
-                'point_size': 60,
-                'point_opacity': 0.85,
-            },
-            'vega_template_kind': 'scatter_plot',
             'scatter_x_column': str(asset.x),
-            'scatter_x_column_type': str(asset.dataframe.dtypes[asset.x]),
             'scatter_y_column': str(asset.y),
-            'scatter_y_column_type': str(asset.dataframe.dtypes[asset.y]),
             'scatter_shape_column': str(asset.shape) if asset.shape is not None else None,
-            'scatter_shape_column_type': str(asset.dataframe.dtypes[asset.shape]) if asset.shape is not None else None,
             'scatter_size_column': str(asset.size) if asset.size is not None else None,
-            'scatter_size_column_type': str(asset.dataframe.dtypes[asset.size]) if asset.size is not None else None,
             'scatter_color_column': str(asset.color) if asset.color is not None else None,
-            'scatter_color_column_type': str(asset.dataframe.dtypes[asset.color]) if asset.color is not None else None,
-            'object_role': 'backing_dataset',
         },
         modifier_schema=modifier_schema,
         default_modifiers=default_modifiers,

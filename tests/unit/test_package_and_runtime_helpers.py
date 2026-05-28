@@ -326,6 +326,20 @@ def test_bar_chart_rejects_unsupported_aggregation() -> None:
         runtime_assets.BarChart(frame, category='segment', value='value', aggregation='total')
 
 
+def test_histogram_requires_bin_count_instead_of_bins() -> None:
+    frame = pd.DataFrame({'value': [1, 2, 3]})
+
+    with pytest.raises(TypeError, match='Use `bin_count` instead'):
+        runtime_assets.Histogram(frame, x='value', bins=3)
+
+
+def test_temporal_histograms_reject_unused_encoding_arguments() -> None:
+    frame = pd.DataFrame({'created_at': pd.date_range('2024-01-01', periods=3, freq='D')})
+
+    with pytest.raises(TypeError, match='do not support `shape` arguments'):
+        runtime_assets.TimeHistogram(frame, x='created_at', shape='created_at')
+
+
 def test_artifacts_pull_file_returns_none_for_optional_missing_binding(monkeypatch: pytest.MonkeyPatch) -> None:
     metadata = {
         'path': None,

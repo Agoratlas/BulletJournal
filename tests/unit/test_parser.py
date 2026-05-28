@@ -185,7 +185,7 @@ with app.setup:
 @app.cell
 def _(pd=__import__('pandas')):
     frame = pd.DataFrame({'value': [1, 2, 3]})
-    assets.push(assets.Histogram(frame, x='value', bins=12), name='value_hist', title='Value histogram', asset_type=assets.Histogram)
+    assets.push(assets.Histogram(frame, x='value', bin_count=12), name='value_hist', title='Value histogram', asset_type=assets.Histogram)
     return frame
 """.strip()
         + '\n',

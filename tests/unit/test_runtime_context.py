@@ -551,10 +551,7 @@ def test_runtime_context_finalize_asset_push_persists_histogram_asset(tmp_path) 
                 }
             ),
             x='value',
-            bins=8,
-            shape='segment',
-            size='weight',
-            color='palette',
+            bin_count=8,
         ),
         name='value_hist',
         title='Value histogram',
@@ -567,12 +564,10 @@ def test_runtime_context_finalize_asset_push_persists_histogram_asset(tmp_path) 
     assert head is not None
     assert head['asset_type'] == 'histogram'
     assert head['definition']['histogram_column'] == 'value'
-    assert head['definition']['histogram_shape_column'] == 'segment'
-    assert head['definition']['histogram_size_column'] == 'weight'
-    assert head['definition']['histogram_color_column'] == 'palette'
-    assert head['definition']['encodings']['shape']['column'] == 'segment'
-    assert head['definition']['encodings']['size']['column'] == 'weight'
-    assert head['definition']['encodings']['color']['column'] == 'palette'
+    assert 'encodings' not in head['definition']
+    assert 'histogram_shape_column' not in head['definition']
+    assert 'histogram_size_column' not in head['definition']
+    assert 'histogram_color_column' not in head['definition']
     assert head['default_modifiers']['bin_count'] == 8
     assert head['default_modifiers']['bar_width'] == 90
     assert head['default_modifiers']['x_axis']['label'] == 'value'
@@ -623,9 +618,6 @@ def test_runtime_context_finalize_asset_push_persists_time_histogram_asset(tmp_p
             ),
             x='created_at',
             granularity='month',
-            shape='segment',
-            size='weight',
-            color='palette',
         ),
         name='created_hist',
         title='Created histogram',
@@ -638,8 +630,8 @@ def test_runtime_context_finalize_asset_push_persists_time_histogram_asset(tmp_p
     assert head is not None
     assert head['asset_type'] == 'time_histogram'
     assert head['definition']['histogram_column'] == 'created_at'
-    assert head['definition']['default_granularity'] == 'month'
-    assert head['definition']['encodings']['x']['kind'] == 'temporal_binned'
+    assert 'encodings' not in head['definition']
+    assert 'default_granularity' not in head['definition']
     assert head['default_modifiers']['granularity'] == 'month'
     assert head['default_modifiers']['x_axis']['tick_count'] == 20
     assert {entry['id'] for entry in head['modifier_schema']} >= {
@@ -730,9 +722,7 @@ def test_runtime_context_finalize_asset_push_persists_scatter_plot_asset(tmp_pat
     assert head['definition']['scatter_shape_column'] == 'group'
     assert head['definition']['scatter_size_column'] == 'weight'
     assert head['definition']['scatter_color_column'] == 'palette'
-    assert head['definition']['encodings']['shape']['column'] == 'group'
-    assert head['definition']['encodings']['size']['column'] == 'weight'
-    assert head['definition']['encodings']['color']['column'] == 'palette'
+    assert 'encodings' not in head['definition']
     assert head['default_modifiers']['min_point_size'] == 24
     assert head['default_modifiers']['max_point_size'] == 160
     assert head['default_modifiers']['show_legend'] is False
@@ -807,8 +797,8 @@ def test_runtime_context_finalize_asset_push_persists_pie_chart_asset(tmp_path) 
     assert head is not None
     assert head['asset_type'] == 'pie_chart'
     assert head['definition']['pie_category_column'] == 'segment'
-    assert head['definition']['encodings']['color']['column'] == 'segment'
-    assert head['definition']['pie_color_column'] == 'tone'
+    assert 'encodings' not in head['definition']
+    assert 'pie_color_column' not in head['definition']
     assert head['definition']['pie_color_mapping'] == [
         {'value': 'a', 'color': '#ff0000'},
         {'value': 'b', 'color': '#00ff00'},
@@ -909,7 +899,8 @@ def test_runtime_context_finalize_asset_push_persists_bar_chart_asset(tmp_path) 
     assert head['definition']['bar_category_column'] == 'segment'
     assert head['definition']['bar_value_column'] == 'value'
     assert head['definition']['bar_aggregation'] == 'mean'
-    assert head['definition']['bar_color_column'] == 'tone'
+    assert 'encodings' not in head['definition']
+    assert 'bar_color_column' not in head['definition']
     assert head['definition']['bar_color_mapping'] == [
         {'value': 'a', 'color': '#ff0000'},
         {'value': 'b', 'color': '#00ff00'},
@@ -1013,9 +1004,11 @@ def test_runtime_context_finalize_asset_push_remaps_collection_child_object_inde
 
     assert head is not None
     assert [item['object_index'] for item in head['objects']] == [0, 1]
-    assert [child['object_role'] for child in head['definition']['children']] == ['backing_dataset', 'backing_dataset']
-    assert [child['object_index'] for child in head['definition']['children']] == [0, 1]
     assert [child['objects'][0]['object_index'] for child in head['definition']['children']] == [0, 1]
+    assert [child['objects'][0]['object_role'] for child in head['definition']['children']] == [
+        'backing_dataset',
+        'backing_dataset',
+    ]
 
 
 def test_runtime_context_rejects_output_not_declared_in_interface(tmp_path) -> None:

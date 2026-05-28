@@ -34,8 +34,6 @@ from bulletjournal.assets.validation import (
     validate_axis_modifier_defaults,
     validate_modifier_defaults,
     validate_number,
-    validate_optional_asset_column,
-    validate_positive_int,
     validate_title_modifier_defaults,
 )
 from bulletjournal.domain.errors import InvalidRequestError
@@ -48,10 +46,7 @@ MAX_HISTOGRAM_BIN_COUNT = 100
 class Histogram(BaseAsset):
     dataframe: pd.DataFrame
     x: str
-    bins: int
-    shape: str | None
-    size: str | None
-    color: str | None
+    bin_count: int
     modifier_defaults: dict[str, object] | None
 
     asset_type_id = 'histogram'
@@ -62,25 +57,18 @@ class Histogram(BaseAsset):
         dataframe,
         *,
         x,
-        bins: int = DEFAULT_HISTOGRAM_BIN_COUNT,
-        shape=None,
-        size=None,
-        color=None,
+        bin_count: int = DEFAULT_HISTOGRAM_BIN_COUNT,
         **modifier_kwargs: Any,
     ) -> None:
-        if 'bin_count' in modifier_kwargs:
-            bin_count = modifier_kwargs.pop('bin_count')
-            if not isinstance(bin_count, int):
-                raise TypeError('Histogram modifier `bin_count` must be an int.')
-            if bins != DEFAULT_HISTOGRAM_BIN_COUNT and bins != bin_count:
-                raise TypeError('Histogram `bins` and modifier `bin_count` must match when both are provided.')
-            bins = bin_count
+        if 'bins' in modifier_kwargs:
+            raise TypeError('Histogram assets do not support a `bins` argument. Use `bin_count` instead.')
+        unsupported_encodings = sorted(set(modifier_kwargs) & {'shape', 'size', 'color'})
+        if unsupported_encodings:
+            joined = ', '.join(f'`{key}`' for key in unsupported_encodings)
+            raise TypeError(f'Histogram assets do not support {joined} arguments.')
         self.dataframe = dataframe
         self.x = x
-        self.bins = bins
-        self.shape = shape
-        self.size = size
-        self.color = color
+        self.bin_count = bin_count
         self.modifier_defaults = modifier_kwargs or None
         self.__post_init__()
 
@@ -93,24 +81,19 @@ class Histogram(BaseAsset):
             raise ValueError(f'Histogram column `{self.x}` was not found in the provided DataFrame.')
         if not pd.api.types.is_numeric_dtype(self.dataframe[self.x]):
             raise TypeError(f'Histogram column `{self.x}` must use a numeric dtype.')
-        if not isinstance(self.bins, int) or self.bins < 1:
-            raise TypeError('Histogram assets require `bins` to be a positive integer.')
-        validate_optional_asset_column(self.dataframe, self.shape, label='Histogram `shape`')
-        validate_optional_asset_column(self.dataframe, self.size, label='Histogram `size`')
-        validate_optional_asset_column(self.dataframe, self.color, label='Histogram `color`')
+        if not isinstance(self.bin_count, int) or self.bin_count < 1:
+            raise TypeError('Histogram assets require `bin_count` to be a positive integer.')
         validate_histogram_modifier_defaults(self.modifier_defaults)
 
 
 def validate_histogram_modifier_defaults(value: dict[str, object] | None) -> None:
     validate_modifier_defaults(
         value,
-        allowed_keys={'bin_count', 'bar_width', 'border_thickness', 'x_axis', 'y_axis', 'title'},
+        allowed_keys={'bar_width', 'border_thickness', 'x_axis', 'y_axis', 'title'},
         context='Histogram assets',
     )
     if value is None:
         return
-    if 'bin_count' in value:
-        validate_positive_int(value['bin_count'], label='Histogram modifier `bin_count`')
     if 'bar_width' in value:
         validate_number(value['bar_width'], label='Histogram modifier `bar_width`')
     if 'border_thickness' in value:
@@ -206,37 +189,6 @@ def serialize_histogram(
 ) -> SerializedAssetVersion:
     persisted = object_store.persist_value(asset.dataframe, 'pandas.DataFrame')
     column_definitions = dataframe_column_definitions(asset.dataframe)
-    encodings = {
-        'x': {
-            'column': str(asset.x),
-            'data_type': str(asset.dataframe.dtypes[asset.x]),
-            'kind': 'quantitative_binned',
-        },
-        'y': {
-            'aggregate': 'count',
-            'kind': 'quantitative',
-        },
-    }
-    if asset.shape is not None:
-        encodings['shape'] = {
-            'column': str(asset.shape),
-            'data_type': str(asset.dataframe.dtypes[asset.shape]),
-            'kind': 'nominal',
-        }
-    if asset.size is not None:
-        size_dtype = asset.dataframe.dtypes[asset.size]
-        encodings['size'] = {
-            'column': str(asset.size),
-            'data_type': str(size_dtype),
-            'kind': 'quantitative' if pd.api.types.is_numeric_dtype(size_dtype) else 'nominal',
-        }
-    if asset.color is not None:
-        color_dtype = asset.dataframe.dtypes[asset.color]
-        encodings['color'] = {
-            'column': str(asset.color),
-            'data_type': str(color_dtype),
-            'kind': 'quantitative' if pd.api.types.is_numeric_dtype(color_dtype) else 'nominal',
-        }
     default_modifiers = {
         'page': {'index': 0, 'size': 10},
         'sort': [],
@@ -246,7 +198,7 @@ def serialize_histogram(
                 title=title,
                 x_column=str(asset.x),
                 y_axis_label='Rows',
-                bin_count=int(asset.bins),
+                bin_count=int(asset.bin_count),
             ),
             asset.modifier_defaults,
         ),
@@ -275,42 +227,9 @@ def serialize_histogram(
                 modifier_schema=modifier_schema,
                 default_modifiers=default_modifiers,
             ),
-            'supports_table_view': True,
-            'interaction_bindings': [
-                {
-                    'modifier_id': 'selection_range',
-                    'source': 'vega_signal',
-                    'signal_name': 'selection_range_start',
-                    'category': 'transient_view',
-                    'server_targets': ['table'],
-                }
-            ],
-            'data_dependencies': ['backing_dataset'],
             'table_columns': [str(column) for column in asset.dataframe.columns],
-            'table_column_types': {column['id']: column['data_type'] for column in column_definitions},
             'row_count': int(asset.dataframe.shape[0]),
-            'dataset_binding': {'object_role': 'backing_dataset'},
-            'encodings': encodings,
-            'visual_defaults': {
-                'bin_count': int(asset.bins),
-                'y_scale_type': 'linear',
-                'bar_corner_radius': 3,
-            },
-            'vega_template_kind': 'histogram',
             'histogram_column': str(asset.x),
-            'histogram_column_type': str(asset.dataframe.dtypes[asset.x]),
-            'histogram_shape_column': str(asset.shape) if asset.shape is not None else None,
-            'histogram_shape_column_type': str(asset.dataframe.dtypes[asset.shape])
-            if asset.shape is not None
-            else None,
-            'histogram_size_column': str(asset.size) if asset.size is not None else None,
-            'histogram_size_column_type': str(asset.dataframe.dtypes[asset.size]) if asset.size is not None else None,
-            'histogram_color_column': str(asset.color) if asset.color is not None else None,
-            'histogram_color_column_type': str(asset.dataframe.dtypes[asset.color])
-            if asset.color is not None
-            else None,
-            'default_bin_count': int(asset.bins),
-            'object_role': 'backing_dataset',
         },
         modifier_schema=modifier_schema,
         default_modifiers=default_modifiers,
