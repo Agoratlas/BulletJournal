@@ -56,13 +56,20 @@ type BarChartSelectionValue = string | number | boolean
 export function BarChartAssetPanel({
   nodeId,
   asset,
+  prepareTarget,
   panelInfo,
+  viewerMode = 'notebook',
   persistedState,
   onPersistedStateChange,
+  onReadyStateChange,
   panelHeight,
   onPanelHeightChange,
   sectionId,
+  frameVariant,
 }: DatavizAssetPanelProps) {
+  const prepareNodeId = prepareTarget?.nodeId ?? nodeId
+  const prepareAssetName = prepareTarget?.assetName ?? asset.asset_name
+  const preparePanelContext = prepareTarget?.panelContext ?? null
   const modifierColumns = useMemo(() => modifierColumnsFromSchema(asset.modifier_schema), [asset.modifier_schema])
   const chartOverrideDefaults = useMemo(
     () => defaultHistogramChartOverrides(asset.default_modifiers, asset.modifier_schema),
@@ -170,8 +177,8 @@ export function BarChartAssetPanel({
   const prepareQuery = useQuery({
     queryKey: [
       'asset-prepare',
-      nodeId,
-      asset.asset_name,
+      prepareNodeId,
+      prepareAssetName,
       asset.current_asset_version_id,
       pageIndex,
       pageSize,
@@ -179,8 +186,9 @@ export function BarChartAssetPanel({
       sort?.direction ?? null,
       filtersKey,
       selectionKey,
+      stableValueKey(preparePanelContext),
     ],
-    queryFn: () => prepareAsset(nodeId, asset.asset_name, {
+    queryFn: () => prepareAsset(prepareNodeId, prepareAssetName, {
       asset_version_id: asset.current_asset_version_id,
       modifier_overrides: {
         page: { index: pageIndex, size: pageSize },
@@ -190,6 +198,7 @@ export function BarChartAssetPanel({
       transient_modifiers: selectedCategories.length ? {
         selected_categories: selectedCategories,
       } : {},
+      panel_context: preparePanelContext,
     }),
     enabled: asset.current_asset_version_id !== null && !overrideIncompatible,
     placeholderData: (previousData) => previousData,
@@ -199,6 +208,7 @@ export function BarChartAssetPanel({
   const response = prepareQuery.data ?? null
   const mainPayload = response?.payloads.main ?? null
   const barChart = mainPayload?.kind === 'bar_chart' ? mainPayload : null
+  const isPanelReady = overrideIncompatible || prepareQuery.isError || prepareQuery.isSuccess
   const table = response?.payloads.table ?? null
   const resolvedPage = table?.page ?? { index: pageIndex, size: pageSize }
   const resolvedSort = table?.sort?.[0] ?? null
@@ -212,9 +222,10 @@ export function BarChartAssetPanel({
       filterKinds: column.filter_kinds ?? filterKindsForDataType(column.data_type),
     }))
   const totalRows = barChart?.rows_total ?? (typeof asset.definition?.row_count === 'number' ? asset.definition.row_count : 0)
+  const displayedRows = table?.rows_total ?? totalRows
+  const baseRows = typeof asset.definition?.row_count === 'number' ? asset.definition.row_count : totalRows
   const columnCount = table?.columns.length ?? (Array.isArray(asset.definition?.table_columns) ? asset.definition.table_columns.length : 0)
-  const linkedRows = table?.rows_total ?? totalRows
-  const pageCount = Math.max(1, Math.ceil(linkedRows / Math.max(resolvedPage.size, 1)))
+  const pageCount = Math.max(1, Math.ceil(displayedRows / Math.max(resolvedPage.size, 1)))
   const canGoPrevious = resolvedPage.index > 0
   const canGoNext = resolvedPage.index + 1 < pageCount
   const resolvedPanelHeight = normalizePanelHeight(panelHeight) ?? DEFAULT_HISTOGRAM_CHART_HEIGHT
@@ -226,6 +237,10 @@ export function BarChartAssetPanel({
   useEffect(() => {
     setPageInput(String(resolvedPage.index + 1))
   }, [resolvedPage.index])
+
+  useEffect(() => {
+    onReadyStateChange?.(isPanelReady)
+  }, [isPanelReady, onReadyStateChange])
 
   useEffect(() => {
     if (barChart === null) {
@@ -265,6 +280,14 @@ export function BarChartAssetPanel({
 
   function handleResetSettingsOverrides() {
     setChartOverrides(chartOverrideDefaults)
+  }
+
+  function handleClearTableFilters() {
+    setPageIndex(0)
+    setSort(null)
+    setFilters([])
+    setSelectedCategories([])
+    setPageInput('1')
   }
 
   const settingsBody = (
@@ -334,7 +357,7 @@ export function BarChartAssetPanel({
   )
 
   return (
-    <AssetPanelFrame asset={asset} panelInfo={panelInfo} settingsTitle="Modifier overrides" settingsBody={settingsBody} settingsActive={hasSettingsOverrides} sectionId={sectionId}>
+    <AssetPanelFrame asset={asset} panelInfo={panelInfo} settingsTitle="Modifier overrides" settingsBody={settingsBody} settingsActive={hasSettingsOverrides} sectionId={sectionId} frameVariant={frameVariant}>
       <div className="asset-dataframe-panel asset-histogram-panel">
         {overrideIncompatible ? <OverrideIncompatibleNotice onReset={onPersistedStateChange ? handleResetOverrides : undefined} /> : null}
         <PrepareErrorsNotice errors={response?.errors ?? []} />
@@ -367,14 +390,17 @@ export function BarChartAssetPanel({
             columns={availableColumns}
             activeSort={resolvedSort}
             activeFilters={resolvedFilters}
+            viewerMode={viewerMode}
             disabled={overrideIncompatible || prepareQuery.isFetching}
-            rowsLabel={linkedRows}
+            totalRows={baseRows}
+            displayedRows={displayedRows}
             columnCount={columnCount}
             pageInput={pageInput}
             pageCount={pageCount}
             isRefreshing={prepareQuery.isFetching}
             canGoPrevious={canGoPrevious}
             canGoNext={canGoNext}
+            hasTemporarySelection={selectedCategories.length > 0}
             onPageInputChange={setPageInput}
             onCommitPageInput={commitPageInput}
             onResetPageInput={() => setPageInput(String(resolvedPage.index + 1))}
@@ -398,6 +424,7 @@ export function BarChartAssetPanel({
               setPageIndex(0)
               setFilters((current) => removeFilter(current, columnId))
             }}
+            onClearFilters={handleClearTableFilters}
           />
         ) : null}
       </div>

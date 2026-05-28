@@ -5,6 +5,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
+from bulletjournal.domain.artifact_names import is_valid_artifact_name
 from bulletjournal.domain.enums import ArtifactRole, NodeKind, ValidationSeverity
 from bulletjournal.domain.errors import GraphValidationError
 from bulletjournal.domain.graph_bindings import organizer_interface_for_ports, organizer_ports_from_ui
@@ -16,7 +17,7 @@ from bulletjournal.domain.graph_rules import (
 )
 from bulletjournal.domain.models import Edge, Node, Port
 from bulletjournal.domain.type_system import types_compatible
-from bulletjournal.parser.interface_parser import is_valid_artifact_name, parse_notebook_interface
+from bulletjournal.parser.interface_parser import parse_notebook_interface
 from bulletjournal.parser.validation import build_issue
 from bulletjournal.runtime.serializers import validate_runtime_value_type
 from bulletjournal.templates.builtin_provider import BUILTIN_PROVIDER, EXAMPLES_PROVIDER

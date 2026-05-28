@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
 
-import { Cog } from '../../components/Icons'
+import { ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, Cog } from '../../components/Icons'
 import type { AssetFilter, AssetSort, AssetRecord, PreparedTablePayload } from '../../lib/types'
 import {
   clampPanelHeight,
@@ -10,7 +10,7 @@ import {
   valuesEqual,
 } from './modifiers'
 import { PAGE_SIZE_OPTIONS } from './types'
-import type { AssetPanelInfo, ChartAxisOverrides, ChartTitleOverrides, DatavizAxisScale, ModifierColumn } from './types'
+import type { AssetPanelFrameVariant, AssetPanelInfo, ChartAxisOverrides, ChartTitleOverrides, DatavizAxisScale, ModifierColumn } from './types'
 import { PreparedTable, formatCount } from './table'
 
 export function AssetPanelFrame({
@@ -19,7 +19,9 @@ export function AssetPanelFrame({
   settingsTitle,
   settingsBody,
   settingsActive = false,
+  headerCenter,
   sectionId,
+  frameVariant = 'card',
   children,
 }: {
   asset: AssetRecord
@@ -27,12 +29,14 @@ export function AssetPanelFrame({
   settingsTitle?: string
   settingsBody?: ReactNode
   settingsActive?: boolean
+  headerCenter?: ReactNode
   sectionId?: string
+  frameVariant?: AssetPanelFrameVariant
   children: ReactNode
 }) {
   return (
-    <section id={sectionId} className="panel asset-panel-card">
-      <div className="asset-panel-header">
+    <section id={sectionId} className={frameVariant === 'inline' ? 'asset-panel-frame-inline' : 'panel asset-panel-card'}>
+      <div className={`asset-panel-header${headerCenter ? ' has-center-content' : ''}`}>
         <div className="asset-panel-heading">
           <div className="asset-panel-title-row">
             <span className={`asset-state-bubble is-${asset.state}`} aria-hidden="true" />
@@ -40,6 +44,7 @@ export function AssetPanelFrame({
           </div>
           {asset.description ? <p className="asset-panel-description">{asset.description}</p> : null}
         </div>
+        {headerCenter ? <div className="asset-panel-header-center">{headerCenter}</div> : null}
         <AssetPanelHeaderActions panelInfo={panelInfo} settingsTitle={settingsTitle} settingsBody={settingsBody} settingsActive={settingsActive} />
       </div>
       {children}
@@ -487,14 +492,17 @@ export function PreparedAssetTableSection({
   columns,
   activeSort,
   activeFilters,
+  viewerMode = 'notebook',
   disabled,
-  rowsLabel,
+  totalRows,
+  displayedRows,
   columnCount,
   pageInput,
   pageCount,
   isRefreshing,
   canGoPrevious,
   canGoNext,
+  hasTemporarySelection = false,
   onPageInputChange,
   onCommitPageInput,
   onResetPageInput,
@@ -506,19 +514,23 @@ export function PreparedAssetTableSection({
   onToggleSort,
   onApplyFilter,
   onRemoveFilter,
+  onClearFilters,
 }: {
   table: PreparedTablePayload
   columns: ModifierColumn[]
   activeSort: AssetSort | null
   activeFilters: AssetFilter[]
+  viewerMode?: 'notebook' | 'dashboard'
   disabled: boolean
-  rowsLabel: number
+  totalRows: number
+  displayedRows: number
   columnCount: number
   pageInput: string
   pageCount: number
   isRefreshing: boolean
   canGoPrevious: boolean
   canGoNext: boolean
+  hasTemporarySelection?: boolean
   onPageInputChange: (value: string) => void
   onCommitPageInput: () => void
   onResetPageInput: () => void
@@ -530,7 +542,14 @@ export function PreparedAssetTableSection({
   onToggleSort: (column: string) => void
   onApplyFilter: (filter: AssetFilter) => void
   onRemoveFilter: (columnId: string) => void
+  onClearFilters?: () => void
 }) {
+  const hasActiveFilters = activeFilters.length > 0
+  const hasActiveSort = activeSort !== null
+  const showDisplayedRows = viewerMode === 'dashboard' && displayedRows !== totalRows
+  const rowsLabel = viewerMode === 'dashboard' ? totalRows : displayedRows
+  const showDashboardClearFilters = viewerMode === 'dashboard' && Boolean(onClearFilters) && (hasActiveFilters || hasActiveSort || hasTemporarySelection)
+
   return (
     <div className={`asset-dataframe-shell${isRefreshing ? ' is-refreshing' : ''}`}>
       <PreparedTable
@@ -544,7 +563,22 @@ export function PreparedAssetTableSection({
         onRemoveFilter={onRemoveFilter}
       />
       <div className="asset-dataframe-toolbar">
-        <div className="asset-dataframe-stats">{formatCount(rowsLabel)} rows x {formatCount(columnCount)} cols</div>
+        <div className="asset-dataframe-stats">
+          <span>
+            {formatCount(rowsLabel)} rows x {formatCount(columnCount)} cols
+            {showDisplayedRows ? ` (${formatCount(displayedRows)} rows displayed)` : ''}
+          </span>
+          {showDashboardClearFilters ? (
+            <button
+              type="button"
+              className="asset-dataframe-clear-filters"
+              onClick={onClearFilters}
+              disabled={disabled || isRefreshing}
+            >
+              Clear filters
+            </button>
+          ) : null}
+        </div>
         <div className="asset-dataframe-controls">
           <select
             className="asset-page-size-select"
@@ -562,16 +596,20 @@ export function PreparedAssetTableSection({
               className="secondary asset-page-nav-button"
               onClick={onFirstPage}
               disabled={!canGoPrevious || isRefreshing}
+              aria-label="Go to first page"
+              title="First page"
             >
-              {'<<'}
+              <ChevronsLeft width={16} height={16} />
             </button>
             <button
               type="button"
               className="secondary asset-page-nav-button"
               onClick={onPreviousPage}
               disabled={!canGoPrevious || isRefreshing}
+              aria-label="Go to previous page"
+              title="Previous page"
             >
-              {'<'}
+              <ChevronLeft width={16} height={16} />
             </button>
             <input
               className="asset-page-input"
@@ -597,16 +635,20 @@ export function PreparedAssetTableSection({
               className="secondary asset-page-nav-button"
               onClick={onNextPage}
               disabled={!canGoNext || isRefreshing}
+              aria-label="Go to next page"
+              title="Next page"
             >
-              {'>'}
+              <ChevronRight width={16} height={16} />
             </button>
             <button
               type="button"
               className="secondary asset-page-nav-button"
               onClick={onLastPage}
               disabled={!canGoNext || isRefreshing}
+              aria-label="Go to last page"
+              title="Last page"
             >
-              {'>>'}
+              <ChevronsRight width={16} height={16} />
             </button>
           </div>
         </div>

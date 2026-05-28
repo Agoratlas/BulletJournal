@@ -626,6 +626,28 @@ def _():
     assert selected_point_payload['rows_total'] == 1
     assert [row['label'] for row in selected_point_payload['rows']] == ['row_4']
 
+    selected_legend = client.post(
+        '/api/v1/assets/asset_node/xy_plot/prepare',
+        json={
+            'modifier_overrides': {
+                'page': {'index': 0, 'size': 10},
+                'sort': [{'column': 'x', 'direction': 'asc'}],
+                'filters': [{'kind': 'range', 'column': 'x', 'lower': 2, 'upper': 5}],
+            },
+            'transient_modifiers': {
+                'selected_legend': {
+                    'field': 'color',
+                    'value': 'blue',
+                },
+            },
+        },
+    )
+
+    assert selected_legend.status_code == 200
+    selected_legend_payload = selected_legend.json()['payloads']['table']
+    assert selected_legend_payload['rows_total'] == 2
+    assert [row['label'] for row in selected_legend_payload['rows']] == ['row_2', 'row_5']
+
 
 def test_pie_chart_asset_prepare_returns_chart_and_linked_table(tmp_path) -> None:
     project_root = init_project_root(tmp_path / 'project').root

@@ -482,6 +482,7 @@ export function DashboardPage({
               panelId={panel.panel_id}
               nodeId={panel.node_id}
               asset={asset}
+              viewerMode="dashboard"
               persistedState={{
                 modifier_overrides: panel.modifier_overrides,
                 override_schema_hash: panel.override_schema_hash,

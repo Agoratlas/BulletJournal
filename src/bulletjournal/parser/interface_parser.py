@@ -2,12 +2,12 @@ from __future__ import annotations
 
 import ast
 import json
-import re
 from pathlib import Path
 from textwrap import dedent
 from typing import TYPE_CHECKING
 
 from bulletjournal.assets.registry import asset_type_ids_by_public_class_name
+from bulletjournal.domain.artifact_names import invalid_artifact_name_message, is_valid_artifact_name
 from bulletjournal.domain.enums import ArtifactRole, ValidationSeverity
 from bulletjournal.domain.models import (
     AssetDeclaration,
@@ -32,16 +32,7 @@ else:
 
 ARTIFACT_CALLS = {'pull', 'pull_file', 'push', 'push_file'}
 ASSET_CALLS = {'push'}
-ARTIFACT_NAME_PATTERN = re.compile(r'^[a-z0-9_]+$')
 ASSET_TYPE_IDS_BY_CLASS_NAME = asset_type_ids_by_public_class_name()
-
-
-def is_valid_artifact_name(value: str) -> bool:
-    return bool(ARTIFACT_NAME_PATTERN.fullmatch(value))
-
-
-def _invalid_artifact_name_message(name: str) -> str:
-    return f'Invalid artifact name `{name}`, must only contain lowercase letters, digits and underscores.'
 
 
 def parse_notebook_interface(path: NotebookSource, node_id: str) -> NotebookInterface:
@@ -520,7 +511,7 @@ def _parse_asset_push(call: ast.Call, *, node_id: str) -> tuple[AssetDeclaration
             issues.append(_literal_issue(node_id, 'description', 'Description must be a literal string or `None`.'))
         return None, issues
     if not is_valid_artifact_name(name):
-        issues.append(_literal_issue(node_id, 'name', _invalid_artifact_name_message(name)))
+        issues.append(_literal_issue(node_id, 'name', invalid_artifact_name_message(name)))
     if 'description' in kwargs and not description_is_literal:
         issues.append(_literal_issue(node_id, 'description', 'Description must be a literal string or `None`.'))
     if asset_type_issue is not None:
@@ -545,7 +536,7 @@ def _parse_pull(call: ast.Call, *, node_id: str) -> tuple[Port | None, list[Vali
         issues.append(_literal_issue(node_id, 'name', 'Input name must be a literal string.'))
         return None, issues
     if not is_valid_artifact_name(name):
-        issues.append(_literal_issue(node_id, 'name', _invalid_artifact_name_message(name)))
+        issues.append(_literal_issue(node_id, 'name', invalid_artifact_name_message(name)))
     data_type, type_warning = normalize_type_expr(kwargs.get('data_type'))
     if type_warning:
         issues.append(_type_warning(node_id, name))
@@ -578,7 +569,7 @@ def _parse_pull_file(call: ast.Call, *, node_id: str) -> tuple[Port | None, list
     description = _literal_string(kwargs.get('description')) if 'description' in kwargs else None
     issues: list[ValidationIssue] = []
     if not is_valid_artifact_name(name):
-        issues.append(_literal_issue(node_id, 'name', _invalid_artifact_name_message(name)))
+        issues.append(_literal_issue(node_id, 'name', invalid_artifact_name_message(name)))
     if 'description' in kwargs and description is None:
         issues.append(_literal_issue(node_id, 'description', 'Description must be a literal string.'))
     allow_missing_value = _literal_bool(kwargs.get('allow_missing')) if 'allow_missing' in kwargs else False
@@ -609,7 +600,7 @@ def _parse_push(call: ast.Call, *, node_id: str) -> tuple[Port | None, list[Vali
     data_type, type_warning = normalize_type_expr(kwargs.get('data_type'))
     issues: list[ValidationIssue] = []
     if not is_valid_artifact_name(name):
-        issues.append(_literal_issue(node_id, 'name', _invalid_artifact_name_message(name)))
+        issues.append(_literal_issue(node_id, 'name', invalid_artifact_name_message(name)))
     if type_warning:
         issues.append(_type_warning(node_id, name))
     description = _literal_string(kwargs.get('description')) if 'description' in kwargs else None
@@ -632,7 +623,7 @@ def _parse_push_file(call: ast.Call, *, node_id: str) -> tuple[Port | None, list
     description = _literal_string(kwargs.get('description')) if 'description' in kwargs else None
     issues: list[ValidationIssue] = []
     if not is_valid_artifact_name(name):
-        issues.append(_literal_issue(node_id, 'name', _invalid_artifact_name_message(name)))
+        issues.append(_literal_issue(node_id, 'name', invalid_artifact_name_message(name)))
     if 'description' in kwargs and description is None:
         issues.append(_literal_issue(node_id, 'description', 'Description must be a literal string.'))
     return Port(name=name, data_type='file', role=ArtifactRole.OUTPUT, description=description, kind='file'), issues

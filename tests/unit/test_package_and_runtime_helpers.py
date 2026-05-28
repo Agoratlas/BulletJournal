@@ -85,6 +85,7 @@ def test_runtime_assets_module_exposes_helper_functions_after_submodule_import()
     imported = runtime_package.assets
 
     assert callable(runtime_module.push)
+    assert runtime_module.Collection is not None
     assert runtime_module.Iframe is not None
     assert runtime_module.Markdown is not None
     assert runtime_module.DataFrame is not None
@@ -99,6 +100,7 @@ def test_asset_packages_only_expose_canonical_asset_class_names() -> None:
 
     for module in (assets_module, asset_types_module, runtime_types_module):
         assert module.BarChart is not None
+        assert module.Collection is not None
         assert module.DataFrame is not None
         assert module.Histogram is not None
         assert module.Iframe is not None
@@ -109,6 +111,7 @@ def test_asset_packages_only_expose_canonical_asset_class_names() -> None:
 
     for alias_name in (
         'BarChartAsset',
+        'CollectionAsset',
         'DataFrameAsset',
         'HistogramAsset',
         'IframeAsset',
@@ -273,6 +276,20 @@ def test_assets_api_delegates_to_runtime_context(monkeypatch: pytest.MonkeyPatch
     assert calls == [('asset_push', (asset, 'summary', 'Summary', 'Notebook summary', None))]
 
 
+def test_assets_api_rejects_invalid_artifact_name(monkeypatch: pytest.MonkeyPatch) -> None:
+    class FakeContext:
+        def finalize_asset_push(self, *, asset, name: str, title: str, description: str | None, asset_type) -> None:
+            raise AssertionError('finalize_asset_push should not be called')
+
+    monkeypatch.setattr(runtime_assets, 'current_runtime_context', lambda: FakeContext())
+
+    with pytest.raises(
+        ValueError,
+        match=r'Invalid artifact name `bad-name`, must only contain lowercase letters, digits and underscores\.',
+    ):
+        runtime_assets.push(runtime_assets.Markdown('hello'), name='bad-name', title='Bad name')
+
+
 def test_pie_chart_rejects_inconsistent_color_column() -> None:
     frame = pd.DataFrame(
         {
@@ -283,6 +300,18 @@ def test_pie_chart_rejects_inconsistent_color_column() -> None:
 
     with pytest.raises(ValueError, match='assigns multiple colors to category `a`'):
         runtime_assets.PieChart(frame, category='segment', color='segment_color')
+
+
+def test_collection_auto_names_children_and_rejects_nested_collections() -> None:
+    collection = runtime_assets.Collection(display_mode='single')
+    collection.add_asset(runtime_assets.Markdown('hello'))
+    collection.add_asset(runtime_assets.Iframe('https://example.com/embed'), name='report', title='Embedded report')
+
+    assert [entry.name for entry in collection._children] == ['asset_1', 'report']
+    assert [entry.title for entry in collection._children] == ['Asset 1', 'Embedded report']
+
+    with pytest.raises(TypeError, match='Collections cannot contain other collections'):
+        collection.add_asset(runtime_assets.Collection())
 
 
 def test_bar_chart_rejects_unsupported_aggregation() -> None:

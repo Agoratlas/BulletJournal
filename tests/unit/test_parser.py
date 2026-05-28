@@ -338,6 +338,35 @@ def _(pd=__import__('pandas')):
     assert not any(issue.severity == ValidationSeverity.ERROR for issue in contract.issues)
 
 
+def test_parser_accepts_collection_asset_type_reference(tmp_path) -> None:
+    notebook = tmp_path / 'collection_asset_notebook.py'
+    notebook.write_text(
+        """
+import marimo
+
+app = marimo.App()
+
+with app.setup:
+    from bulletjournal.runtime import assets
+
+@app.cell
+def _():
+    coll = assets.Collection(display_mode='single')
+    coll.add_asset(assets.Markdown('hello'))
+    assets.push(coll, name='notes_collection', title='Notes collection', asset_type=assets.Collection)
+    return coll
+""".strip()
+        + '\n',
+        encoding='utf-8',
+    )
+
+    contract = parse_notebook_contract(notebook, node_id='collection_asset_notebook')
+
+    assert [declaration.name for declaration in contract.asset_declarations] == ['notes_collection']
+    assert contract.asset_declarations[0].declared_asset_type == 'collection'
+    assert not any(issue.severity == ValidationSeverity.ERROR for issue in contract.issues)
+
+
 def test_parser_rejects_invalid_artifact_names(tmp_path) -> None:
     notebook = tmp_path / 'invalid_names.py'
     notebook.write_text(
@@ -367,6 +396,35 @@ def _():
         'Invalid artifact name `bad-name`, must only contain lowercase letters, digits and underscores.',
         'Invalid artifact name `also-bad`, must only contain lowercase letters, digits and underscores.',
     }
+
+
+def test_parser_rejects_invalid_asset_names(tmp_path) -> None:
+    notebook = tmp_path / 'invalid_asset_names.py'
+    notebook.write_text(
+        """
+import marimo
+
+app = marimo.App()
+
+with app.setup:
+    from bulletjournal.runtime import assets
+
+@app.cell
+def _():
+    assets.push(assets.Markdown('hello'), name='bad-name', title='Notes')
+    return
+""".strip()
+        + '\n',
+        encoding='utf-8',
+    )
+
+    interface = parse_notebook_interface(notebook, node_id='invalid_asset_names')
+
+    invalid_name_issues = [issue for issue in interface.issues if issue.code == 'invalid_name']
+    assert len(invalid_name_issues) == 1
+    assert invalid_name_issues[0].message == (
+        'Invalid artifact name `bad-name`, must only contain lowercase letters, digits and underscores.'
+    )
 
 
 def test_parser_rejects_non_literal_pull_file_allow_missing(tmp_path) -> None:

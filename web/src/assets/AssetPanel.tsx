@@ -1,7 +1,10 @@
+import { useEffect } from 'react'
+
 import { formatTimestamp } from '../lib/helpers'
 import type { AssetPanelProps } from './shared/types'
 import { AssetPanelFrame } from './shared/layout'
 import { BarChartAssetPanel } from './panels/BarChartAssetPanel'
+import { CollectionAssetPanel } from './panels/CollectionAssetPanel'
 import { DataFrameAssetPanel } from './panels/DataFrameAssetPanel'
 import { HistogramAssetPanel } from './panels/HistogramAssetPanel'
 import { IframeAssetPanel } from './panels/IframeAssetPanel'
@@ -15,15 +18,24 @@ export function AssetPanel({
   panelId,
   nodeId,
   asset,
+  prepareTarget,
+  viewerMode = 'notebook',
   persistedState,
   onPersistedStateChange,
+  onReadyStateChange,
   panelHeight,
   onPanelHeightChange,
   sectionId,
+  frameVariant,
 }: AssetPanelProps) {
   const createdLabel = asset.created_at ? formatTimestamp(asset.created_at) : 'Not produced yet'
   const runtimeType = asset.asset_type ?? asset.declared_asset_type ?? 'unknown'
   const resolvedPanelId = panelId ?? `${nodeId}/${asset.asset_name}`
+  const resolvedPrepareTarget = prepareTarget ?? {
+    nodeId,
+    assetName: asset.asset_name,
+    panelContext: null,
+  }
   const panelInfo = {
     panelId: resolvedPanelId,
     assetName: asset.asset_name,
@@ -35,7 +47,24 @@ export function AssetPanel({
     asset,
     panelInfo,
     sectionId,
+    frameVariant,
   }
+  const isUnsupportedAssetType = asset.current_asset_version_id !== null
+    && asset.asset_type !== 'markdown'
+    && asset.asset_type !== 'iframe'
+    && asset.asset_type !== 'collection'
+    && asset.asset_type !== 'dataframe'
+    && asset.asset_type !== 'bar_chart'
+    && asset.asset_type !== 'histogram'
+    && asset.asset_type !== 'time_histogram'
+    && asset.asset_type !== 'pie_chart'
+    && asset.asset_type !== 'scatter_plot'
+
+  useEffect(() => {
+    if (asset.current_asset_version_id === null || isUnsupportedAssetType) {
+      onReadyStateChange?.(true)
+    }
+  }, [asset.current_asset_version_id, isUnsupportedAssetType, onReadyStateChange])
 
   if (asset.current_asset_version_id === null) {
     return (
@@ -48,11 +77,26 @@ export function AssetPanel({
   }
 
   if (asset.asset_type === 'markdown') {
-    return <MarkdownAssetPanel asset={asset} panelInfo={panelInfo} sectionId={sectionId} />
+    return <MarkdownAssetPanel asset={asset} panelInfo={panelInfo} onReadyStateChange={onReadyStateChange} sectionId={sectionId} />
   }
 
   if (asset.asset_type === 'iframe') {
-    return <IframeAssetPanel asset={asset} panelInfo={panelInfo} sectionId={sectionId} />
+    return <IframeAssetPanel asset={asset} panelInfo={panelInfo} onReadyStateChange={onReadyStateChange} sectionId={sectionId} />
+  }
+
+  if (asset.asset_type === 'collection') {
+    return (
+      <CollectionAssetPanel
+        asset={asset}
+        panelInfo={panelInfo}
+        viewerMode={viewerMode}
+        persistedState={persistedState ?? null}
+        onPersistedStateChange={onPersistedStateChange}
+        onReadyStateChange={onReadyStateChange}
+        sectionId={sectionId}
+        frameVariant={frameVariant}
+      />
+    )
   }
 
   if (asset.asset_type === 'dataframe') {
@@ -60,10 +104,14 @@ export function AssetPanel({
       <DataFrameAssetPanel
         nodeId={nodeId}
         asset={asset}
+        prepareTarget={resolvedPrepareTarget}
+        viewerMode={viewerMode}
         panelInfo={panelInfo}
         persistedState={persistedState ?? null}
         onPersistedStateChange={onPersistedStateChange}
+        onReadyStateChange={onReadyStateChange}
         sectionId={sectionId}
+        frameVariant={frameVariant}
       />
     )
   }
@@ -73,12 +121,16 @@ export function AssetPanel({
       <BarChartAssetPanel
         nodeId={nodeId}
         asset={asset}
+        prepareTarget={resolvedPrepareTarget}
         panelInfo={panelInfo}
+        viewerMode={viewerMode}
         persistedState={persistedState ?? null}
         onPersistedStateChange={onPersistedStateChange}
+        onReadyStateChange={onReadyStateChange}
         panelHeight={panelHeight ?? null}
         onPanelHeightChange={onPanelHeightChange}
         sectionId={sectionId}
+        frameVariant={frameVariant}
       />
     )
   }
@@ -88,12 +140,16 @@ export function AssetPanel({
       <HistogramAssetPanel
         nodeId={nodeId}
         asset={asset}
+        prepareTarget={resolvedPrepareTarget}
         panelInfo={panelInfo}
+        viewerMode={viewerMode}
         persistedState={persistedState ?? null}
         onPersistedStateChange={onPersistedStateChange}
+        onReadyStateChange={onReadyStateChange}
         panelHeight={panelHeight ?? null}
         onPanelHeightChange={onPanelHeightChange}
         sectionId={sectionId}
+        frameVariant={frameVariant}
       />
     )
   }
@@ -103,12 +159,16 @@ export function AssetPanel({
       <PieChartAssetPanel
         nodeId={nodeId}
         asset={asset}
+        prepareTarget={resolvedPrepareTarget}
         panelInfo={panelInfo}
+        viewerMode={viewerMode}
         persistedState={persistedState ?? null}
         onPersistedStateChange={onPersistedStateChange}
+        onReadyStateChange={onReadyStateChange}
         panelHeight={panelHeight ?? null}
         onPanelHeightChange={onPanelHeightChange}
         sectionId={sectionId}
+        frameVariant={frameVariant}
       />
     )
   }
@@ -118,12 +178,15 @@ export function AssetPanel({
       <ScatterPlotAssetPanel
         nodeId={nodeId}
         asset={asset}
+        viewerMode={viewerMode}
         panelInfo={panelInfo}
         persistedState={persistedState ?? null}
         onPersistedStateChange={onPersistedStateChange}
+        onReadyStateChange={onReadyStateChange}
         panelHeight={panelHeight ?? null}
         onPanelHeightChange={onPanelHeightChange}
         sectionId={sectionId}
+        frameVariant={frameVariant}
       />
     )
   }

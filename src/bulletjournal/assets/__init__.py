@@ -1,5 +1,6 @@
 from bulletjournal.assets.base import BaseAsset, asset_type_id_for_class, asset_type_id_for_instance
 from bulletjournal.assets.types.bar_chart import BarChart
+from bulletjournal.assets.types.collection import Collection
 from bulletjournal.assets.types.dataframe import DataFrame
 from bulletjournal.assets.types.histogram import Histogram
 from bulletjournal.assets.types.iframe import Iframe
@@ -11,6 +12,7 @@ from bulletjournal.assets.types.time_histogram import TimeHistogram
 __all__ = [
     'BarChart',
     'BaseAsset',
+    'Collection',
     'DataFrame',
     'Histogram',
     'Iframe',

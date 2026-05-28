@@ -27,11 +27,18 @@ import type { InteractiveAssetPanelProps } from '../shared/types'
 export function DataFrameAssetPanel({
   nodeId,
   asset,
+  prepareTarget,
+  viewerMode = 'notebook',
   panelInfo,
   persistedState,
   onPersistedStateChange,
+  onReadyStateChange,
   sectionId,
+  frameVariant,
 }: InteractiveAssetPanelProps) {
+  const prepareNodeId = prepareTarget?.nodeId ?? nodeId
+  const prepareAssetName = prepareTarget?.assetName ?? asset.asset_name
+  const preparePanelContext = prepareTarget?.panelContext ?? null
   const modifierColumns = useMemo(() => modifierColumnsFromSchema(asset.modifier_schema), [asset.modifier_schema])
   const persistedOverrideKey = useMemo(
     () => stableValueKey(persistedState?.modifier_overrides ?? {}),
@@ -108,16 +115,17 @@ export function DataFrameAssetPanel({
   const prepareQuery = useQuery({
     queryKey: [
       'asset-prepare',
-      nodeId,
-      asset.asset_name,
+      prepareNodeId,
+      prepareAssetName,
       asset.current_asset_version_id,
       pageIndex,
       pageSize,
       sort?.column ?? null,
       sort?.direction ?? null,
       filtersKey,
+      stableValueKey(preparePanelContext),
     ],
-    queryFn: () => prepareAsset(nodeId, asset.asset_name, {
+    queryFn: () => prepareAsset(prepareNodeId, prepareAssetName, {
       asset_version_id: asset.current_asset_version_id,
       modifier_overrides: {
         page: { index: pageIndex, size: pageSize },
@@ -125,6 +133,7 @@ export function DataFrameAssetPanel({
         filters,
       },
       transient_modifiers: {},
+      panel_context: preparePanelContext,
     }),
     enabled: asset.current_asset_version_id !== null && !overrideIncompatible,
     placeholderData: (previousData) => previousData,
@@ -133,6 +142,7 @@ export function DataFrameAssetPanel({
 
   const response = prepareQuery.data ?? null
   const table = response?.payloads.table ?? null
+  const isPanelReady = overrideIncompatible || prepareQuery.isError || prepareQuery.isSuccess
   const resolvedPage = table?.page ?? { index: pageIndex, size: pageSize }
   const resolvedSort = table?.sort?.[0] ?? null
   const resolvedFilters = Array.isArray(response?.resolved_modifiers.filters) ? response.resolved_modifiers.filters : filters
@@ -144,15 +154,20 @@ export function DataFrameAssetPanel({
       dataType: column.data_type,
       filterKinds: column.filter_kinds ?? filterKindsForDataType(column.data_type),
     }))
-  const totalRows = table?.rows_total ?? (typeof asset.definition?.row_count === 'number' ? asset.definition.row_count : 0)
+  const baseRows = typeof asset.definition?.row_count === 'number' ? asset.definition.row_count : (table?.rows_total ?? 0)
+  const displayedRows = table?.rows_total ?? baseRows
   const columnCount = table?.columns.length ?? (Array.isArray(asset.definition?.table_columns) ? asset.definition.table_columns.length : 0)
-  const pageCount = Math.max(1, Math.ceil(totalRows / Math.max(resolvedPage.size, 1)))
+  const pageCount = Math.max(1, Math.ceil(displayedRows / Math.max(resolvedPage.size, 1)))
   const canGoPrevious = resolvedPage.index > 0
   const canGoNext = resolvedPage.index + 1 < pageCount
 
   useEffect(() => {
     setPageInput(String(resolvedPage.index + 1))
   }, [resolvedPage.index])
+
+  useEffect(() => {
+    onReadyStateChange?.(isPanelReady)
+  }, [isPanelReady, onReadyStateChange])
 
   function commitPageInput() {
     const parsed = Number(pageInput.trim())
@@ -178,8 +193,15 @@ export function DataFrameAssetPanel({
     })
   }
 
+  function handleClearTableFilters() {
+    setPageIndex(0)
+    setSort(null)
+    setFilters([])
+    setPageInput('1')
+  }
+
   return (
-    <AssetPanelFrame asset={asset} panelInfo={panelInfo} sectionId={sectionId}>
+    <AssetPanelFrame asset={asset} panelInfo={panelInfo} sectionId={sectionId} frameVariant={frameVariant}>
       <div className="asset-dataframe-panel">
         {overrideIncompatible ? <OverrideIncompatibleNotice onReset={onPersistedStateChange ? handleResetOverrides : undefined} /> : null}
         <PrepareErrorsNotice errors={response?.errors ?? []} />
@@ -193,14 +215,17 @@ export function DataFrameAssetPanel({
             columns={availableColumns}
             activeSort={resolvedSort}
             activeFilters={resolvedFilters}
+            viewerMode={viewerMode}
             disabled={overrideIncompatible || prepareQuery.isFetching}
-            rowsLabel={totalRows}
+            totalRows={baseRows}
+            displayedRows={displayedRows}
             columnCount={columnCount}
             pageInput={pageInput}
             pageCount={pageCount}
             isRefreshing={prepareQuery.isFetching}
             canGoPrevious={canGoPrevious}
             canGoNext={canGoNext}
+            hasTemporarySelection={false}
             onPageInputChange={setPageInput}
             onCommitPageInput={commitPageInput}
             onResetPageInput={() => setPageInput(String(resolvedPage.index + 1))}
@@ -224,6 +249,7 @@ export function DataFrameAssetPanel({
               setPageIndex(0)
               setFilters((current) => removeFilter(current, columnId))
             }}
+            onClearFilters={handleClearTableFilters}
           />
         ) : null}
       </div>

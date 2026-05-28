@@ -55,6 +55,40 @@ export function ChevronDown(props: SVGProps<SVGSVGElement>) {
   )
 }
 
+export function ChevronLeft(props: SVGProps<SVGSVGElement>) {
+  return (
+    <IconBase {...props}>
+      <path d="m15 6-6 6 6 6" />
+    </IconBase>
+  )
+}
+
+export function ChevronsLeft(props: SVGProps<SVGSVGElement>) {
+  return (
+    <IconBase {...props}>
+      <path d="m13.5 6-6 6 6 6" />
+      <path d="m18.5 6-6 6 6 6" />
+    </IconBase>
+  )
+}
+
+export function ChevronRight(props: SVGProps<SVGSVGElement>) {
+  return (
+    <IconBase {...props}>
+      <path d="m9 6 6 6-6 6" />
+    </IconBase>
+  )
+}
+
+export function ChevronsRight(props: SVGProps<SVGSVGElement>) {
+  return (
+    <IconBase {...props}>
+      <path d="m5.5 6 6 6-6 6" />
+      <path d="m10.5 6 6 6-6 6" />
+    </IconBase>
+  )
+}
+
 export function ChevronUp(props: SVGProps<SVGSVGElement>) {
   return (
     <IconBase {...props}>
@@ -74,10 +108,9 @@ export function ChevronsUpDown(props: SVGProps<SVGSVGElement>) {
 
 export function Funnel(props: SVGProps<SVGSVGElement>) {
   return (
-    <IconBase {...props}>
-      <path d="M4 6h16" />
-      <path d="m7 6 5 6v5l3-1.7V12l5-6" />
-    </IconBase>
+    <svg viewBox="0 0 24 24" fill="currentColor" stroke="none" aria-hidden="true" {...props}>
+      <path d="M4.8 5.5h14.4c.56 0 .86.65.49 1.08L14 13.1v5.03c0 .18-.09.34-.25.43l-3 1.73a.5.5 0 0 1-.75-.43V13.1L4.31 6.58A.7.7 0 0 1 4.8 5.5Z" />
+    </svg>
   )
 }
 

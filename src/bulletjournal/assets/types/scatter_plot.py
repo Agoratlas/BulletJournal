@@ -9,6 +9,7 @@ import polars as pl
 
 from bulletjournal.assets.base import BaseAsset
 from bulletjournal.assets.prepare_utils import (
+    coerce_filter_value,
     dtype_category,
     frame_with_filters,
     frame_with_sort,
@@ -366,11 +367,21 @@ def prepare_scatter_plot(
         y_dtype=y_dtype,
     )
     selected_row_index = resolve_scatter_plot_selected_row_index(transient_modifiers)
+    selected_legend = resolve_scatter_plot_selected_legend(
+        transient_modifiers,
+        shape_column=shape_column,
+        size_column=size_column,
+        color_column=color_column,
+        schema=schema,
+        column_id_map=column_id_map,
+    )
     table_frame = filtered_frame
     if selection_bounds is not None:
         table_frame = apply_scatter_plot_selection(table_frame, x_column, y_column, selection_bounds, column_id_map)
     if selected_row_index is not None:
         table_frame = apply_scatter_plot_selected_row_index(table_frame, selected_row_index)
+    if selected_legend is not None:
+        table_frame = apply_scatter_plot_legend_selection(table_frame, selected_legend, column_id_map)
     table_frame = frame_with_sort(table_frame, resolved_sort, column_id_map)
     return {
         'main': prepare_scatter_plot_main_payload(
@@ -554,6 +565,45 @@ def resolve_scatter_plot_selected_row_index(transient_modifiers: dict[str, Any])
     return candidate
 
 
+def resolve_scatter_plot_selected_legend(
+    transient_modifiers: dict[str, Any],
+    *,
+    shape_column: str | None,
+    size_column: str | None,
+    color_column: str | None,
+    schema: pl.Schema,
+    column_id_map: dict[str, Any],
+) -> dict[str, Any] | None:
+    candidate = transient_modifiers.get('selected_legend') if isinstance(transient_modifiers, dict) else None
+    if candidate in (None, {}):
+        return None
+    if not isinstance(candidate, dict):
+        raise InvalidRequestError('transient_modifiers.selected_legend must be an object.')
+    field = candidate.get('field')
+    if field not in {'shape', 'size', 'color'}:
+        raise InvalidRequestError(
+            'transient_modifiers.selected_legend.field must be one of `shape`, `size`, or `color`.'
+        )
+    column = {
+        'shape': shape_column,
+        'size': size_column,
+        'color': color_column,
+    }[field]
+    if column is None:
+        raise InvalidRequestError(
+            f'transient_modifiers.selected_legend.field `{field}` is not available for this scatter plot.'
+        )
+    value = coerce_filter_value(
+        schema[column_id_map[column]],
+        candidate.get('value'),
+        column=column,
+        kind='selected_legend',
+    )
+    if value is None:
+        raise InvalidRequestError('transient_modifiers.selected_legend.value cannot be null.')
+    return {'field': field, 'column': column, 'value': value}
+
+
 def apply_scatter_plot_selection(
     frame: pl.LazyFrame,
     x_column: str,
@@ -575,6 +625,17 @@ def apply_scatter_plot_selection(
 
 def apply_scatter_plot_selected_row_index(frame: pl.LazyFrame, selected_row_index: int) -> pl.LazyFrame:
     return frame.filter(pl.col('__scatter_row_index') == selected_row_index)
+
+
+def apply_scatter_plot_legend_selection(
+    frame: pl.LazyFrame,
+    selected_legend: dict[str, Any],
+    column_id_map: dict[str, Any],
+) -> pl.LazyFrame:
+    column_name = column_id_map[selected_legend['column']]
+    return frame.filter(
+        pl.col(column_name).is_not_null() & (pl.col(column_name) == selected_legend['value']).fill_null(False)
+    )
 
 
 def coerce_selection_numeric_value(value: object, *, column: str, kind: str) -> int | float:

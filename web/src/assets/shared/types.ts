@@ -130,35 +130,54 @@ export type AssetPanelInfo = {
   runtimeType: string
 }
 
+export type AssetPanelFrameVariant = 'card' | 'inline'
+
 export type PersistedAssetPanelState = {
   modifier_overrides: Record<string, unknown>
   override_schema_hash: string | null
+  panel_height?: number | null
+}
+
+export type AssetPanelPrepareTarget = {
+  nodeId: string
+  assetName: string
+  panelContext?: Record<string, unknown> | null
 }
 
 export type AssetPanelProps = {
   panelId?: string
   nodeId: string
   asset: AssetRecord
+  prepareTarget?: AssetPanelPrepareTarget
+  viewerMode?: 'notebook' | 'dashboard'
   persistedState?: PersistedAssetPanelState | null
   onPersistedStateChange?: (state: PersistedAssetPanelState) => void
+  onReadyStateChange?: (ready: boolean) => void
   panelHeight?: number | null
   onPanelHeightChange?: (height: number) => void
   sectionId?: string
+  frameVariant?: AssetPanelFrameVariant
 }
 
 export type SimpleAssetPanelProps = {
   asset: AssetRecord
   panelInfo: AssetPanelInfo
+  onReadyStateChange?: (ready: boolean) => void
   sectionId?: string
+  frameVariant?: AssetPanelFrameVariant
 }
 
 export type InteractiveAssetPanelProps = {
   nodeId: string
   asset: AssetRecord
+  prepareTarget?: AssetPanelPrepareTarget
+  viewerMode?: 'notebook' | 'dashboard'
   panelInfo: AssetPanelInfo
   persistedState: PersistedAssetPanelState | null
   onPersistedStateChange?: (state: PersistedAssetPanelState) => void
+  onReadyStateChange?: (ready: boolean) => void
   sectionId?: string
+  frameVariant?: AssetPanelFrameVariant
 }
 
 export type DatavizAssetPanelProps = InteractiveAssetPanelProps & {

@@ -7,6 +7,7 @@ from typing import Any
 from bulletjournal.assets.base import BaseAsset
 from bulletjournal.assets.serialization import SerializedAssetVersion
 from bulletjournal.assets.types.bar_chart import BarChart, prepare_bar_chart, serialize_bar_chart
+from bulletjournal.assets.types.collection import Collection, serialize_collection
 from bulletjournal.assets.types.dataframe import DataFrame, prepare_dataframe, serialize_dataframe
 from bulletjournal.assets.types.histogram import Histogram, prepare_histogram, serialize_histogram
 from bulletjournal.assets.types.iframe import Iframe, serialize_iframe
@@ -31,6 +32,7 @@ class AssetRegistration:
 _REGISTRATIONS = (
     AssetRegistration('markdown', 'Markdown', Markdown, serialize_markdown),
     AssetRegistration('iframe', 'Iframe', Iframe, serialize_iframe),
+    AssetRegistration('collection', 'Collection', Collection, serialize_collection),
     AssetRegistration('dataframe', 'DataFrame', DataFrame, serialize_dataframe, prepare_dataframe),
     AssetRegistration('bar_chart', 'BarChart', BarChart, serialize_bar_chart, prepare_bar_chart),
     AssetRegistration(

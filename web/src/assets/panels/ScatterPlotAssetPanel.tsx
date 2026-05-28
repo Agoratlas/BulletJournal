@@ -61,13 +61,20 @@ import { DEFAULT_DATAVIZ_TABLE_PAGE_SIZE, DEFAULT_SCATTER_PLOT_CHART_HEIGHT } fr
 export function ScatterPlotAssetPanel({
   nodeId,
   asset,
+  prepareTarget,
+  viewerMode = 'notebook',
   panelInfo,
   persistedState,
   onPersistedStateChange,
+  onReadyStateChange,
   panelHeight,
   onPanelHeightChange,
   sectionId,
+  frameVariant,
 }: DatavizAssetPanelProps) {
+  const prepareNodeId = prepareTarget?.nodeId ?? nodeId
+  const prepareAssetName = prepareTarget?.assetName ?? asset.asset_name
+  const preparePanelContext = prepareTarget?.panelContext ?? null
   const modifierColumns = useMemo(() => modifierColumnsFromSchema(asset.modifier_schema), [asset.modifier_schema])
   const chartOverrideDefaults = useMemo(
     () => defaultScatterPlotChartOverrides(asset.default_modifiers, asset.modifier_schema),
@@ -96,6 +103,7 @@ export function ScatterPlotAssetPanel({
   const [chartOverrides, setChartOverrides] = useState<ScatterPlotChartOverrides>(initialChartOverrides)
   const [selectedBounds, setSelectedBounds] = useState<ScatterPlotSelectionBounds | null>(null)
   const [selectedPointRowIndex, setSelectedPointRowIndex] = useState<number | null>(null)
+  const [selectedLegend, setSelectedLegend] = useState<ScatterPlotLegendSelection | null>(null)
   const [pageInput, setPageInput] = useState(String(initialTableState.page.index + 1))
   const overrideIncompatible = Boolean(
     persistedState
@@ -105,7 +113,7 @@ export function ScatterPlotAssetPanel({
   )
   const isApplyingPersistedStateRef = useRef(false)
   const filtersKey = JSON.stringify(filters)
-  const selectionKey = stableValueKey({ selectedBounds, selectedPointRowIndex })
+  const selectionKey = stableValueKey({ selectedBounds, selectedPointRowIndex, selectedLegend })
   const externalStateKey = useMemo(
     () => tableStateKey(initialTableState),
     [initialTableState.filters, initialTableState.page.index, initialTableState.page.size, initialTableState.sort?.column, initialTableState.sort?.direction],
@@ -129,6 +137,7 @@ export function ScatterPlotAssetPanel({
     setFilters(initialTableState.filters)
     setSelectedBounds(null)
     setSelectedPointRowIndex(null)
+    setSelectedLegend(null)
     setPageInput(String(initialTableState.page.index + 1))
   }, [asset.current_asset_version_id, externalStateKey])
 
@@ -173,13 +182,14 @@ export function ScatterPlotAssetPanel({
   useEffect(() => {
     setSelectedBounds(null)
     setSelectedPointRowIndex(null)
+    setSelectedLegend(null)
   }, [asset.current_asset_version_id, filtersKey])
 
   const prepareQuery = useQuery({
     queryKey: [
       'asset-prepare',
-      nodeId,
-      asset.asset_name,
+      prepareNodeId,
+      prepareAssetName,
       asset.current_asset_version_id,
       pageIndex,
       pageSize,
@@ -187,8 +197,9 @@ export function ScatterPlotAssetPanel({
       sort?.direction ?? null,
       filtersKey,
       selectionKey,
+      stableValueKey(preparePanelContext),
     ],
-    queryFn: () => prepareAsset(nodeId, asset.asset_name, {
+    queryFn: () => prepareAsset(prepareNodeId, prepareAssetName, {
       asset_version_id: asset.current_asset_version_id,
       modifier_overrides: {
         page: { index: pageIndex, size: pageSize },
@@ -198,7 +209,9 @@ export function ScatterPlotAssetPanel({
       transient_modifiers: {
         ...(selectedBounds ? { selection_bounds: selectedBounds } : {}),
         ...(selectedPointRowIndex !== null ? { selected_row_index: selectedPointRowIndex } : {}),
+        ...(selectedLegend ? { selected_legend: selectedLegend } : {}),
       },
+      panel_context: preparePanelContext,
     }),
     enabled: asset.current_asset_version_id !== null && !overrideIncompatible,
     placeholderData: (previousData) => previousData,
@@ -208,6 +221,7 @@ export function ScatterPlotAssetPanel({
   const response = prepareQuery.data ?? null
   const mainPayload = response?.payloads.main ?? null
   const scatterPlot = mainPayload?.kind === 'scatter_plot' ? mainPayload : null
+  const isPanelReady = overrideIncompatible || prepareQuery.isError || prepareQuery.isSuccess
   const table = response?.payloads.table ?? null
   const resolvedPage = table?.page ?? { index: pageIndex, size: pageSize }
   const resolvedSort = table?.sort?.[0] ?? null
@@ -221,9 +235,10 @@ export function ScatterPlotAssetPanel({
       filterKinds: column.filter_kinds ?? filterKindsForDataType(column.data_type),
     }))
   const totalRows = scatterPlot?.rows_total ?? (typeof asset.definition?.row_count === 'number' ? asset.definition.row_count : 0)
+  const displayedRows = table?.rows_total ?? totalRows
+  const baseRows = typeof asset.definition?.row_count === 'number' ? asset.definition.row_count : totalRows
   const columnCount = table?.columns.length ?? (Array.isArray(asset.definition?.table_columns) ? asset.definition.table_columns.length : 0)
-  const linkedRows = table?.rows_total ?? totalRows
-  const pageCount = Math.max(1, Math.ceil(linkedRows / Math.max(resolvedPage.size, 1)))
+  const pageCount = Math.max(1, Math.ceil(displayedRows / Math.max(resolvedPage.size, 1)))
   const canGoPrevious = resolvedPage.index > 0
   const canGoNext = resolvedPage.index + 1 < pageCount
   const selectedPoint = selectedPointRowIndex !== null
@@ -243,6 +258,10 @@ export function ScatterPlotAssetPanel({
   }, [resolvedPage.index])
 
   useEffect(() => {
+    onReadyStateChange?.(isPanelReady)
+  }, [isPanelReady, onReadyStateChange])
+
+  useEffect(() => {
     if (selectedPointRowIndex === null || scatterPlot === null) {
       return
     }
@@ -250,6 +269,15 @@ export function ScatterPlotAssetPanel({
       setSelectedPointRowIndex(null)
     }
   }, [scatterPlot, selectedPointRowIndex])
+
+  useEffect(() => {
+    if (selectedLegend === null || scatterPlot === null) {
+      return
+    }
+    if (!scatterPlot.points.some((point) => point[selectedLegend.field] === selectedLegend.value)) {
+      setSelectedLegend(null)
+    }
+  }, [scatterPlot, selectedLegend])
 
   function commitPageInput() {
     const parsed = Number(pageInput.trim())
@@ -271,6 +299,7 @@ export function ScatterPlotAssetPanel({
     setChartOverrides(chartOverrideDefaults)
     setSelectedBounds(null)
     setSelectedPointRowIndex(null)
+    setSelectedLegend(null)
     setPageInput(String(resetState.page.index + 1))
     onPersistedStateChange?.({
       modifier_overrides: {},
@@ -280,6 +309,16 @@ export function ScatterPlotAssetPanel({
 
   function handleResetSettingsOverrides() {
     setChartOverrides(chartOverrideDefaults)
+  }
+
+  function handleClearTableFilters() {
+    setPageIndex(0)
+    setSort(null)
+    setFilters([])
+    setSelectedBounds(null)
+    setSelectedPointRowIndex(null)
+    setSelectedLegend(null)
+    setPageInput('1')
   }
 
   const settingsBody = (
@@ -363,7 +402,7 @@ export function ScatterPlotAssetPanel({
   )
 
   return (
-    <AssetPanelFrame asset={asset} panelInfo={panelInfo} settingsTitle="Modifier overrides" settingsBody={settingsBody} settingsActive={hasSettingsOverrides} sectionId={sectionId}>
+    <AssetPanelFrame asset={asset} panelInfo={panelInfo} settingsTitle="Modifier overrides" settingsBody={settingsBody} settingsActive={hasSettingsOverrides} sectionId={sectionId} frameVariant={frameVariant}>
       <div className="asset-dataframe-panel asset-scatter-plot-panel">
         {overrideIncompatible ? <OverrideIncompatibleNotice onReset={onPersistedStateChange ? handleResetOverrides : undefined} /> : null}
         <PrepareErrorsNotice errors={response?.errors ?? []} />
@@ -392,11 +431,20 @@ export function ScatterPlotAssetPanel({
                     setPageIndex(0)
                     setSelectedBounds(bounds)
                     setSelectedPointRowIndex(null)
+                    setSelectedLegend(null)
                   }}
                   onPointSelectionChange={(rowIndex) => {
                     setPageIndex(0)
                     setSelectedBounds(null)
                     setSelectedPointRowIndex(rowIndex)
+                    setSelectedLegend(null)
+                  }}
+                  selectedLegend={selectedLegend}
+                  onLegendSelectionChange={(selection) => {
+                    setPageIndex(0)
+                    setSelectedBounds(null)
+                    setSelectedPointRowIndex(null)
+                    setSelectedLegend(selection)
                   }}
                 />
               ) : null}
@@ -409,14 +457,17 @@ export function ScatterPlotAssetPanel({
             columns={availableColumns}
             activeSort={resolvedSort}
             activeFilters={resolvedFilters}
+            viewerMode={viewerMode}
             disabled={overrideIncompatible || prepareQuery.isFetching}
-            rowsLabel={linkedRows}
+            totalRows={baseRows}
+            displayedRows={displayedRows}
             columnCount={columnCount}
             pageInput={pageInput}
             pageCount={pageCount}
             isRefreshing={prepareQuery.isFetching}
             canGoPrevious={canGoPrevious}
             canGoNext={canGoNext}
+            hasTemporarySelection={selectedBounds !== null || selectedPointRowIndex !== null || selectedLegend !== null}
             onPageInputChange={setPageInput}
             onCommitPageInput={commitPageInput}
             onResetPageInput={() => setPageInput(String(resolvedPage.index + 1))}
@@ -440,6 +491,7 @@ export function ScatterPlotAssetPanel({
               setPageIndex(0)
               setFilters((current) => removeFilter(current, columnId))
             }}
+            onClearFilters={handleClearTableFilters}
           />
         ) : null}
       </div>
@@ -454,8 +506,10 @@ function ScatterPlotChart({
   defaultOverrides,
   selectedBounds,
   selectedPointRowIndex,
+  selectedLegend,
   onSelectionChange,
   onPointSelectionChange,
+  onLegendSelectionChange,
 }: {
   scatterPlot: PreparedScatterPlotPayload
   chartHeight: number
@@ -463,12 +517,13 @@ function ScatterPlotChart({
   defaultOverrides: ScatterPlotChartOverrides
   selectedBounds: ScatterPlotSelectionBounds | null
   selectedPointRowIndex: number | null
+  selectedLegend: ScatterPlotLegendSelection | null
   onSelectionChange: (bounds: ScatterPlotSelectionBounds | null) => void
   onPointSelectionChange: (rowIndex: number | null) => void
+  onLegendSelectionChange: (selection: ScatterPlotLegendSelection | null) => void
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null)
   const [chartError, setChartError] = useState<string | null>(null)
-  const [highlightedLegend, setHighlightedLegend] = useState<ScatterPlotLegendSelection | null>(null)
   const viewRef = useRef<VegaEmbedResult | null>(null)
   const selectedBoundsRef = useRef<ScatterPlotSelectionBounds | null>(selectedBounds)
   const pendingXRangeRef = useRef(selectedBounds?.x ?? null)
@@ -476,6 +531,8 @@ function ScatterPlotChart({
   const onSelectionChangeRef = useRef(onSelectionChange)
   const selectedPointRowIndexRef = useRef<number | null>(selectedPointRowIndex)
   const onPointSelectionChangeRef = useRef(onPointSelectionChange)
+  const selectedLegendRef = useRef<ScatterPlotLegendSelection | null>(selectedLegend)
+  const onLegendSelectionChangeRef = useRef(onLegendSelectionChange)
   const chartTheme = useAssetChartTheme()
 
   selectedBoundsRef.current = selectedBounds
@@ -484,17 +541,15 @@ function ScatterPlotChart({
   onSelectionChangeRef.current = onSelectionChange
   selectedPointRowIndexRef.current = selectedPointRowIndex
   onPointSelectionChangeRef.current = onPointSelectionChange
-
-  useEffect(() => {
-    setHighlightedLegend(null)
-  }, [scatterPlot])
+  selectedLegendRef.current = selectedLegend
+  onLegendSelectionChangeRef.current = onLegendSelectionChange
 
   const spec = useMemo(
     () => buildScatterPlotVegaLiteSpec(
       scatterPlot,
       selectedBounds,
       selectedPointRowIndex,
-      highlightedLegend,
+      selectedLegend,
       chartTheme,
       chartHeight,
       overrides,
@@ -504,14 +559,14 @@ function ScatterPlotChart({
       chartTheme,
       chartHeight,
       defaultOverrides,
-      highlightedLegend?.field,
-      highlightedLegend?.value,
       overrides,
       scatterPlot,
       selectedBounds?.x.lower,
       selectedBounds?.x.upper,
       selectedBounds?.y.lower,
       selectedBounds?.y.upper,
+      selectedLegend?.field,
+      selectedLegend?.value,
       selectedPointRowIndex,
     ],
   )
@@ -522,6 +577,7 @@ function ScatterPlotChart({
     }
     let viewResult: VegaEmbedResult | null = null
     let disposed = false
+    let legendSignalListeners: Array<{ signalName: string; handleLegendSignal: (name: string, value: unknown) => void }> = []
     const handleWindowPointerUp = () => {
       const draftBounds = combineScatterPlotSelection(pendingXRangeRef.current, pendingYRangeRef.current)
       if (scatterPlotSelectionsEqual(draftBounds, selectedBoundsRef.current)) {
@@ -554,7 +610,9 @@ function ScatterPlotChart({
         const handleClearSelection = () => {
           pendingXRangeRef.current = null
           pendingYRangeRef.current = null
-          setHighlightedLegend(null)
+          if (selectedLegendRef.current !== null) {
+            onLegendSelectionChangeRef.current(null)
+          }
           if (selectedPointRowIndexRef.current !== null) {
             onPointSelectionChangeRef.current(null)
           }
@@ -568,21 +626,34 @@ function ScatterPlotChart({
             onPointSelectionChangeRef.current(pointRowIndex === selectedPointRowIndexRef.current ? null : pointRowIndex)
             return
           }
-          const legendSelection = parseScatterPlotLegendSelection(item, scatterPlot)
-          if (legendSelection !== null) {
-            setHighlightedLegend((current) => (
-              current !== null
-              && current.field === legendSelection.field
-              && current.value === legendSelection.value
-                ? null
-                : legendSelection
-            ))
+          if (isScatterPlotLegendItem(item)) {
             return
+          }
+          if (selectedLegendRef.current !== null) {
+            onLegendSelectionChangeRef.current(null)
           }
           if (selectedPointRowIndexRef.current !== null) {
             onPointSelectionChangeRef.current(null)
           }
         }
+        legendSignalListeners = scatterPlotLegendBindings(scatterPlot).map(({ field, signalName }) => {
+          const handleLegendSignal = (_name: string, value: unknown) => {
+            const legendValue = parseScatterPlotLegendSignalValue(value)
+            if (legendValue === null) {
+              return
+            }
+            const currentSelection = selectedLegendRef.current
+            onLegendSelectionChangeRef.current(
+              currentSelection !== null
+              && currentSelection.field === field
+              && currentSelection.value === legendValue
+                ? null
+                : { field, value: legendValue },
+            )
+          }
+          result.view.addSignalListener(signalName, handleLegendSignal)
+          return { signalName, handleLegendSignal }
+        })
         result.view.addSignalListener('selection_bounds_x', handleXSelectionSignal)
         result.view.addSignalListener('selection_bounds_y', handleYSelectionSignal)
         result.view.addEventListener('click', handleClick)
@@ -600,6 +671,11 @@ function ScatterPlotChart({
     return () => {
       disposed = true
       window.removeEventListener('pointerup', handleWindowPointerUp)
+      if (viewResult !== null) {
+        for (const { signalName, handleLegendSignal } of legendSignalListeners) {
+          viewResult.view.removeSignalListener(signalName, handleLegendSignal)
+        }
+      }
       viewResult?.finalize()
       viewResult = null
       viewRef.current = null
@@ -736,6 +812,16 @@ function buildScatterPlotVegaLiteSpec(
           },
         },
       },
+      ...scatterPlotLegendBindings(scatterPlot).map(({ field }) => ({
+        name: scatterPlotLegendParamName(field),
+        select: {
+          type: 'point' as const,
+          fields: [field],
+          toggle: 'true',
+          clear: false,
+        },
+        bind: 'legend' as const,
+      })),
     ],
     mark: {
       type: 'point',
@@ -806,56 +892,42 @@ function parseScatterPlotClickedPointRowIndex(item: unknown): number | null {
   return null
 }
 
-function parseScatterPlotLegendSelection(
-  item: unknown,
-  scatterPlot: PreparedScatterPlotPayload,
-): ScatterPlotLegendSelection | null {
+function isScatterPlotLegendItem(item: unknown): boolean {
   if (!item || typeof item !== 'object') {
-    return null
+    return false
   }
-  const record = item as { datum?: unknown; mark?: { role?: unknown } }
-  const role = typeof record.mark?.role === 'string' ? record.mark.role : ''
-  if (!role.includes('legend')) {
-    return null
-  }
-  const value = extractScatterLegendDatumValue(record.datum)
-  if (value === null) {
-    return null
-  }
-  const candidateFields: Array<ScatterPlotLegendSelection['field']> = []
-  if (scatterPlot.color_column !== null && scatterPlot.color_kind === 'nominal') {
-    candidateFields.push('color')
-  }
-  if (scatterPlot.shape_column !== null) {
-    candidateFields.push('shape')
-  }
-  if (scatterPlot.size_column !== null && scatterPlot.size_kind === 'nominal') {
-    candidateFields.push('size')
-  }
-  for (const field of candidateFields) {
-    if (scatterPlot.points.some((point) => point[field] === value)) {
-      return { field, value }
-    }
-  }
-  return null
+  const role = typeof (item as { mark?: { role?: unknown } }).mark?.role === 'string'
+    ? (item as { mark?: { role?: string } }).mark?.role ?? ''
+    : ''
+  return role.includes('legend')
 }
 
-function extractScatterLegendDatumValue(datum: unknown): string | number | boolean | null {
-  if (typeof datum === 'string' || typeof datum === 'number' || typeof datum === 'boolean') {
-    return datum
+function scatterPlotLegendBindings(
+  scatterPlot: PreparedScatterPlotPayload,
+): Array<{ field: ScatterPlotLegendSelection['field']; signalName: string }> {
+  const bindings: Array<{ field: ScatterPlotLegendSelection['field']; signalName: string }> = []
+  if (scatterPlot.color_column !== null && scatterPlot.color_kind === 'nominal') {
+    bindings.push({ field: 'color', signalName: scatterPlotLegendSignalName('color') })
   }
-  if (!datum || typeof datum !== 'object') {
-    return null
+  if (scatterPlot.shape_column !== null) {
+    bindings.push({ field: 'shape', signalName: scatterPlotLegendSignalName('shape') })
   }
-  const record = datum as Record<string, unknown>
-  for (const key of ['value', 'label']) {
-    const candidate = record[key]
-    if (typeof candidate === 'string' || typeof candidate === 'number' || typeof candidate === 'boolean') {
-      return candidate
-    }
+  if (scatterPlot.size_column !== null && scatterPlot.size_kind === 'nominal') {
+    bindings.push({ field: 'size', signalName: scatterPlotLegendSignalName('size') })
   }
-  if ('datum' in record) {
-    return extractScatterLegendDatumValue(record.datum)
-  }
-  return null
+  return bindings
+}
+
+function scatterPlotLegendParamName(field: ScatterPlotLegendSelection['field']): string {
+  return `legend_${field}`
+}
+
+function scatterPlotLegendSignalName(field: ScatterPlotLegendSelection['field']): string {
+  return `${scatterPlotLegendParamName(field)}_${field}_legend`
+}
+
+function parseScatterPlotLegendSignalValue(value: unknown): string | number | boolean | null {
+  return typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean'
+    ? value
+    : null
 }

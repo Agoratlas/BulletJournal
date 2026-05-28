@@ -930,6 +930,94 @@ def test_runtime_context_finalize_asset_push_persists_bar_chart_asset(tmp_path) 
     assert head['objects'][0]['object_role'] == 'backing_dataset'
 
 
+def test_runtime_context_finalize_asset_push_persists_collection_asset(tmp_path) -> None:
+    project_root = init_project_root(tmp_path / 'project').root
+    context = RuntimeContext(
+        project_root=project_root,
+        node_id='producer',
+        run_id='run-collection-asset',
+        source_hash='producer-source',
+        lineage_mode=LineageMode.MANAGED,
+        bindings={},
+        outputs={},
+        asset_declarations={
+            'notes_collection': AssetDeclaration(
+                node_id='producer',
+                name='notes_collection',
+                title='Notes collection',
+                description='Grouped assets',
+                declared_asset_type='collection',
+                declaration_index=0,
+            )
+        },
+    )
+    collection = runtime_assets.Collection(display_mode='single')
+    collection.add_asset(runtime_assets.Markdown('hello'))
+    collection.add_asset(runtime_assets.Iframe('https://example.com/embed'), name='report', title='Embedded report')
+
+    pushed = context.finalize_asset_push(
+        asset=collection,
+        name='notes_collection',
+        title='Notes collection',
+        description='Grouped assets',
+        asset_type=runtime_assets.Collection,
+    )
+    head = context.db.get_asset_head('producer', 'notes_collection')
+
+    assert pushed['asset_name'] == 'notes_collection'
+    assert head is not None
+    assert head['asset_type'] == 'collection'
+    assert head['definition']['display_mode_default'] == 'single'
+    assert [child['name'] for child in head['definition']['children']] == ['asset_1', 'report']
+    assert [child['title'] for child in head['definition']['children']] == ['Asset 1', 'Embedded report']
+    assert head['definition']['children'][0]['asset_type'] == 'markdown'
+    assert head['definition']['children'][0]['markdown_text'] == 'hello'
+    assert head['definition']['children'][1]['asset_type'] == 'iframe'
+    assert head['definition']['children'][1]['iframe_url'] == 'https://example.com/embed'
+    assert head['objects'] == []
+
+
+def test_runtime_context_finalize_asset_push_remaps_collection_child_object_indexes(tmp_path) -> None:
+    project_root = init_project_root(tmp_path / 'project').root
+    context = RuntimeContext(
+        project_root=project_root,
+        node_id='producer',
+        run_id='run-collection-dataframe-asset',
+        source_hash='producer-source',
+        lineage_mode=LineageMode.MANAGED,
+        bindings={},
+        outputs={},
+        asset_declarations={
+            'table_collection': AssetDeclaration(
+                node_id='producer',
+                name='table_collection',
+                title='Table collection',
+                description=None,
+                declared_asset_type='collection',
+                declaration_index=0,
+            )
+        },
+    )
+    collection = runtime_assets.Collection()
+    collection.add_asset(runtime_assets.DataFrame(pd.DataFrame({'left': [1, 2]})), name='left_table')
+    collection.add_asset(runtime_assets.DataFrame(pd.DataFrame({'right': [3, 4]})), name='right_table')
+
+    context.finalize_asset_push(
+        asset=collection,
+        name='table_collection',
+        title='Table collection',
+        description=None,
+        asset_type=runtime_assets.Collection,
+    )
+    head = context.db.get_asset_head('producer', 'table_collection')
+
+    assert head is not None
+    assert [item['object_index'] for item in head['objects']] == [0, 1]
+    assert [child['object_role'] for child in head['definition']['children']] == ['backing_dataset', 'backing_dataset']
+    assert [child['object_index'] for child in head['definition']['children']] == [0, 1]
+    assert [child['objects'][0]['object_index'] for child in head['definition']['children']] == [0, 1]
+
+
 def test_runtime_context_rejects_output_not_declared_in_interface(tmp_path) -> None:
     project_root = init_project_root(tmp_path / 'project').root
     context = RuntimeContext(

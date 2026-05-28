@@ -44,6 +44,7 @@ export function NotebookAssetsPage({
           asset_name: asset.asset_name,
           visible: true,
           position: index,
+          panel_height: panelStates[`${asset.node_id}/${asset.asset_name}`]?.panel_height ?? null,
           modifier_overrides: panelStates[`${asset.node_id}/${asset.asset_name}`]?.modifier_overrides ?? {},
           override_schema_hash: panelStates[`${asset.node_id}/${asset.asset_name}`]?.override_schema_hash ?? asset.override_schema_hash,
         })),
@@ -114,21 +115,41 @@ export function NotebookAssetsPage({
         ) : null}
 
         <div className="assets-panel-list">
-          {assets.map((asset) => (
-            <AssetPanel
-              key={`${asset.node_id}/${asset.asset_name}`}
-              panelId={`${asset.node_id}/${asset.asset_name}`}
-              nodeId={nodeId}
-              asset={asset}
-              persistedState={panelStates[`${asset.node_id}/${asset.asset_name}`] ?? null}
-              onPersistedStateChange={(state) => {
-                setPanelStates((current) => ({
-                  ...current,
-                  [`${asset.node_id}/${asset.asset_name}`]: state,
-                }))
-              }}
-            />
-          ))}
+          {assets.map((asset) => {
+            const panelId = `${asset.node_id}/${asset.asset_name}`
+            return (
+              <AssetPanel
+                key={panelId}
+                panelId={panelId}
+                nodeId={nodeId}
+                asset={asset}
+                viewerMode="notebook"
+                persistedState={panelStates[panelId] ?? null}
+                onPersistedStateChange={(state) => {
+                  setPanelStates((current) => ({
+                    ...current,
+                    [panelId]: {
+                      ...current[panelId],
+                      modifier_overrides: state.modifier_overrides,
+                      override_schema_hash: state.override_schema_hash,
+                      panel_height: state.panel_height ?? current[panelId]?.panel_height ?? null,
+                    },
+                  }))
+                }}
+                panelHeight={panelStates[panelId]?.panel_height ?? null}
+                onPanelHeightChange={(panelHeight) => {
+                  setPanelStates((current) => ({
+                    ...current,
+                    [panelId]: {
+                      modifier_overrides: current[panelId]?.modifier_overrides ?? {},
+                      override_schema_hash: current[panelId]?.override_schema_hash ?? asset.override_schema_hash,
+                      panel_height: panelHeight,
+                    },
+                  }))
+                }}
+              />
+            )
+          })}
         </div>
       </div>
       {saveDialogOpen ? (
