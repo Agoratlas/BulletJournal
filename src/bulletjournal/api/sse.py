@@ -12,10 +12,14 @@ from bulletjournal.config import SSE_POLL_INTERVAL_SECONDS
 def sse_response(
     container, project_id: str, request: Request, *, last_event_id: int | None = None
 ) -> StreamingResponse:
-    resolved_last_event_id = _resolve_last_event_id(request.headers.get('last-event-id'), last_event_id)
+    header_last_event_id = request.headers.get('last-event-id')
+    resolved_last_event_id = _resolve_last_event_id(header_last_event_id, last_event_id)
+    has_explicit_cursor = bool(header_last_event_id and header_last_event_id.strip()) or last_event_id is not None
 
     async def event_stream():
-        current_last_event_id = resolved_last_event_id
+        current_last_event_id = (
+            resolved_last_event_id if has_explicit_cursor else _latest_event_id(container.event_service)
+        )
         retry_ms = int(SSE_POLL_INTERVAL_SECONDS * 1000)
         yield f'retry: {retry_ms}\n\n'
         while True:
@@ -54,3 +58,10 @@ def _resolve_last_event_id(header_value: str | None, query_value: int | None) ->
     if candidate:
         return int(candidate)
     return 0 if query_value is None else int(query_value)
+
+
+def _latest_event_id(event_service) -> int:
+    latest = getattr(event_service, 'latest_event_id', None)
+    if callable(latest):
+        return int(latest())
+    return 0

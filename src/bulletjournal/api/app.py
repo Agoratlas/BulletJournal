@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 from urllib.parse import urlencode, urlsplit
@@ -101,6 +101,7 @@ def create_app(*, project_path: Path | None = None, server_config: ServerConfig 
                 )
         except httpx.ConnectError:
             return JSONResponse(status_code=503, content={'detail': 'Editor session is still starting.'})
+        _sync_editor_session_state(app, session)
         return Response(
             content=upstream.content,
             status_code=upstream.status_code,
@@ -129,7 +130,9 @@ def create_app(*, project_path: Path | None = None, server_config: ServerConfig 
                 open_timeout=30,
             ) as upstream:
                 await websocket.accept(subprotocol=upstream.subprotocol)
-                await _bridge_websocket(websocket, upstream)
+                await _bridge_websocket(
+                    websocket, upstream, on_upstream_message=lambda: _sync_editor_session_state(app, session)
+                )
         except Exception:
             await _safe_close_websocket(websocket, code=1013)
 
@@ -262,6 +265,7 @@ def _editor_session_or_response(app: FastAPI, session_id: str) -> dict[str, obje
         return JSONResponse(status_code=404, content={'detail': f'Unknown editor session `{session_id}`.'})
     return {
         'host': session.host,
+        'node_id': getattr(session, 'node_id', None),
         'port': session.port,
         'base_url': session.base_url,
     }
@@ -319,7 +323,21 @@ def _proxy_websocket_headers(websocket: WebSocket) -> list[tuple[str, str]]:
     return resolved
 
 
-async def _bridge_websocket(websocket: WebSocket, upstream) -> None:
+def _sync_editor_session_state(app: FastAPI, session: Mapping[str, object]) -> None:
+    node_id = session.get('node_id')
+    if not isinstance(node_id, str) or not node_id:
+        return
+    sync = getattr(app.state.container.run_service, 'sync_editor_session_outputs', None)
+    if callable(sync):
+        sync(node_id)
+
+
+async def _bridge_websocket(
+    websocket: WebSocket,
+    upstream,
+    *,
+    on_upstream_message: Callable[[], None] | None = None,
+) -> None:
     async def client_to_upstream() -> None:
         try:
             while True:
@@ -346,6 +364,8 @@ async def _bridge_websocket(websocket: WebSocket, upstream) -> None:
                     await websocket.send_bytes(message)
                 else:
                     await websocket.send_text(message)
+                if on_upstream_message is not None:
+                    on_upstream_message()
         except ConnectionClosed as exc:
             if exc.rcvd is not None:
                 close_code = exc.rcvd.code

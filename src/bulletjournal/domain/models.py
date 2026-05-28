@@ -201,6 +201,7 @@ class DashboardPanel:
     asset_name: str
     visible: bool = True
     position: int = 0
+    panel_height: int | None = None
     modifier_overrides: dict[str, Any] = field(default_factory=dict)
     override_schema_hash: str | None = None
 
@@ -211,6 +212,7 @@ class DashboardPanel:
             'asset_name': self.asset_name,
             'visible': self.visible,
             'position': self.position,
+            'panel_height': self.panel_height,
             'modifier_overrides': self.modifier_overrides,
             'override_schema_hash': self.override_schema_hash,
         }

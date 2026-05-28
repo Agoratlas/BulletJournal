@@ -867,6 +867,8 @@ function renameNodeRefsInObject(payload: unknown, oldNodeId: string, newNodeId: 
 
 export const SNAPSHOT_REFRESH_EVENTS = [
   'artifact.state_changed',
+  'asset.state_changed',
+  'asset.version_created',
   'checkpoint.created',
   'checkpoint.restored',
   'dashboard.deleted',

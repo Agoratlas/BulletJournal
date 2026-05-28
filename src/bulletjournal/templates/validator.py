@@ -529,6 +529,12 @@ def _validate_dashboard_template_definition(
             )
         if 'position' in panel and not isinstance(panel.get('position'), int):
             raise GraphValidationError(f'Dashboard node `{node_id}` panel `{panel_id}` must define integer `position`.')
+        if 'panel_height' in panel and (
+            type(panel.get('panel_height')) is not int or int(panel.get('panel_height')) < 1
+        ):
+            raise GraphValidationError(
+                f'Dashboard node `{node_id}` panel `{panel_id}` must define positive integer `panel_height`.'
+            )
         _ = index
 
 

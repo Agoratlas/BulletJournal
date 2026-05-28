@@ -800,6 +800,12 @@ class GraphService:
                             'asset_name': str(panel.get('asset_name') or ''),
                             'visible': bool(panel.get('visible', True)),
                             'position': int(panel.get('position', index)),
+                            'panel_height': (
+                                int(panel.get('panel_height'))
+                                if isinstance(panel.get('panel_height'), int)
+                                and not isinstance(panel.get('panel_height'), bool)
+                                else None
+                            ),
                             'modifier_overrides': panel.get('modifier_overrides')
                             if isinstance(panel.get('modifier_overrides'), dict)
                             else {},

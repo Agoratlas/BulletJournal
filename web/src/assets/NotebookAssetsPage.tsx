@@ -117,6 +117,7 @@ export function NotebookAssetsPage({
           {assets.map((asset) => (
             <AssetPanel
               key={`${asset.node_id}/${asset.asset_name}`}
+              panelId={`${asset.node_id}/${asset.asset_name}`}
               nodeId={nodeId}
               asset={asset}
               persistedState={panelStates[`${asset.node_id}/${asset.asset_name}`] ?? null}

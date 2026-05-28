@@ -72,6 +72,10 @@ class RunService:
         self._lock = Lock()
         self._active_run: ActiveRun | None = None
         self._orchestrator_node_states: dict[str, OrchestratorNodeState] = {}
+        self._editor_session_output_snapshots: dict[
+            str,
+            dict[str, dict[str, tuple[int | None, str]]],
+        ] = {}
 
     def has_active_run(self) -> bool:
         with self._lock:
@@ -370,6 +374,8 @@ class RunService:
         if session is None:
             raise NotFoundError(f'Unknown editor session `{session_id}`.')
         self.session_manager.stop(session_id)
+        with self._lock:
+            self._editor_session_output_snapshots.pop(session.node_id, None)
         return {'session_id': session_id, 'node_id': session.node_id, 'status': 'stopped'}
 
     def stop(self) -> None:
@@ -377,7 +383,67 @@ class RunService:
             self._active_run.cancel_event.set()
         with self._lock:
             self._orchestrator_node_states = {}
+            self._editor_session_output_snapshots = {}
         self.session_manager.stop_all()
+
+    def sync_editor_session_outputs(self, node_id: str) -> None:
+        project = self.project_service.require_project()
+        current_snapshot = self._output_snapshot_for_node(node_id)
+        with self._lock:
+            previous_snapshot = self._editor_session_output_snapshots.get(node_id)
+            self._editor_session_output_snapshots[node_id] = current_snapshot
+        if previous_snapshot is None:
+            return
+        graph_version = int(self.project_service.graph().meta['graph_version'])
+        project_id = project.metadata.project_id
+
+        current_assets = current_snapshot['assets']
+        previous_assets = previous_snapshot['assets']
+        for asset_name, (current_version_id, current_state) in current_assets.items():
+            previous_version_id, previous_state = previous_assets.get(asset_name, (None, ArtifactState.PENDING.value))
+            if current_version_id is not None and current_version_id != previous_version_id:
+                self.project_service.event_service.publish(
+                    'asset.version_created',
+                    project_id=project_id,
+                    graph_version=graph_version,
+                    payload={
+                        'node_id': node_id,
+                        'asset_name': asset_name,
+                        'asset_version_id': current_version_id,
+                        'new_state': current_state,
+                    },
+                )
+                continue
+            if current_state != previous_state:
+                self.project_service.event_service.publish(
+                    'asset.state_changed',
+                    project_id=project_id,
+                    graph_version=graph_version,
+                    payload={
+                        'node_id': node_id,
+                        'asset_name': asset_name,
+                        'old_state': previous_state,
+                        'new_state': current_state,
+                    },
+                )
+
+        current_artifacts = current_snapshot['artifacts']
+        previous_artifacts = previous_snapshot['artifacts']
+        for artifact_name, (_, current_state) in current_artifacts.items():
+            _, previous_state = previous_artifacts.get(artifact_name, (None, ArtifactState.PENDING.value))
+            if current_state == previous_state:
+                continue
+            self.project_service.event_service.publish(
+                'artifact.state_changed',
+                project_id=project_id,
+                graph_version=graph_version,
+                payload={
+                    'node_id': node_id,
+                    'artifact_name': artifact_name,
+                    'old_state': previous_state,
+                    'new_state': current_state,
+                },
+            )
 
     def orchestrator_state(self) -> dict[str, dict[str, Any]]:
         with self._lock:
@@ -487,6 +553,20 @@ class RunService:
                     'node_id': node_id,
                     'artifact_name': output['artifact_name'],
                     'new_state': output['state'],
+                },
+            )
+        raw_assets = result.get('assets')
+        assets = cast(list[dict[str, Any]], raw_assets) if isinstance(raw_assets, list) else []
+        for asset in assets:
+            self.project_service.event_service.publish(
+                'asset.version_created',
+                project_id=project.metadata.project_id,
+                graph_version=int(self.project_service.graph().meta['graph_version']),
+                payload={
+                    'node_id': node_id,
+                    'asset_name': asset['asset_name'],
+                    'asset_version_id': asset['asset_version_id'],
+                    'new_state': asset['state'],
                 },
             )
         return result
@@ -842,11 +922,33 @@ class RunService:
             public_base_url=normalize_base_path(getattr(self.server_config, 'base_path', '')),
             runtime_env=runtime_env,
         )
+        with self._lock:
+            self._editor_session_output_snapshots[node_id] = self._output_snapshot_for_node(node_id)
         return {
             'mode': RunMode.EDIT_RUN.value,
             'session_id': session.session_id,
             'url': session.url,
             'lineage_mode': LineageMode.INTERACTIVE_HEURISTIC.value,
+        }
+
+    def _output_snapshot_for_node(self, node_id: str) -> dict[str, dict[str, tuple[int | None, str]]]:
+        state_db = self.project_service.require_project().state_db
+        return {
+            'assets': {
+                str(head['asset_name']): (
+                    None if head.get('current_asset_version_id') is None else int(head['current_asset_version_id']),
+                    str(head['state']),
+                )
+                for head in state_db.list_asset_heads(node_id=node_id)
+            },
+            'artifacts': {
+                str(head['artifact_name']): (
+                    None if head.get('current_version_id') is None else int(head['current_version_id']),
+                    str(head['state']),
+                )
+                for head in state_db.list_artifact_heads()
+                if str(head.get('node_id')) == node_id
+            },
         }
 
     def _record_graph_edit_interruption(self, *, run_id: str, active_run: ActiveRun) -> None:

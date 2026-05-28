@@ -3,7 +3,8 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
+from contextlib import closing, contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -50,8 +51,13 @@ class StateDB:
         connection.execute(f'PRAGMA journal_mode = {self._journal_mode}')
         return connection
 
+    @contextmanager
+    def _connection(self) -> Iterator[sqlite3.Connection]:
+        with closing(self._connect()) as connection, connection:
+            yield connection
+
     def _initialize(self) -> None:
-        with self._connect() as connection:
+        with self._connection() as connection:
             for name, sql in MIGRATIONS:
                 exists = connection.execute(
                     'SELECT 1 FROM sqlite_master WHERE type = ? AND name = ?', ('table', 'schema_migrations')
@@ -84,7 +90,7 @@ class StateDB:
             connection.execute('ALTER TABLE orchestrator_execution_meta ADD COLUMN stderr_path TEXT NULL')
 
     def set_project_meta(self, key: str, value: str) -> None:
-        with self._connect() as connection:
+        with self._connection() as connection:
             connection.execute(
                 'INSERT INTO project_meta (key, value) VALUES (?, ?) '
                 'ON CONFLICT(key) DO UPDATE SET value = excluded.value',
@@ -93,24 +99,24 @@ class StateDB:
             connection.commit()
 
     def get_project_meta(self, key: str) -> str | None:
-        with self._connect() as connection:
+        with self._connection() as connection:
             row = connection.execute('SELECT value FROM project_meta WHERE key = ?', (key,)).fetchone()
         return None if row is None else str(row['value'])
 
     def list_project_meta(self) -> dict[str, str]:
-        with self._connect() as connection:
+        with self._connection() as connection:
             rows = connection.execute('SELECT key, value FROM project_meta ORDER BY key').fetchall()
         return {str(row['key']): str(row['value']) for row in rows}
 
     def latest_run_started_at(self) -> str | None:
-        with self._connect() as connection:
+        with self._connection() as connection:
             row = connection.execute(
                 'SELECT started_at FROM run_records WHERE started_at IS NOT NULL ORDER BY started_at DESC LIMIT 1'
             ).fetchone()
         return None if row is None else str(row['started_at'])
 
     def latest_run_finished_at(self) -> str | None:
-        with self._connect() as connection:
+        with self._connection() as connection:
             row = connection.execute(
                 'SELECT ended_at FROM run_records WHERE ended_at IS NOT NULL ORDER BY ended_at DESC LIMIT 1'
             ).fetchone()
@@ -119,7 +125,7 @@ class StateDB:
     def save_notebook_contract(
         self, node_id: str, source_hash: str, docs: str | None, contract_json: dict[str, Any]
     ) -> None:
-        with self._connect() as connection:
+        with self._connection() as connection:
             connection.execute(
                 'INSERT OR REPLACE INTO notebook_revisions '
                 '(node_id, source_hash, saved_at, doc_excerpt, interface_json) VALUES (?, ?, ?, ?, ?)',
@@ -133,7 +139,7 @@ class StateDB:
         self.save_notebook_contract(node_id, source_hash, docs, interface_json)
 
     def latest_notebook_contract_json(self, node_id: str) -> dict[str, Any] | None:
-        with self._connect() as connection:
+        with self._connection() as connection:
             row = connection.execute(
                 'SELECT interface_json FROM notebook_revisions WHERE node_id = ? ORDER BY rowid DESC LIMIT 1',
                 (node_id,),
@@ -151,7 +157,7 @@ class StateDB:
         return dict(interface) if isinstance(interface, dict) else payload
 
     def latest_source_hash(self, node_id: str) -> str | None:
-        with self._connect() as connection:
+        with self._connection() as connection:
             row = connection.execute(
                 'SELECT source_hash FROM notebook_revisions WHERE node_id = ? ORDER BY rowid DESC LIMIT 1',
                 (node_id,),
@@ -159,7 +165,7 @@ class StateDB:
         return None if row is None else str(row['source_hash'])
 
     def replace_validation_issues(self, node_id: str, issues: Iterable[ValidationIssue]) -> None:
-        with self._connect() as connection:
+        with self._connection() as connection:
             connection.execute('DELETE FROM validation_issues WHERE node_id = ?', (node_id,))
             now = utc_now_iso()
             connection.executemany(
@@ -185,7 +191,7 @@ class StateDB:
     def list_validation_issues(
         self, *, node_id: str | None = None, include_dismissed: bool = False
     ) -> list[dict[str, Any]]:
-        with self._connect() as connection:
+        with self._connection() as connection:
             query = (
                 'SELECT vi.*, vid.dismissed_at '
                 'FROM validation_issues vi '
@@ -205,7 +211,7 @@ class StateDB:
         return [self._row_to_validation_issue(row) for row in rows]
 
     def get_validation_issue(self, issue_id: str, *, include_dismissed: bool = True) -> dict[str, Any] | None:
-        with self._connect() as connection:
+        with self._connection() as connection:
             query = (
                 'SELECT vi.*, vid.dismissed_at '
                 'FROM validation_issues vi '
@@ -219,7 +225,7 @@ class StateDB:
         return None if row is None else self._row_to_validation_issue(row)
 
     def dismiss_validation_issue(self, issue_id: str) -> None:
-        with self._connect() as connection:
+        with self._connection() as connection:
             connection.execute(
                 'INSERT INTO validation_issue_dismissals (issue_id, dismissed_at) VALUES (?, ?) '
                 'ON CONFLICT(issue_id) DO UPDATE SET dismissed_at = excluded.dismissed_at',
@@ -238,7 +244,7 @@ class StateDB:
         details: dict[str, Any],
     ) -> None:
         now = utc_now_iso()
-        with self._connect() as connection:
+        with self._connection() as connection:
             connection.execute(
                 'INSERT INTO persistent_notices '
                 '(issue_id, node_id, severity, code, message, details_json, created_at, dismissed_at) '
@@ -255,7 +261,7 @@ class StateDB:
             connection.commit()
 
     def list_persistent_notices(self, *, include_dismissed: bool = False) -> list[dict[str, Any]]:
-        with self._connect() as connection:
+        with self._connection() as connection:
             query = 'SELECT * FROM persistent_notices'
             if not include_dismissed:
                 query = f'{query} WHERE dismissed_at IS NULL'
@@ -264,7 +270,7 @@ class StateDB:
         return [self._row_to_validation_issue(row) for row in rows]
 
     def get_persistent_notice(self, issue_id: str, *, include_dismissed: bool = True) -> dict[str, Any] | None:
-        with self._connect() as connection:
+        with self._connection() as connection:
             query = 'SELECT * FROM persistent_notices WHERE issue_id = ?'
             params: list[Any] = [issue_id]
             if not include_dismissed:
@@ -273,7 +279,7 @@ class StateDB:
         return None if row is None else self._row_to_validation_issue(row)
 
     def dismiss_persistent_notice(self, issue_id: str) -> None:
-        with self._connect() as connection:
+        with self._connection() as connection:
             connection.execute(
                 'UPDATE persistent_notices SET dismissed_at = ? WHERE issue_id = ?',
                 (utc_now_iso(), issue_id),
@@ -284,7 +290,7 @@ class StateDB:
         if not codes:
             return
         now = utc_now_iso()
-        with self._connect() as connection:
+        with self._connection() as connection:
             connection.executemany(
                 'UPDATE persistent_notices SET dismissed_at = ? WHERE node_id = ? AND code = ?',
                 [(now, node_id, code) for code in codes],
@@ -292,7 +298,7 @@ class StateDB:
             connection.commit()
 
     def list_state_node_ids(self) -> list[str]:
-        with self._connect() as connection:
+        with self._connection() as connection:
             rows = connection.execute(
                 'SELECT node_id FROM notebook_revisions '
                 'UNION SELECT node_id FROM validation_issues '
@@ -315,7 +321,7 @@ class StateDB:
         source_hash: str,
         declarations: Iterable[AssetDeclaration],
     ) -> None:
-        with self._connect() as connection:
+        with self._connection() as connection:
             connection.execute('DELETE FROM asset_declarations WHERE node_id = ?', (node_id,))
             now = utc_now_iso()
             connection.executemany(
@@ -342,7 +348,7 @@ class StateDB:
             connection.commit()
 
     def list_asset_declarations(self, node_id: str | None = None) -> list[dict[str, Any]]:
-        with self._connect() as connection:
+        with self._connection() as connection:
             query = (
                 'SELECT node_id, asset_name, title, description, declared_asset_type, declaration_index, '
                 'source_hash, updated_at FROM asset_declarations'
@@ -356,7 +362,7 @@ class StateDB:
         return [self._row_to_asset_declaration(row) for row in rows]
 
     def ensure_asset_head(self, node_id: str, asset_name: str, state: ArtifactState = ArtifactState.PENDING) -> None:
-        with self._connect() as connection:
+        with self._connection() as connection:
             connection.execute(
                 'INSERT OR IGNORE INTO asset_heads '
                 '(node_id, asset_name, current_asset_version_id, state) VALUES (?, ?, NULL, ?)',
@@ -365,7 +371,7 @@ class StateDB:
             connection.commit()
 
     def delete_asset_state(self, node_id: str, asset_name: str) -> None:
-        with self._connect() as connection:
+        with self._connection() as connection:
             connection.execute(
                 'DELETE FROM asset_version_objects WHERE asset_version_id IN '
                 '(SELECT asset_version_id FROM asset_versions WHERE node_id = ? AND asset_name = ?)',
@@ -386,7 +392,7 @@ class StateDB:
             connection.commit()
 
     def set_asset_head_state(self, node_id: str, asset_name: str, state: ArtifactState) -> None:
-        with self._connect() as connection:
+        with self._connection() as connection:
             connection.execute(
                 'UPDATE asset_heads SET state = ? WHERE node_id = ? AND asset_name = ?',
                 (state.value, node_id, asset_name),
@@ -414,7 +420,7 @@ class StateDB:
         state: ArtifactState = ArtifactState.READY,
     ) -> int:
         now = utc_now_iso()
-        with self._connect() as connection:
+        with self._connection() as connection:
             cursor = connection.execute(
                 'INSERT INTO asset_versions '
                 '(node_id, asset_name, asset_type, interactive, source_hash, upstream_code_hash, upstream_data_hash, '
@@ -469,7 +475,7 @@ class StateDB:
             return asset_version_id
 
     def get_asset_head(self, node_id: str, asset_name: str) -> dict[str, Any] | None:
-        with self._connect() as connection:
+        with self._connection() as connection:
             row = connection.execute(
                 'SELECT ah.node_id, ah.asset_name, ah.current_asset_version_id, ah.state, '
                 'ad.title, ad.description, ad.declared_asset_type, ad.declaration_index, '
@@ -492,7 +498,7 @@ class StateDB:
         return self._row_to_asset(row, objects.get(int(version_id), []) if version_id is not None else [])
 
     def list_asset_heads(self, *, node_id: str | None = None) -> list[dict[str, Any]]:
-        with self._connect() as connection:
+        with self._connection() as connection:
             query = (
                 'SELECT ah.node_id, ah.asset_name, ah.current_asset_version_id, ah.state, '
                 'ad.title, ad.description, ad.declared_asset_type, ad.declaration_index, '
@@ -527,7 +533,7 @@ class StateDB:
     def ensure_artifact_head(
         self, node_id: str, artifact_name: str, state: ArtifactState = ArtifactState.PENDING
     ) -> None:
-        with self._connect() as connection:
+        with self._connection() as connection:
             connection.execute(
                 'INSERT OR IGNORE INTO artifact_heads '
                 '(node_id, artifact_name, current_version_id, state) VALUES (?, ?, NULL, ?)',
@@ -536,7 +542,7 @@ class StateDB:
             connection.commit()
 
     def delete_artifact_head(self, node_id: str, artifact_name: str) -> None:
-        with self._connect() as connection:
+        with self._connection() as connection:
             connection.execute(
                 'DELETE FROM artifact_heads WHERE node_id = ? AND artifact_name = ?',
                 (node_id, artifact_name),
@@ -544,7 +550,7 @@ class StateDB:
             connection.commit()
 
     def delete_node_state(self, node_id: str) -> None:
-        with self._connect() as connection:
+        with self._connection() as connection:
             self._delete_run_records_for_node(connection, node_id)
             connection.execute('DELETE FROM run_inputs WHERE logical_artifact_id LIKE ?', (f'{node_id}/%',))
             connection.execute('DELETE FROM run_outputs WHERE node_id = ?', (node_id,))
@@ -569,7 +575,7 @@ class StateDB:
     def rename_node_state(self, old_node_id: str, new_node_id: str) -> None:
         if old_node_id == new_node_id:
             return
-        with self._connect() as connection:
+        with self._connection() as connection:
             connection.execute(
                 'UPDATE notebook_revisions SET node_id = ? WHERE node_id = ?', (new_node_id, old_node_id)
             )
@@ -602,7 +608,7 @@ class StateDB:
             connection.commit()
 
     def delete_artifact_state(self, node_id: str, artifact_name: str) -> None:
-        with self._connect() as connection:
+        with self._connection() as connection:
             connection.execute('DELETE FROM run_inputs WHERE logical_artifact_id = ?', (f'{node_id}/{artifact_name}',))
             connection.execute(
                 'DELETE FROM run_outputs WHERE node_id = ? AND artifact_name = ?',
@@ -623,7 +629,7 @@ class StateDB:
             connection.commit()
 
     def set_artifact_head_state(self, node_id: str, artifact_name: str, state: ArtifactState) -> None:
-        with self._connect() as connection:
+        with self._connection() as connection:
             connection.execute(
                 'UPDATE artifact_heads SET state = ? WHERE node_id = ? AND artifact_name = ?',
                 (state.value, node_id, artifact_name),
@@ -641,7 +647,7 @@ class StateDB:
         preview_json: dict[str, Any] | None,
     ) -> None:
         now = utc_now_iso()
-        with self._connect() as connection:
+        with self._connection() as connection:
             connection.execute(
                 'INSERT OR IGNORE INTO objects '
                 '(artifact_hash, storage_kind, data_type, size_bytes, extension, mime_type, preview_json, created_at, '
@@ -661,7 +667,7 @@ class StateDB:
             connection.commit()
 
     def touch_artifact_object(self, artifact_hash: str) -> None:
-        with self._connect() as connection:
+        with self._connection() as connection:
             connection.execute(
                 'UPDATE objects SET last_accessed_at = ? WHERE artifact_hash = ?',
                 (utc_now_iso(), artifact_hash),
@@ -684,7 +690,7 @@ class StateDB:
         state: ArtifactState = ArtifactState.READY,
     ) -> int:
         now = utc_now_iso()
-        with self._connect() as connection:
+        with self._connection() as connection:
             cursor = connection.execute(
                 'INSERT INTO artifact_versions '
                 '(node_id, artifact_name, role, artifact_hash, source_hash, upstream_code_hash, upstream_data_hash, '
@@ -737,7 +743,7 @@ class StateDB:
             return version_id
 
     def get_artifact_head(self, node_id: str, artifact_name: str) -> dict[str, Any] | None:
-        with self._connect() as connection:
+        with self._connection() as connection:
             row = connection.execute(
                 'SELECT ah.node_id, ah.artifact_name, ah.current_version_id, ah.state, '
                 'av.role, av.artifact_hash, av.source_hash, av.upstream_code_hash, av.upstream_data_hash, '
@@ -752,7 +758,7 @@ class StateDB:
         return None if row is None else self._row_to_artifact(row)
 
     def list_artifact_heads(self) -> list[dict[str, Any]]:
-        with self._connect() as connection:
+        with self._connection() as connection:
             rows = connection.execute(
                 'SELECT ah.node_id, ah.artifact_name, ah.current_version_id, ah.state, '
                 'av.role, av.artifact_hash, av.source_hash, av.upstream_code_hash, av.upstream_data_hash, '
@@ -774,7 +780,7 @@ class StateDB:
         graph_version: int,
         source_snapshot_json: dict[str, Any],
     ) -> None:
-        with self._connect() as connection:
+        with self._connection() as connection:
             connection.execute(
                 'INSERT INTO run_records '
                 '(run_id, project_id, mode, status, target_json, graph_version, '
@@ -793,7 +799,7 @@ class StateDB:
             connection.commit()
 
     def update_run_status(self, run_id: str, status: RunStatus, *, failure_json: dict[str, Any] | None = None) -> None:
-        with self._connect() as connection:
+        with self._connection() as connection:
             started_at = utc_now_iso() if status == RunStatus.RUNNING else None
             ended_at = (
                 utc_now_iso()
@@ -818,7 +824,7 @@ class StateDB:
     def record_run_input(
         self, run_id: str, logical_artifact_id: str, artifact_hash_at_load: str, state_at_load: str
     ) -> None:
-        with self._connect() as connection:
+        with self._connection() as connection:
             connection.execute(
                 'INSERT INTO run_inputs '
                 '(run_id, logical_artifact_id, artifact_hash_at_load, state_at_load, loaded_at) '
@@ -828,7 +834,7 @@ class StateDB:
             connection.commit()
 
     def get_cache_hit(self, node_id: str, artifact_name: str, upstream_data_hash: str) -> dict[str, Any] | None:
-        with self._connect() as connection:
+        with self._connection() as connection:
             row = connection.execute(
                 'SELECT artifact_hash, is_nondeterministic FROM cache_index '
                 'WHERE node_id = ? AND artifact_name = ? AND upstream_data_hash = ?',
@@ -839,7 +845,7 @@ class StateDB:
         return {'artifact_hash': row['artifact_hash'], 'is_nondeterministic': bool(row['is_nondeterministic'])}
 
     def list_run_records(self) -> list[dict[str, Any]]:
-        with self._connect() as connection:
+        with self._connection() as connection:
             rows = connection.execute(
                 'SELECT * FROM run_records ORDER BY COALESCE(started_at, ended_at) DESC, run_id DESC'
             ).fetchall()
@@ -868,7 +874,7 @@ class StateDB:
         stdout_path: str | None = None,
         stderr_path: str | None = None,
     ) -> None:
-        with self._connect() as connection:
+        with self._connection() as connection:
             connection.execute(
                 'INSERT INTO orchestrator_execution_meta '
                 '(node_id, run_id, status, started_at, ended_at, duration_seconds, '
@@ -904,7 +910,7 @@ class StateDB:
             connection.commit()
 
     def list_orchestrator_execution_meta(self) -> dict[str, dict[str, Any]]:
-        with self._connect() as connection:
+        with self._connection() as connection:
             rows = connection.execute(
                 'SELECT * FROM orchestrator_execution_meta ORDER BY updated_at DESC, node_id ASC'
             ).fetchall()
@@ -924,7 +930,7 @@ class StateDB:
         return records
 
     def abort_inflight_runs(self) -> None:
-        with self._connect() as connection:
+        with self._connection() as connection:
             connection.execute(
                 'UPDATE run_records SET status = ?, ended_at = ? WHERE status IN (?, ?)',
                 (RunStatus.ABORTED_ON_RESTART.value, utc_now_iso(), RunStatus.QUEUED.value, RunStatus.RUNNING.value),
@@ -932,7 +938,7 @@ class StateDB:
             connection.commit()
 
     def create_checkpoint(self, checkpoint_id: str, graph_version: int, path: str) -> None:
-        with self._connect() as connection:
+        with self._connection() as connection:
             connection.execute(
                 'INSERT INTO checkpoints (checkpoint_id, created_at, graph_version, path, restored_at) '
                 'VALUES (?, ?, ?, ?, NULL)',
@@ -941,14 +947,14 @@ class StateDB:
             connection.commit()
 
     def mark_checkpoint_restored(self, checkpoint_id: str) -> None:
-        with self._connect() as connection:
+        with self._connection() as connection:
             connection.execute(
                 'UPDATE checkpoints SET restored_at = ? WHERE checkpoint_id = ?', (utc_now_iso(), checkpoint_id)
             )
             connection.commit()
 
     def list_checkpoints(self) -> list[CheckpointRecord]:
-        with self._connect() as connection:
+        with self._connection() as connection:
             rows = connection.execute('SELECT * FROM checkpoints ORDER BY created_at DESC').fetchall()
         return [CheckpointRecord(**dict(row)) for row in rows]
 

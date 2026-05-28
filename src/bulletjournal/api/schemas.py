@@ -270,6 +270,7 @@ class DashboardPanelInput(StrictModel):
     asset_name: str
     visible: bool = True
     position: int | None = None
+    panel_height: int | None = Field(default=None, ge=1)
     modifier_overrides: dict[str, Any] = Field(default_factory=dict)
     override_schema_hash: str | None = None
 

@@ -71,6 +71,21 @@ def test_state_db_tracks_artifact_head_lifecycle_and_cache_nondeterminism(tmp_pa
     assert stale['state'] == ArtifactState.STALE.value
 
 
+def test_state_db_connection_context_closes_connection(tmp_path) -> None:
+    paths = init_project_root(tmp_path / 'project')
+    db = StateDB(paths.state_db_path)
+
+    with db._connection() as connection:
+        assert connection.execute('SELECT 1').fetchone()[0] == 1
+
+    try:
+        connection.execute('SELECT 1')
+    except Exception as exc:
+        assert 'closed' in str(exc).lower()
+    else:
+        raise AssertionError('Expected the sqlite connection to be closed after leaving the context manager.')
+
+
 def test_state_db_can_delete_single_artifact_state(tmp_path) -> None:
     paths = init_project_root(tmp_path / 'project')
     db = StateDB(paths.state_db_path)
@@ -178,7 +193,7 @@ def test_state_db_delete_node_state_removes_all_visible_node_records(tmp_path) -
     assert any(head['node_id'] == 'node_a' for head in db.list_artifact_heads())
     assert 'node_a' in db.list_orchestrator_execution_meta()
     assert any(run['run_id'] == 'run-1' for run in db.list_run_records())
-    with db._connect() as connection:
+    with db._connection() as connection:
         assert connection.execute('SELECT COUNT(*) FROM run_inputs WHERE run_id = ?', ('run-1',)).fetchone()[0] == 1
         assert connection.execute('SELECT COUNT(*) FROM run_outputs WHERE run_id = ?', ('run-1',)).fetchone()[0] == 1
 
@@ -190,7 +205,7 @@ def test_state_db_delete_node_state_removes_all_visible_node_records(tmp_path) -
     assert 'node_a' not in db.list_orchestrator_execution_meta()
     assert 'node_a' not in db.list_state_node_ids()
     assert all(run['run_id'] != 'run-1' for run in db.list_run_records())
-    with db._connect() as connection:
+    with db._connection() as connection:
         assert connection.execute('SELECT COUNT(*) FROM run_inputs WHERE run_id = ?', ('run-1',)).fetchone()[0] == 0
         assert connection.execute('SELECT COUNT(*) FROM run_outputs WHERE run_id = ?', ('run-1',)).fetchone()[0] == 0
 
@@ -428,7 +443,7 @@ def test_state_db_rename_node_state_updates_all_node_id_indexes_and_payloads(tmp
     assert persisted['details']['plan'] == ['node_b']
     assert persisted['details']['source'] == 'node_b/output'
 
-    with db._connect() as connection:
+    with db._connection() as connection:
         assert (
             connection.execute('SELECT COUNT(*) FROM notebook_revisions WHERE node_id = ?', ('node_a',)).fetchone()[0]
             == 0

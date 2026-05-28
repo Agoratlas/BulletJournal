@@ -258,6 +258,28 @@ class DashboardService:
                 self._sync_dashboard_node_metadata(updated)
                 self._publish_dashboard_updated(updated)
 
+    def refresh_dashboards_for_source(self, node_id: str) -> list[str]:
+        with self._lock:
+            updated_dashboard_ids: list[str] = []
+            for dashboard_id in self.list_dashboard_ids():
+                document = self._read_dashboard_document(dashboard_id)
+                if all(source.node_id != node_id for source in document.sources):
+                    continue
+                next_panels = self._reconcile_panels(document)
+                if next_panels == document.panels:
+                    continue
+                updated = replace(
+                    document,
+                    version=document.version + 1,
+                    updated_at=utc_now_iso(),
+                    panels=next_panels,
+                )
+                self._write_dashboard_document(updated)
+                self._sync_dashboard_node_metadata(updated)
+                self._publish_dashboard_updated(updated)
+                updated_dashboard_ids.append(dashboard_id)
+            return updated_dashboard_ids
+
     def list_dashboard_ids(self) -> list[str]:
         dashboards_dir = self.project_service.require_project().paths.dashboards_dir
         return sorted(path.stem for path in dashboards_dir.glob('*.json') if path.is_file())
@@ -316,6 +338,7 @@ class DashboardService:
                 asset_name=str(panel.get('asset_name') or '').strip(),
                 visible=bool(panel.get('visible', True)),
                 position=int(panel.get('position', 0)),
+                panel_height=_panel_height_from_value(panel.get('panel_height')),
                 modifier_overrides=panel.get('modifier_overrides')
                 if isinstance(panel.get('modifier_overrides'), dict)
                 else {},
@@ -392,6 +415,7 @@ class DashboardService:
                     asset_name=asset_name,
                     visible=bool(panel.get('visible', True)),
                     position=int(panel.get('position', index)),
+                    panel_height=_panel_height_from_value(panel.get('panel_height')),
                     modifier_overrides=panel.get('modifier_overrides')
                     if isinstance(panel.get('modifier_overrides'), dict)
                     else {},
@@ -409,6 +433,73 @@ class DashboardService:
             raise GraphValidationError(
                 'Dashboard panels must reference notebook sources declared in `sources`: ' + ', '.join(missing)
             )
+
+    def _reconcile_panels(self, document: DashboardDocument) -> list[DashboardPanel]:
+        existing_panels = self._normalize_panel_positions(document.panels)
+        existing_panels_by_logical_id = {f'{panel.node_id}/{panel.asset_name}': panel for panel in existing_panels}
+        available_assets_by_logical_id: dict[str, dict[str, Any]] = {}
+        discovered_logical_ids: list[str] = []
+        state_db = self.project_service.require_project().state_db
+
+        for source in document.sources:
+            for asset in state_db.list_asset_heads(node_id=source.node_id):
+                asset_name = str(asset.get('asset_name') or '').strip()
+                if not asset_name:
+                    continue
+                logical_id = f'{source.node_id}/{asset_name}'
+                if logical_id not in available_assets_by_logical_id:
+                    discovered_logical_ids.append(logical_id)
+                available_assets_by_logical_id[logical_id] = asset
+
+        next_panels: list[DashboardPanel] = []
+        for existing_panel in existing_panels:
+            logical_id = f'{existing_panel.node_id}/{existing_panel.asset_name}'
+            available_asset = available_assets_by_logical_id.get(logical_id)
+            if available_asset is None:
+                continue
+            next_panels.append(
+                DashboardPanel(
+                    panel_id=logical_id,
+                    node_id=existing_panel.node_id,
+                    asset_name=existing_panel.asset_name,
+                    visible=existing_panel.visible,
+                    position=len(next_panels),
+                    panel_height=existing_panel.panel_height,
+                    modifier_overrides=existing_panel.modifier_overrides,
+                    override_schema_hash=existing_panel.override_schema_hash
+                    or (
+                        str(available_asset['override_schema_hash'])
+                        if available_asset.get('override_schema_hash') is not None
+                        else None
+                    ),
+                )
+            )
+
+        for logical_id in discovered_logical_ids:
+            if logical_id in existing_panels_by_logical_id:
+                continue
+            available_asset = available_assets_by_logical_id.get(logical_id)
+            if available_asset is None:
+                continue
+            source_node_id, asset_name = logical_id.split('/', 1)
+            next_panels.append(
+                DashboardPanel(
+                    panel_id=logical_id,
+                    node_id=source_node_id,
+                    asset_name=asset_name,
+                    visible=True,
+                    position=len(next_panels),
+                    panel_height=None,
+                    modifier_overrides={},
+                    override_schema_hash=(
+                        str(available_asset['override_schema_hash'])
+                        if available_asset.get('override_schema_hash') is not None
+                        else None
+                    ),
+                )
+            )
+
+        return self._normalize_panel_positions(next_panels)
 
     @staticmethod
     def _normalize_panel_positions(panels: list[DashboardPanel]) -> list[DashboardPanel]:
@@ -460,3 +551,9 @@ class DashboardService:
             graph_version=int(self.project_service.graph().meta['graph_version']),
             payload={'dashboard_id': document.dashboard_id, 'version': document.version},
         )
+
+
+def _panel_height_from_value(value: Any) -> int | None:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        return None
+    return value

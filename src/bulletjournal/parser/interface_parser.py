@@ -35,6 +35,9 @@ ARTIFACT_NAME_PATTERN = re.compile(r'^[a-z0-9_]+$')
 ASSET_TYPE_IDS_BY_CLASS_NAME = {
     'Markdown': 'markdown',
     'DataFrame': 'dataframe',
+    'Histogram': 'histogram',
+    'PieChart': 'pie_chart',
+    'ScatterPlot': 'scatter_plot',
 }
 
 

@@ -29,3 +29,14 @@ def test_event_service_filters_incremental_events_without_reset() -> None:
 
     assert batch['reset_required'] is False
     assert [event['event_type'] for event in batch['events']] == ['event.three']
+
+
+def test_event_service_reports_latest_event_id() -> None:
+    service = EventService()
+
+    assert service.latest_event_id() == 0
+
+    service.publish('event.one', project_id='demo', graph_version=1, payload={})
+    service.publish('event.two', project_id='demo', graph_version=1, payload={})
+
+    assert service.latest_event_id() == 2

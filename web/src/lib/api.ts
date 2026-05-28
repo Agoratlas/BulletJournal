@@ -15,6 +15,18 @@ declare global {
   }
 }
 
+export class ApiError<T = unknown> extends Error {
+  status: number
+  payload: T | null
+
+  constructor(message: string, status: number, payload: T | null = null) {
+    super(message)
+    this.name = 'ApiError'
+    this.status = status
+    this.payload = payload
+  }
+}
+
 export function appBasePath(): string {
   const value = window.__BULLETJOURNAL_BASE_PATH__ || ''
   if (!value || value === '/') {
@@ -85,13 +97,15 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
   if (!response.ok) {
     const text = await response.text()
     let detail = text
+    let payload: unknown = null
     try {
       const parsed = JSON.parse(text)
+      payload = parsed
       detail = formatErrorDetail(parsed.detail ?? parsed)
     } catch {
       // keep text
     }
-    throw new Error(detail || `HTTP ${response.status}`)
+    throw new ApiError(detail || `HTTP ${response.status}`, response.status, payload)
   }
   return response.json() as Promise<T>
 }
@@ -342,6 +356,7 @@ export async function createDashboard(payload: {
     asset_name: string
     visible?: boolean
     position?: number | null
+    panel_height?: number | null
     modifier_overrides?: Record<string, unknown>
     override_schema_hash?: string | null
   }>
@@ -366,6 +381,7 @@ export async function patchDashboard(
       asset_name: string
       visible?: boolean
       position?: number | null
+      panel_height?: number | null
       modifier_overrides?: Record<string, unknown>
       override_schema_hash?: string | null
     }> | null
@@ -394,6 +410,7 @@ export async function saveNotebookDashboard(
       asset_name: string
       visible?: boolean
       position?: number | null
+      panel_height?: number | null
       modifier_overrides?: Record<string, unknown>
       override_schema_hash?: string | null
     }> | null

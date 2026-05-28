@@ -87,6 +87,7 @@ def test_runtime_assets_module_exposes_helper_functions_after_submodule_import()
     assert callable(runtime_module.push)
     assert runtime_module.Markdown is not None
     assert runtime_module.DataFrame is not None
+    assert runtime_module.ScatterPlot is not None
     assert imported is runtime_module
 
 
@@ -239,6 +240,18 @@ def test_assets_api_delegates_to_runtime_context(monkeypatch: pytest.MonkeyPatch
     runtime_assets.push(asset, name='summary', title='Summary', description='Notebook summary')
 
     assert calls == [('asset_push', (asset, 'summary', 'Summary', 'Notebook summary', None))]
+
+
+def test_pie_chart_rejects_inconsistent_color_column() -> None:
+    frame = pd.DataFrame(
+        {
+            'segment': ['a', 'a', 'b'],
+            'segment_color': ['#ff0000', '#00ff00', '#0000ff'],
+        }
+    )
+
+    with pytest.raises(ValueError, match='assigns multiple colors to category `a`'):
+        runtime_assets.PieChart(frame, category='segment', color='segment_color')
 
 
 def test_artifacts_pull_file_returns_none_for_optional_missing_binding(monkeypatch: pytest.MonkeyPatch) -> None:

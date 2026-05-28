@@ -15,8 +15,11 @@ from bulletjournal.storage.project_fs import init_project_root
 
 
 class _FakeEventService:
+    def __init__(self) -> None:
+        self.events: list[tuple[tuple[object, ...], dict[str, object]]] = []
+
     def publish(self, *args, **kwargs) -> None:
-        _ = (args, kwargs)
+        self.events.append((args, kwargs))
 
 
 class _FlushTrackingTarget:
@@ -58,6 +61,26 @@ def _write_sample_notebook(project_root: Path) -> Path:
             '@app.cell\n'
             'def _():\n'
             "    artifacts.push(1, name='value', data_type=int)\n"
+            '    return\n'
+        ),
+        encoding='utf-8',
+    )
+    return notebook_path
+
+
+def _write_asset_notebook(project_root: Path) -> Path:
+    notebook_path = project_root / 'notebooks' / 'sample_node.py'
+    notebook_path.write_text(
+        (
+            'import marimo\n\n'
+            'app = marimo.App()\n\n'
+            'with app.setup:\n'
+            '    import pandas as pd\n'
+            '    from bulletjournal.runtime import assets\n\n'
+            '@app.cell\n'
+            'def _():\n'
+            "    frame = pd.DataFrame({'value': [1, 2, 3]})\n"
+            "    assets.push(assets.DataFrame(frame), name='table', title='Table', asset_type=assets.DataFrame)\n"
             '    return\n'
         ),
         encoding='utf-8',
@@ -115,6 +138,58 @@ def test_running_execution_metadata_retains_log_paths_for_live_snapshot(tmp_path
     assert captured_meta['status'] == 'running'
     assert captured_meta['stdout'] == {'text': 'live stdout\n', 'truncated': False, 'size_bytes': 12}
     assert captured_meta['stderr'] == {'text': 'live stderr\n', 'truncated': False, 'size_bytes': 12}
+
+
+def test_run_service_publishes_asset_version_events(tmp_path) -> None:
+    project_root = init_project_root(tmp_path / 'project').root
+    event_service = _FakeEventService()
+    project_service = ProjectService(event_service, TemplateService())
+    project_service.open_project(project_root)
+    run_service = RunService(project_service)
+    project_service.run_service = run_service  # type: ignore[assignment]
+
+    _append_sample_node(project_service)
+    notebook_path = _write_asset_notebook(project_root)
+    project_service.reparse_notebook_by_path(notebook_path)
+
+    result = run_service.start_node_run('sample_node', mode='run_all', action='use_stale')
+
+    assert result['status'] == 'succeeded'
+    assert any(
+        args[0] == 'asset.version_created'
+        and kwargs['payload']['asset_name'] == 'table'
+        and kwargs['payload']['new_state'] == 'ready'
+        for args, kwargs in event_service.events
+    )
+
+
+def test_run_service_syncs_editor_session_asset_updates(tmp_path) -> None:
+    project_root = init_project_root(tmp_path / 'project').root
+    event_service = _FakeEventService()
+    project_service = ProjectService(event_service, TemplateService())
+    project_service.open_project(project_root)
+    run_service = RunService(project_service)
+    project_service.run_service = run_service  # type: ignore[assignment]
+
+    _append_sample_node(project_service)
+    notebook_path = _write_asset_notebook(project_root)
+    project_service.reparse_notebook_by_path(notebook_path)
+
+    run_service._editor_session_output_snapshots['sample_node'] = run_service._output_snapshot_for_node('sample_node')
+
+    result = run_service.start_node_run('sample_node', mode='run_all', action='use_stale')
+
+    assert result['status'] == 'succeeded'
+    event_service.events.clear()
+
+    run_service.sync_editor_session_outputs('sample_node')
+
+    assert any(
+        args[0] == 'asset.version_created'
+        and kwargs['payload']['asset_name'] == 'table'
+        and kwargs['payload']['new_state'] == 'ready'
+        for args, kwargs in event_service.events
+    )
 
 
 def test_running_execution_metadata_exposes_empty_live_logs_when_worker_has_not_written_yet(tmp_path) -> None:

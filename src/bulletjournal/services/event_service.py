@@ -30,6 +30,12 @@ class EventService:
             self._events.append(event)
         return event
 
+    def latest_event_id(self) -> int:
+        with self._lock:
+            if not self._events:
+                return 0
+            return int(self._events[-1]['id'])
+
     def events_after(self, last_event_id: int) -> dict[str, Any]:
         with self._lock:
             events = list(self._events)

@@ -191,11 +191,39 @@ export type AssetSort = {
   direction: AssetSortDirection
 }
 
+export type AssetFilterKind = 'range' | 'value' | 'regex'
+
+export type AssetRangeFilter = {
+  kind: 'range'
+  column: string
+  value_type?: string
+  lower?: string | number | null
+  upper?: string | number | null
+}
+
+export type AssetValueFilter = {
+  kind: 'value'
+  column: string
+  value_type?: string
+  values: Array<string | number | boolean>
+  include_null?: boolean
+}
+
+export type AssetRegexFilter = {
+  kind: 'regex'
+  column: string
+  pattern: string
+  case_sensitive?: boolean
+}
+
+export type AssetFilter = AssetRangeFilter | AssetValueFilter | AssetRegexFilter
+
 export type PreparedTableColumn = {
   id: string
   title: string
   data_type: string
   sortable: boolean
+  filter_kinds?: AssetFilterKind[]
 }
 
 export type PreparedTablePayload = {
@@ -210,6 +238,77 @@ export type PreparedTablePayload = {
   rows: Array<Record<string, unknown>>
 }
 
+export type PreparedHistogramBin = {
+  index: number
+  start: number
+  end: number
+  count: number
+}
+
+export type PreparedHistogramPayload = {
+  kind: 'histogram'
+  x_column: string
+  rows_total: number
+  non_null_rows: number
+  bin_count: number
+  domain: {
+    min: number
+    max: number
+  } | null
+  bins: PreparedHistogramBin[]
+}
+
+export type PreparedScatterPlotPoint = {
+  row_index: number
+  x: number
+  y: number
+  shape?: string | number | boolean | null
+  size?: string | number | boolean | null
+  color?: string | number | boolean | null
+}
+
+export type PreparedScatterPlotPayload = {
+  kind: 'scatter_plot'
+  x_column: string
+  y_column: string
+  shape_column: string | null
+  size_column: string | null
+  size_kind: 'quantitative' | 'nominal' | null
+  color_column: string | null
+  color_kind: 'quantitative' | 'nominal' | null
+  rows_total: number
+  non_null_rows: number
+  plotted_rows: number
+  sampled: boolean
+  domain: {
+    x: {
+      min: number
+      max: number
+    }
+    y: {
+      min: number
+      max: number
+    }
+  } | null
+  points: PreparedScatterPlotPoint[]
+}
+
+export type PreparedPieChartSlice = {
+  value: string | number | boolean
+  label: string
+  count: number
+  share: number
+  color: string
+}
+
+export type PreparedPieChartPayload = {
+  kind: 'pie_chart'
+  category_column: string
+  rows_total: number
+  non_null_rows: number
+  slices: PreparedPieChartSlice[]
+}
+
 export type AssetPrepareResponse = {
   asset_version_id: number
   state: ArtifactState
@@ -219,10 +318,13 @@ export type AssetPrepareResponse = {
       size: number
     }
     sort?: AssetSort[]
+    filters?: AssetFilter[]
+    bin_count?: number
     [key: string]: unknown
   }
   override_schema_hash: string | null
   payloads: {
+    main?: PreparedHistogramPayload | PreparedPieChartPayload | PreparedScatterPlotPayload
     table?: PreparedTablePayload
   }
   errors: Array<{
@@ -241,6 +343,7 @@ export type DashboardPanelRecord = {
   asset_name: string
   visible: boolean
   position: number
+  panel_height: number | null
   modifier_overrides: Record<string, unknown>
   override_schema_hash: string | null
 }

@@ -221,7 +221,7 @@ class RuntimeContext:
             raise TypeError(
                 f'Asset type mismatch for `{name}`: expected {runtime_declared_type}, got {runtime_asset_type}.'
             )
-        serialized = serialize_asset(asset, object_store=self.object_store, description=description)
+        serialized = serialize_asset(asset, object_store=self.object_store, title=title, description=description)
         objects: list[dict[str, Any]] = []
         for item in serialized.objects:
             persisted = item.persisted

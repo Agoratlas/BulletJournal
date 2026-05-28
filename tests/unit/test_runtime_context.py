@@ -479,6 +479,263 @@ def test_runtime_context_finalize_asset_push_persists_dataframe_backing_dataset(
     assert head['objects'][0]['object_role'] == 'backing_dataset'
 
 
+def test_runtime_context_finalize_asset_push_persists_histogram_asset(tmp_path) -> None:
+    project_root = init_project_root(tmp_path / 'project').root
+    context = RuntimeContext(
+        project_root=project_root,
+        node_id='producer',
+        run_id='run-histogram-asset',
+        source_hash='producer-source',
+        lineage_mode=LineageMode.MANAGED,
+        bindings={},
+        outputs={},
+        asset_declarations={
+            'value_hist': AssetDeclaration(
+                node_id='producer',
+                name='value_hist',
+                title='Value histogram',
+                description='Distribution',
+                declared_asset_type='histogram',
+                declaration_index=0,
+            )
+        },
+    )
+
+    pushed = context.finalize_asset_push(
+        asset=runtime_assets.Histogram(
+            pd.DataFrame(
+                {
+                    'value': [1, 2, 2, 3],
+                    'segment': ['a', 'a', 'b', 'b'],
+                    'weight': [0.1, 0.3, 0.7, 0.9],
+                    'palette': ['red', 'blue', 'red', 'green'],
+                }
+            ),
+            x='value',
+            bins=8,
+            shape='segment',
+            size='weight',
+            color='palette',
+        ),
+        name='value_hist',
+        title='Value histogram',
+        description='Distribution',
+        asset_type=runtime_assets.Histogram,
+    )
+    head = context.db.get_asset_head('producer', 'value_hist')
+
+    assert pushed['asset_name'] == 'value_hist'
+    assert head is not None
+    assert head['asset_type'] == 'histogram'
+    assert head['definition']['histogram_column'] == 'value'
+    assert head['definition']['histogram_shape_column'] == 'segment'
+    assert head['definition']['histogram_size_column'] == 'weight'
+    assert head['definition']['histogram_color_column'] == 'palette'
+    assert head['definition']['encodings']['shape']['column'] == 'segment'
+    assert head['definition']['encodings']['size']['column'] == 'weight'
+    assert head['definition']['encodings']['color']['column'] == 'palette'
+    assert head['default_modifiers']['bin_count'] == 8
+    assert head['default_modifiers']['bar_width'] == 90
+    assert head['default_modifiers']['x_axis']['label'] == 'value'
+    assert head['default_modifiers']['y_axis']['label'] == 'Rows'
+    assert head['default_modifiers']['title']['text'] == 'Value histogram'
+    assert {entry['id'] for entry in head['modifier_schema']} >= {
+        'bin_count',
+        'bar_width',
+        'border_thickness',
+        'x_axis',
+        'y_axis',
+        'title',
+    }
+    assert head['objects'][0]['object_role'] == 'backing_dataset'
+
+
+def test_runtime_context_finalize_asset_push_persists_scatter_plot_asset(tmp_path) -> None:
+    project_root = init_project_root(tmp_path / 'project').root
+    context = RuntimeContext(
+        project_root=project_root,
+        node_id='producer',
+        run_id='run-scatter-plot-asset',
+        source_hash='producer-source',
+        lineage_mode=LineageMode.MANAGED,
+        bindings={},
+        outputs={},
+        asset_declarations={
+            'xy_plot': AssetDeclaration(
+                node_id='producer',
+                name='xy_plot',
+                title='XY plot',
+                description='Relationship view',
+                declared_asset_type='scatter_plot',
+                declaration_index=0,
+            )
+        },
+    )
+
+    pushed = context.finalize_asset_push(
+        asset=runtime_assets.ScatterPlot(
+            pd.DataFrame(
+                {
+                    'x': [1, 2, 3],
+                    'y': [4, 5, 6],
+                    'group': ['a', 'b', 'a'],
+                    'weight': [10, 20, 30],
+                    'palette': ['red', 'blue', 'green'],
+                }
+            ),
+            x='x',
+            y='y',
+            shape='group',
+            size='weight',
+            color='palette',
+            min_point_size=24,
+            max_point_size=160,
+            show_legend=False,
+            shape_style='filled',
+            x_axis={
+                'label_size': 16,
+                'label': 'Custom x',
+                'hide_label': False,
+                'tick_count': 5,
+                'tick_size': 8,
+                'show_grid_lines': False,
+                'scale': 'lin',
+            },
+            y_axis={
+                'label_size': 15,
+                'label': 'Custom y',
+                'hide_label': False,
+                'tick_count': None,
+                'tick_size': None,
+                'show_grid_lines': True,
+                'scale': 'log',
+            },
+            title={'size': 20, 'text': 'Custom scatter', 'hide_title': False, 'position': 'bottom'},
+        ),
+        name='xy_plot',
+        title='XY plot',
+        description='Relationship view',
+        asset_type=runtime_assets.ScatterPlot,
+    )
+    head = context.db.get_asset_head('producer', 'xy_plot')
+
+    assert pushed['asset_name'] == 'xy_plot'
+    assert head is not None
+    assert head['asset_type'] == 'scatter_plot'
+    assert head['definition']['scatter_x_column'] == 'x'
+    assert head['definition']['scatter_y_column'] == 'y'
+    assert head['definition']['scatter_shape_column'] == 'group'
+    assert head['definition']['scatter_size_column'] == 'weight'
+    assert head['definition']['scatter_color_column'] == 'palette'
+    assert head['definition']['encodings']['shape']['column'] == 'group'
+    assert head['definition']['encodings']['size']['column'] == 'weight'
+    assert head['definition']['encodings']['color']['column'] == 'palette'
+    assert head['default_modifiers']['min_point_size'] == 24
+    assert head['default_modifiers']['max_point_size'] == 160
+    assert head['default_modifiers']['show_legend'] is False
+    assert head['default_modifiers']['shape_style'] == 'filled'
+    assert head['default_modifiers']['x_axis']['label'] == 'Custom x'
+    assert head['default_modifiers']['y_axis']['scale'] == 'log'
+    assert head['default_modifiers']['title']['position'] == 'bottom'
+    assert {entry['id'] for entry in head['modifier_schema']} >= {
+        'min_point_size',
+        'max_point_size',
+        'show_legend',
+        'shape_style',
+        'x_axis',
+        'y_axis',
+        'title',
+    }
+    assert head['objects'][0]['object_role'] == 'backing_dataset'
+
+
+def test_runtime_context_finalize_asset_push_persists_pie_chart_asset(tmp_path) -> None:
+    project_root = init_project_root(tmp_path / 'project').root
+    context = RuntimeContext(
+        project_root=project_root,
+        node_id='producer',
+        run_id='run-pie-chart-asset',
+        source_hash='producer-source',
+        lineage_mode=LineageMode.MANAGED,
+        bindings={},
+        outputs={},
+        asset_declarations={
+            'category_share': AssetDeclaration(
+                node_id='producer',
+                name='category_share',
+                title='Category share',
+                description='Category distribution',
+                declared_asset_type='pie_chart',
+                declaration_index=0,
+            )
+        },
+    )
+
+    pushed = context.finalize_asset_push(
+        asset=runtime_assets.PieChart(
+            pd.DataFrame(
+                {
+                    'segment': ['a', 'a', 'b', 'c'],
+                    'tone': ['#ff0000', '#ff0000', '#00ff00', '#0000ff'],
+                    'value': [1, 2, 3, 4],
+                }
+            ),
+            category='segment',
+            color='tone',
+            inner_radius=0.35,
+            label_size=14,
+            label_threshold=7,
+            label_position=130,
+            merge_threshold=4,
+            border_thickness=2,
+            merged_category_label='Remainder',
+            show_merged_category=False,
+            show_percentages=True,
+            title={'size': 18, 'text': 'Custom pie', 'hide_title': False, 'position': 'bottom'},
+        ),
+        name='category_share',
+        title='Category share',
+        description='Category distribution',
+        asset_type=runtime_assets.PieChart,
+    )
+    head = context.db.get_asset_head('producer', 'category_share')
+
+    assert pushed['asset_name'] == 'category_share'
+    assert head is not None
+    assert head['asset_type'] == 'pie_chart'
+    assert head['definition']['pie_category_column'] == 'segment'
+    assert head['definition']['encodings']['color']['column'] == 'segment'
+    assert head['definition']['pie_color_column'] == 'tone'
+    assert head['definition']['pie_color_mapping'] == [
+        {'value': 'a', 'color': '#ff0000'},
+        {'value': 'b', 'color': '#00ff00'},
+        {'value': 'c', 'color': '#0000ff'},
+    ]
+    assert head['default_modifiers']['inner_radius'] == 0.35
+    assert head['default_modifiers']['label_size'] == 14
+    assert head['default_modifiers']['label_threshold'] == 7
+    assert head['default_modifiers']['label_position'] == 130
+    assert head['default_modifiers']['merge_threshold'] == 4
+    assert head['default_modifiers']['border_thickness'] == 2
+    assert head['default_modifiers']['merged_category_label'] == 'Remainder'
+    assert head['default_modifiers']['show_merged_category'] is False
+    assert head['default_modifiers']['show_percentages'] is True
+    assert head['default_modifiers']['title']['position'] == 'bottom'
+    assert {entry['id'] for entry in head['modifier_schema']} >= {
+        'inner_radius',
+        'label_size',
+        'label_threshold',
+        'label_position',
+        'merge_threshold',
+        'border_thickness',
+        'merged_category_label',
+        'show_merged_category',
+        'show_percentages',
+        'title',
+    }
+    assert head['objects'][0]['object_role'] == 'backing_dataset'
+
+
 def test_runtime_context_rejects_output_not_declared_in_interface(tmp_path) -> None:
     project_root = init_project_root(tmp_path / 'project').root
     context = RuntimeContext(

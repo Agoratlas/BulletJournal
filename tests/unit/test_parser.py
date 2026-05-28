@@ -171,6 +171,90 @@ def _():
     assert any(issue.code == 'invalid_asset_type' for issue in contract.issues)
 
 
+def test_parser_accepts_histogram_asset_type_reference(tmp_path) -> None:
+    notebook = tmp_path / 'histogram_asset_notebook.py'
+    notebook.write_text(
+        """
+import marimo
+
+app = marimo.App()
+
+with app.setup:
+    from bulletjournal.runtime import assets
+
+@app.cell
+def _(pd=__import__('pandas')):
+    frame = pd.DataFrame({'value': [1, 2, 3]})
+    assets.push(assets.Histogram(frame, x='value', bins=12), name='value_hist', title='Value histogram', asset_type=assets.Histogram)
+    return frame
+""".strip()
+        + '\n',
+        encoding='utf-8',
+    )
+
+    contract = parse_notebook_contract(notebook, node_id='histogram_asset_notebook')
+
+    assert [declaration.name for declaration in contract.asset_declarations] == ['value_hist']
+    assert contract.asset_declarations[0].declared_asset_type == 'histogram'
+    assert not any(issue.severity == ValidationSeverity.ERROR for issue in contract.issues)
+
+
+def test_parser_accepts_scatter_plot_asset_type_reference(tmp_path) -> None:
+    notebook = tmp_path / 'scatter_plot_asset_notebook.py'
+    notebook.write_text(
+        """
+import marimo
+
+app = marimo.App()
+
+with app.setup:
+    from bulletjournal.runtime import assets
+
+@app.cell
+def _(pd=__import__('pandas')):
+    frame = pd.DataFrame({'x': [1, 2, 3], 'y': [4, 5, 6]})
+    assets.push(assets.ScatterPlot(frame, x='x', y='y'), name='xy_plot', title='XY plot', asset_type=assets.ScatterPlot)
+    return frame
+""".strip()
+        + '\n',
+        encoding='utf-8',
+    )
+
+    contract = parse_notebook_contract(notebook, node_id='scatter_plot_asset_notebook')
+
+    assert [declaration.name for declaration in contract.asset_declarations] == ['xy_plot']
+    assert contract.asset_declarations[0].declared_asset_type == 'scatter_plot'
+    assert not any(issue.severity == ValidationSeverity.ERROR for issue in contract.issues)
+
+
+def test_parser_accepts_pie_chart_asset_type_reference(tmp_path) -> None:
+    notebook = tmp_path / 'pie_chart_asset_notebook.py'
+    notebook.write_text(
+        """
+import marimo
+
+app = marimo.App()
+
+with app.setup:
+    from bulletjournal.runtime import assets
+
+@app.cell
+def _(pd=__import__('pandas')):
+    frame = pd.DataFrame({'category': ['a', 'b', 'a']})
+    assets.push(assets.PieChart(frame, category='category'), name='category_share', title='Category share', asset_type=assets.PieChart)
+    return frame
+""".strip()
+        + '\n',
+        encoding='utf-8',
+    )
+
+    contract = parse_notebook_contract(notebook, node_id='pie_chart_asset_notebook')
+
+    assert [declaration.name for declaration in contract.asset_declarations] == ['category_share']
+    assert contract.asset_declarations[0].declared_asset_type == 'pie_chart'
+    assert not any(issue.severity == ValidationSeverity.ERROR for issue in contract.issues)
+
+
 def test_parser_rejects_invalid_artifact_names(tmp_path) -> None:
     notebook = tmp_path / 'invalid_names.py'
     notebook.write_text(

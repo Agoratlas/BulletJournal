@@ -81,6 +81,42 @@ type PendingAreaCreation = {
   y: number
 }
 
+type ServerEventMessage = {
+  eventType: string
+  graphVersion: number | null
+  payload: Record<string, unknown> | null
+}
+
+function parseServerEventMessage(event?: MessageEvent): ServerEventMessage | null {
+  if (!event || typeof event.data !== 'string') {
+    return null
+  }
+  try {
+    const parsed = JSON.parse(event.data) as {
+      event_type?: unknown
+      graph_version?: unknown
+      payload?: unknown
+    }
+    return {
+      eventType: typeof parsed.event_type === 'string' ? parsed.event_type : event.type,
+      graphVersion: typeof parsed.graph_version === 'number' ? parsed.graph_version : null,
+      payload: parsed.payload && typeof parsed.payload === 'object' ? parsed.payload as Record<string, unknown> : null,
+    }
+  } catch {
+    return null
+  }
+}
+
+function shouldRefreshSnapshotForDashboardEvent(
+  eventGraphVersion: number | null,
+  currentGraphVersion: number | null,
+): boolean {
+  if (eventGraphVersion === null || currentGraphVersion === null) {
+    return true
+  }
+  return eventGraphVersion > currentGraphVersion
+}
+
 type OrganizerNodeEditState = {
   nodeId: string
   title: string
@@ -246,6 +282,7 @@ function App() {
   const snapshotRefreshTimeoutRef = useRef<number | null>(null)
   const snapshotRefreshInFlightRef = useRef<Promise<void> | null>(null)
   const snapshotRefreshQueuedRef = useRef(false)
+  const latestGraphVersionRef = useRef<number | null>(null)
   const pendingClickSelectionRef = useRef<{ nodeIds: string[]; edgeIds: string[]; token: number } | null>(null)
   const pendingClickSelectionTokenRef = useRef(0)
   const dashboardUpdateQueueRef = useRef(new Map<string, Promise<boolean>>())
@@ -418,6 +455,10 @@ function App() {
   }, [projectId])
 
   useEffect(() => {
+    latestGraphVersionRef.current = liveSnapshot?.graph.meta.graph_version ?? null
+  }, [liveSnapshot?.graph.meta.graph_version])
+
+  useEffect(() => {
     if (!liveSnapshot?.server_time) {
       return
     }
@@ -586,12 +627,66 @@ function App() {
       }
       hadEventConnectionRef.current = true
     }
-    const refreshSnapshot = () => {
-      void queryClient.invalidateQueries({ queryKey: ['node-assets'] })
-      void queryClient.invalidateQueries({ queryKey: ['asset-prepare'] })
-      void queryClient.invalidateQueries({ queryKey: ['dashboard'] })
-      void queryClient.invalidateQueries({ queryKey: ['dashboard-assets'] })
-      void scheduleSnapshotRefresh()
+    const refreshSnapshot = (event?: MessageEvent) => {
+      const parsedEvent = parseServerEventMessage(event)
+      const eventType = parsedEvent?.eventType ?? event?.type ?? 'message'
+      const eventGraphVersion = parsedEvent?.graphVersion ?? null
+      const currentGraphVersion = latestGraphVersionRef.current
+      const dashboardId = typeof parsedEvent?.payload?.dashboard_id === 'string' ? parsedEvent.payload.dashboard_id : null
+      const dashboardVersion = typeof parsedEvent?.payload?.version === 'number' ? parsedEvent.payload.version : null
+      const nodeId = typeof parsedEvent?.payload?.node_id === 'string' ? parsedEvent.payload.node_id : null
+      const assetName = typeof parsedEvent?.payload?.asset_name === 'string' ? parsedEvent.payload.asset_name : null
+
+      if (eventType === 'asset.state_changed' || eventType === 'asset.version_created') {
+        if (nodeId) {
+          void queryClient.invalidateQueries({ queryKey: ['node-assets', nodeId], exact: true })
+        } else {
+          void queryClient.invalidateQueries({ queryKey: ['node-assets'] })
+        }
+        if (nodeId && assetName) {
+          void queryClient.invalidateQueries({
+            predicate: (query) => Array.isArray(query.queryKey)
+              && query.queryKey[0] === 'asset-prepare'
+              && query.queryKey[1] === nodeId
+              && query.queryKey[2] === assetName,
+          })
+        } else {
+          void queryClient.invalidateQueries({ queryKey: ['asset-prepare'] })
+        }
+        void scheduleSnapshotRefresh()
+        return
+      }
+
+      if (eventType === 'notebook.reparsed' || eventType === 'message') {
+        void queryClient.invalidateQueries({ queryKey: ['node-assets'] })
+        void queryClient.invalidateQueries({ queryKey: ['asset-prepare'] })
+        void scheduleSnapshotRefresh()
+        return
+      }
+
+      if (eventType === 'dashboard.updated') {
+        if (dashboardId) {
+          const cachedDashboard = queryClient.getQueryData<DashboardRecord>(['dashboard', dashboardId])
+          if (!cachedDashboard || dashboardVersion === null || dashboardVersion > cachedDashboard.version) {
+            void queryClient.invalidateQueries({ queryKey: ['dashboard', dashboardId], exact: true })
+          }
+        } else {
+          void queryClient.invalidateQueries({ queryKey: ['dashboard'] })
+        }
+        if (shouldRefreshSnapshotForDashboardEvent(eventGraphVersion, currentGraphVersion)) {
+          void scheduleSnapshotRefresh()
+        }
+        return
+      }
+
+      if (eventType === 'dashboard.deleted') {
+        if (dashboardId) {
+          void queryClient.invalidateQueries({ queryKey: ['dashboard', dashboardId], exact: true })
+        } else {
+          void queryClient.invalidateQueries({ queryKey: ['dashboard'] })
+        }
+        void scheduleSnapshotRefresh()
+      }
     }
     source.onmessage = refreshSnapshot
     for (const eventType of SNAPSHOT_REFRESH_EVENTS) {
@@ -629,8 +724,11 @@ function App() {
   const selectedDashboardQuery = useQuery({
     queryKey: ['dashboard', selectedDashboardId],
     queryFn: () => getDashboard(selectedDashboardId as string),
-    enabled: Boolean(selectedDashboardId),
+    enabled: Boolean(selectedDashboardId) && !savedDashboardId && !notebookAssetsNodeId,
     retry: false,
+    staleTime: 30_000,
+    refetchOnMount: false,
+    refetchOnWindowFocus: false,
   })
   const selectedDashboard = useMemo(
     () => (selectedDashboardId
@@ -686,7 +784,7 @@ function App() {
     return Array.from(links.values())
   }, [optimisticDashboards, queryClient, selectedDashboardId, selectedDashboardQuery.data, selectedEdgeIds])
   async function buildDashboardPanelsForSources(
-    dashboard: { panels: Array<{ panel_id: string; node_id: string; asset_name: string; visible: boolean; modifier_overrides: Record<string, unknown>; override_schema_hash: string | null }> },
+    dashboard: { panels: Array<{ panel_id: string; node_id: string; asset_name: string; visible: boolean; panel_height: number | null; modifier_overrides: Record<string, unknown>; override_schema_hash: string | null }> },
     sourceNodeIds: string[],
   ) {
     const existingPanelsByLogicalId = new Map<string, (typeof dashboard.panels)[number]>(
@@ -698,6 +796,7 @@ function App() {
       asset_name: string
       visible: boolean
       position: number
+      panel_height: number | null
       modifier_overrides: Record<string, unknown>
       override_schema_hash: string | null
     }> = []
@@ -712,6 +811,7 @@ function App() {
           asset_name: asset.asset_name,
           visible: existingPanel?.visible ?? true,
           position: nextPanels.length,
+          panel_height: existingPanel?.panel_height ?? null,
           modifier_overrides: existingPanel?.modifier_overrides ?? {},
           override_schema_hash: existingPanel?.override_schema_hash ?? asset.override_schema_hash,
         })
@@ -758,7 +858,6 @@ function App() {
           delete next[dashboardId]
           return next
         })
-        await queryClient.invalidateQueries({ queryKey: ['dashboard-assets'] })
         await refreshSnapshot()
         return true
       })
@@ -773,7 +872,6 @@ function App() {
           return next
         })
         await queryClient.invalidateQueries({ queryKey: ['dashboard', dashboardId], exact: true })
-        await queryClient.invalidateQueries({ queryKey: ['dashboard-assets'] })
         await refreshSnapshot()
         const message = err instanceof Error ? err.message : 'Dashboard update failed.'
         reportClientError(`dashboard-update:${dashboardId}`, 'dashboard_update_failed', message, { nodeId: dashboardId })
@@ -1548,7 +1646,7 @@ function App() {
   }, [portActionMenu])
 
   useEffect(() => {
-    if (!projectId || notebookAssetsNodeId) {
+    if (!projectId || notebookAssetsNodeId || savedDashboardId) {
       setActiveEditorNodeIds([])
       return
     }
@@ -1578,7 +1676,7 @@ function App() {
       window.clearInterval(interval)
       window.removeEventListener('focus', handleWindowFocus)
     }
-  }, [projectId, notebookAssetsNodeId])
+  }, [projectId, notebookAssetsNodeId, savedDashboardId])
 
   useEffect(() => {
     if (!liveSnapshot) {

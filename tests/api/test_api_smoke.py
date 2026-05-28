@@ -196,6 +196,7 @@ def _():
     frame = pd.DataFrame({
         'value': list(range(12, 0, -1)),
         'label': [f'row_{value}' for value in range(12, 0, -1)],
+        'created': pd.date_range('2026-01-01', periods=12, freq='D'),
     })
     assets.push(assets.DataFrame(frame), name='table', title='Table', asset_type=assets.DataFrame)
     return
@@ -213,8 +214,9 @@ def _():
         '/api/v1/assets/asset_node/table/prepare',
         json={
             'modifier_overrides': {
-                'page': {'index': 1, 'size': 10},
+                'page': {'index': 0, 'size': 10},
                 'sort': [{'column': 'value', 'direction': 'asc'}],
+                'filters': [{'kind': 'range', 'column': 'value', 'lower': 3, 'upper': 11}],
             }
         },
     )
@@ -222,22 +224,403 @@ def _():
     assert prepared.status_code == 200
     payload = prepared.json()
     assert payload['state'] == 'ready'
-    assert payload['resolved_modifiers']['page'] == {'index': 1, 'size': 10}
+    assert payload['resolved_modifiers']['page'] == {'index': 0, 'size': 10}
     assert payload['resolved_modifiers']['sort'] == [{'column': 'value', 'direction': 'asc'}]
-    assert payload['payloads']['table'] == {
-        'kind': 'table',
-        'rows_total': 12,
-        'columns': [
-            {'id': 'value', 'title': 'value', 'data_type': 'Int64', 'sortable': True},
-            {'id': 'label', 'title': 'label', 'data_type': 'String', 'sortable': True},
-        ],
-        'page': {'index': 1, 'size': 10},
-        'sort': [{'column': 'value', 'direction': 'asc'}],
-        'rows': [
-            {'value': 11, 'label': 'row_11'},
-            {'value': 12, 'label': 'row_12'},
-        ],
+    assert payload['resolved_modifiers']['filters'] == [
+        {'kind': 'range', 'column': 'value', 'value_type': 'numeric', 'lower': 3, 'upper': 11}
+    ]
+    table_payload = payload['payloads']['table']
+    assert table_payload['kind'] == 'table'
+    assert table_payload['rows_total'] == 9
+    assert table_payload['page'] == {'index': 0, 'size': 10}
+    assert table_payload['sort'] == [{'column': 'value', 'direction': 'asc'}]
+    assert [column['id'] for column in table_payload['columns']] == ['value', 'label', 'created']
+    assert table_payload['columns'][0]['filter_kinds'] == ['range', 'value']
+    assert table_payload['columns'][1]['filter_kinds'] == ['value', 'regex']
+    assert table_payload['columns'][2]['filter_kinds'] == ['range', 'value']
+    assert [row['value'] for row in table_payload['rows']] == [3, 4, 5, 6, 7, 8, 9, 10, 11]
+    assert [row['created'] for row in table_payload['rows']] == [
+        '2026-01-10T00:00:00',
+        '2026-01-09T00:00:00',
+        '2026-01-08T00:00:00',
+        '2026-01-07T00:00:00',
+        '2026-01-06T00:00:00',
+        '2026-01-05T00:00:00',
+        '2026-01-04T00:00:00',
+        '2026-01-03T00:00:00',
+        '2026-01-02T00:00:00',
+    ]
+
+    prepared_value_filter = client.post(
+        '/api/v1/assets/asset_node/table/prepare',
+        json={
+            'modifier_overrides': {
+                'filters': [{'kind': 'value', 'column': 'label', 'values': ['row_2', 'row_4']}],
+                'sort': [{'column': 'value', 'direction': 'asc'}],
+            }
+        },
+    )
+
+    assert prepared_value_filter.status_code == 200
+    value_payload = prepared_value_filter.json()
+    assert [row['value'] for row in value_payload['payloads']['table']['rows']] == [2, 4]
+    assert value_payload['resolved_modifiers']['filters'] == [
+        {'kind': 'value', 'column': 'label', 'value_type': 'text', 'values': ['row_2', 'row_4'], 'include_null': False}
+    ]
+
+    prepared_regex_filter = client.post(
+        '/api/v1/assets/asset_node/table/prepare',
+        json={
+            'modifier_overrides': {
+                'filters': [{'kind': 'regex', 'column': 'label', 'pattern': '^row_1[0-2]$'}],
+            }
+        },
+    )
+
+    assert prepared_regex_filter.status_code == 200
+    regex_payload = prepared_regex_filter.json()
+    assert [row['label'] for row in regex_payload['payloads']['table']['rows']] == ['row_12', 'row_11', 'row_10']
+
+    prepared_date_filter = client.post(
+        '/api/v1/assets/asset_node/table/prepare',
+        json={
+            'modifier_overrides': {
+                'filters': [
+                    {
+                        'kind': 'range',
+                        'column': 'created',
+                        'lower': '2026-01-03T00:00:00',
+                        'upper': '2026-01-05T00:00:00',
+                    }
+                ],
+            }
+        },
+    )
+
+    assert prepared_date_filter.status_code == 200
+    date_payload = prepared_date_filter.json()
+    assert [row['value'] for row in date_payload['payloads']['table']['rows']] == [10, 9, 8]
+
+
+def test_histogram_asset_prepare_returns_chart_and_linked_table(tmp_path) -> None:
+    project_root = init_project_root(tmp_path / 'project').root
+    app = create_app(project_path=project_root)
+    client = TestClient(app)
+    container = app.state.container
+
+    opened = client.get('/api/v1/project/snapshot')
+    graph_version = opened.json()['graph']['meta']['graph_version']
+
+    patched = client.patch(
+        '/api/v1/graph',
+        json={
+            'graph_version': graph_version,
+            'operations': [
+                {
+                    'type': 'add_notebook_node',
+                    'node_id': 'asset_node',
+                    'title': 'Asset Node',
+                }
+            ],
+        },
+    )
+    assert patched.status_code == 200
+
+    notebook_path = project_root / 'notebooks' / 'asset_node.py'
+    notebook_path.write_text(
+        """
+import marimo
+
+app = marimo.App()
+
+with app.setup:
+    import pandas as pd
+    from bulletjournal.runtime import assets
+
+@app.cell
+def _():
+    frame = pd.DataFrame({
+        'value': [1, 2, 2, 3, 4, 5, 6, 7, 8, 9],
+        'label': [f'row_{value}' for value in [1, 2, 2, 3, 4, 5, 6, 7, 8, 9]],
+        'segment': ['a', 'a', 'b', 'b', 'a', 'b', 'a', 'b', 'a', 'b'],
+        'weight': [1, 2, 2, 3, 4, 5, 6, 7, 8, 9],
+        'palette': ['red', 'red', 'blue', 'blue', 'green', 'green', 'red', 'blue', 'green', 'red'],
+    })
+    assets.push(
+        assets.Histogram(frame, x='value', bins=4, shape='segment', size='weight', color='palette'),
+        name='value_hist',
+        title='Value histogram',
+        asset_type=assets.Histogram,
+    )
+    return
+""".strip()
+        + '\n',
+        encoding='utf-8',
+    )
+    container.project_service.reparse_notebook_by_path(notebook_path)
+
+    run = client.post('/api/v1/nodes/asset_node/run', json={'mode': 'run_stale', 'action': 'use_stale'})
+    assert run.status_code == 200
+    assert run.json()['status'] == 'succeeded'
+
+    prepared = client.post(
+        '/api/v1/assets/asset_node/value_hist/prepare',
+        json={
+            'modifier_overrides': {
+                'page': {'index': 0, 'size': 10},
+                'sort': [{'column': 'value', 'direction': 'asc'}],
+                'filters': [{'kind': 'range', 'column': 'value', 'lower': 2, 'upper': 8}],
+                'bin_count': 4,
+            },
+            'transient_modifiers': {
+                'selection_range': {'lower': 5, 'upper': 6.5},
+            },
+        },
+    )
+
+    assert prepared.status_code == 200
+    payload = prepared.json()
+    assert payload['resolved_modifiers']['bin_count'] == 4
+    assert payload['resolved_modifiers']['filters'] == [
+        {'kind': 'range', 'column': 'value', 'value_type': 'numeric', 'lower': 2, 'upper': 8}
+    ]
+    histogram_payload = payload['payloads']['main']
+    assert histogram_payload['kind'] == 'histogram'
+    assert histogram_payload['x_column'] == 'value'
+    assert histogram_payload['rows_total'] == 8
+    assert histogram_payload['non_null_rows'] == 8
+    assert [entry['count'] for entry in histogram_payload['bins']] == [3, 1, 2, 2]
+    assert histogram_payload['domain'] == {'min': 2.0, 'max': 8.0}
+    table_payload = payload['payloads']['table']
+    assert table_payload['kind'] == 'table'
+    assert table_payload['rows_total'] == 2
+    assert [row['value'] for row in table_payload['rows']] == [5, 6]
+
+
+def test_scatter_plot_asset_prepare_returns_chart_and_linked_table(tmp_path) -> None:
+    project_root = init_project_root(tmp_path / 'project').root
+    app = create_app(project_path=project_root)
+    client = TestClient(app)
+    container = app.state.container
+
+    opened = client.get('/api/v1/project/snapshot')
+    graph_version = opened.json()['graph']['meta']['graph_version']
+
+    patched = client.patch(
+        '/api/v1/graph',
+        json={
+            'graph_version': graph_version,
+            'operations': [
+                {
+                    'type': 'add_notebook_node',
+                    'node_id': 'asset_node',
+                    'title': 'Asset Node',
+                }
+            ],
+        },
+    )
+    assert patched.status_code == 200
+
+    notebook_path = project_root / 'notebooks' / 'asset_node.py'
+    notebook_path.write_text(
+        """
+import marimo
+
+app = marimo.App()
+
+with app.setup:
+    import pandas as pd
+    from bulletjournal.runtime import assets
+
+@app.cell
+def _():
+    frame = pd.DataFrame({
+        'x': [1, 2, 3, 4, 5, 6],
+        'y': [10, 11, 12, 13, 14, 15],
+        'group': ['circle', 'square', 'circle', 'triangle', 'square', 'triangle'],
+        'weight': [100, 120, 140, 160, 180, 200],
+        'palette': ['red', 'blue', 'red', 'green', 'blue', 'green'],
+        'label': [f'row_{value}' for value in [1, 2, 3, 4, 5, 6]],
+    })
+    assets.push(
+        assets.ScatterPlot(frame, x='x', y='y', shape='group', size='weight', color='palette'),
+        name='xy_plot',
+        title='XY plot',
+        asset_type=assets.ScatterPlot,
+    )
+    return
+""".strip()
+        + '\n',
+        encoding='utf-8',
+    )
+    container.project_service.reparse_notebook_by_path(notebook_path)
+
+    run = client.post('/api/v1/nodes/asset_node/run', json={'mode': 'run_stale', 'action': 'use_stale'})
+    assert run.status_code == 200
+    assert run.json()['status'] == 'succeeded'
+
+    prepared = client.post(
+        '/api/v1/assets/asset_node/xy_plot/prepare',
+        json={
+            'modifier_overrides': {
+                'page': {'index': 0, 'size': 10},
+                'sort': [{'column': 'x', 'direction': 'asc'}],
+                'filters': [{'kind': 'range', 'column': 'x', 'lower': 2, 'upper': 5}],
+            },
+            'transient_modifiers': {
+                'selection_bounds': {
+                    'x': {'lower': 3, 'upper': 4.1},
+                    'y': {'lower': 12, 'upper': 13.1},
+                },
+            },
+        },
+    )
+
+    assert prepared.status_code == 200
+    payload = prepared.json()
+    assert payload['resolved_modifiers']['filters'] == [
+        {'kind': 'range', 'column': 'x', 'value_type': 'numeric', 'lower': 2, 'upper': 5}
+    ]
+    scatter_payload = payload['payloads']['main']
+    assert scatter_payload['kind'] == 'scatter_plot'
+    assert scatter_payload['x_column'] == 'x'
+    assert scatter_payload['y_column'] == 'y'
+    assert scatter_payload['shape_column'] == 'group'
+    assert scatter_payload['size_column'] == 'weight'
+    assert scatter_payload['size_kind'] == 'quantitative'
+    assert scatter_payload['color_column'] == 'palette'
+    assert scatter_payload['color_kind'] == 'nominal'
+    assert scatter_payload['rows_total'] == 4
+    assert scatter_payload['non_null_rows'] == 4
+    assert scatter_payload['plotted_rows'] == 4
+    assert scatter_payload['sampled'] is False
+    assert scatter_payload['domain'] == {
+        'x': {'min': 2.0, 'max': 5.0},
+        'y': {'min': 11.0, 'max': 14.0},
     }
+    assert scatter_payload['points'] == [
+        {'row_index': 1, 'x': 2, 'y': 11, 'shape': 'square', 'size': 120, 'color': 'blue'},
+        {'row_index': 2, 'x': 3, 'y': 12, 'shape': 'circle', 'size': 140, 'color': 'red'},
+        {'row_index': 3, 'x': 4, 'y': 13, 'shape': 'triangle', 'size': 160, 'color': 'green'},
+        {'row_index': 4, 'x': 5, 'y': 14, 'shape': 'square', 'size': 180, 'color': 'blue'},
+    ]
+    table_payload = payload['payloads']['table']
+    assert table_payload['kind'] == 'table'
+    assert table_payload['rows_total'] == 2
+    assert [row['label'] for row in table_payload['rows']] == ['row_3', 'row_4']
+
+    selected_point = client.post(
+        '/api/v1/assets/asset_node/xy_plot/prepare',
+        json={
+            'modifier_overrides': {
+                'page': {'index': 0, 'size': 10},
+                'sort': [{'column': 'x', 'direction': 'asc'}],
+                'filters': [{'kind': 'range', 'column': 'x', 'lower': 2, 'upper': 5}],
+            },
+            'transient_modifiers': {
+                'selected_row_index': 3,
+            },
+        },
+    )
+
+    assert selected_point.status_code == 200
+    selected_point_payload = selected_point.json()['payloads']['table']
+    assert selected_point_payload['rows_total'] == 1
+    assert [row['label'] for row in selected_point_payload['rows']] == ['row_4']
+
+
+def test_pie_chart_asset_prepare_returns_chart_and_linked_table(tmp_path) -> None:
+    project_root = init_project_root(tmp_path / 'project').root
+    app = create_app(project_path=project_root)
+    client = TestClient(app)
+    container = app.state.container
+
+    opened = client.get('/api/v1/project/snapshot')
+    graph_version = opened.json()['graph']['meta']['graph_version']
+
+    patched = client.patch(
+        '/api/v1/graph',
+        json={
+            'graph_version': graph_version,
+            'operations': [
+                {
+                    'type': 'add_notebook_node',
+                    'node_id': 'asset_node',
+                    'title': 'Asset Node',
+                }
+            ],
+        },
+    )
+    assert patched.status_code == 200
+
+    notebook_path = project_root / 'notebooks' / 'asset_node.py'
+    notebook_path.write_text(
+        """
+import marimo
+
+app = marimo.App()
+
+with app.setup:
+    import pandas as pd
+    from bulletjournal.runtime import assets
+
+@app.cell
+def _():
+    frame = pd.DataFrame({
+        'segment': ['a', 'a', 'b', 'c', 'c', 'c', None],
+        'value': [1, 2, 3, 4, 5, 6, 7],
+        'label': ['row_1', 'row_2', 'row_3', 'row_4', 'row_5', 'row_6', 'row_7'],
+    })
+    assets.push(
+        assets.PieChart(frame, category='segment', color={'a': '#f00', 'c': '#00f'}),
+        name='segment_share',
+        title='Segment share',
+        asset_type=assets.PieChart,
+    )
+    return
+""".strip()
+        + '\n',
+        encoding='utf-8',
+    )
+    container.project_service.reparse_notebook_by_path(notebook_path)
+
+    run = client.post('/api/v1/nodes/asset_node/run', json={'mode': 'run_stale', 'action': 'use_stale'})
+    assert run.status_code == 200
+    assert run.json()['status'] == 'succeeded'
+
+    prepared = client.post(
+        '/api/v1/assets/asset_node/segment_share/prepare',
+        json={
+            'modifier_overrides': {
+                'page': {'index': 0, 'size': 10},
+                'sort': [{'column': 'value', 'direction': 'asc'}],
+                'filters': [{'kind': 'range', 'column': 'value', 'lower': 2, 'upper': 6}],
+            },
+            'transient_modifiers': {
+                'selected_categories': ['c'],
+            },
+        },
+    )
+
+    assert prepared.status_code == 200
+    payload = prepared.json()
+    assert payload['resolved_modifiers']['filters'] == [
+        {'kind': 'range', 'column': 'value', 'value_type': 'numeric', 'lower': 2, 'upper': 6}
+    ]
+    pie_payload = payload['payloads']['main']
+    assert pie_payload['kind'] == 'pie_chart'
+    assert pie_payload['category_column'] == 'segment'
+    assert pie_payload['rows_total'] == 5
+    assert pie_payload['non_null_rows'] == 5
+    assert pie_payload['slices'] == [
+        {'value': 'c', 'label': 'c', 'count': 3, 'share': 0.6, 'color': '#00f'},
+        {'value': 'a', 'label': 'a', 'count': 1, 'share': 0.2, 'color': '#f00'},
+        {'value': 'b', 'label': 'b', 'count': 1, 'share': 0.2, 'color': '#94a3b8'},
+    ]
+    table_payload = payload['payloads']['table']
+    assert table_payload['kind'] == 'table'
+    assert table_payload['rows_total'] == 3
+    assert [row['label'] for row in table_payload['rows']] == ['row_4', 'row_5', 'row_6']
 
 
 def test_saved_dashboard_crud_and_conflict_flow(tmp_path) -> None:
@@ -354,6 +737,99 @@ def _():
     assert not (project_root / 'dashboards' / f'{dashboard_id}.json').exists()
     refreshed_snapshot = client.get('/api/v1/project/snapshot').json()
     assert all(node['id'] != dashboard_id for node in refreshed_snapshot['graph']['nodes'])
+
+
+def test_saved_dashboards_refresh_when_notebook_asset_declarations_change(tmp_path) -> None:
+    project_root = init_project_root(tmp_path / 'project').root
+    app = create_app(project_path=project_root)
+    client = TestClient(app)
+    container = app.state.container
+
+    opened = client.get('/api/v1/project/snapshot')
+    graph_version = opened.json()['graph']['meta']['graph_version']
+
+    patched = client.patch(
+        '/api/v1/graph',
+        json={
+            'graph_version': graph_version,
+            'operations': [
+                {
+                    'type': 'add_notebook_node',
+                    'node_id': 'asset_node',
+                    'title': 'Asset Node',
+                }
+            ],
+        },
+    )
+    assert patched.status_code == 200
+
+    notebook_path = project_root / 'notebooks' / 'asset_node.py'
+
+    def write_notebook(asset_lines: list[str]) -> None:
+        notebook_path.write_text(
+            (
+                """
+import marimo
+
+app = marimo.App()
+
+with app.setup:
+    from bulletjournal.runtime import assets
+    import pandas as pd
+
+@app.cell
+def _():
+""".strip()
+                + '\n'
+                + '\n'.join(f'    {line}' for line in asset_lines)
+                + """
+    return
+"""
+            ),
+            encoding='utf-8',
+        )
+
+    write_notebook(
+        [
+            "assets.push(assets.Markdown('hello'), name='notes', title='Notes')",
+        ]
+    )
+    container.project_service.reparse_notebook_by_path(notebook_path)
+
+    saved = client.post('/api/v1/nodes/asset_node/dashboards', json={'title': 'Evaluation Dashboard'})
+    assert saved.status_code == 200
+    dashboard_id = saved.json()['dashboard_id']
+
+    initial_dashboard = client.get(f'/api/v1/dashboards/{dashboard_id}')
+    assert initial_dashboard.status_code == 200
+    assert [panel['asset_name'] for panel in initial_dashboard.json()['panels']] == ['notes']
+
+    write_notebook(
+        [
+            "assets.push(assets.Markdown('hello'), name='report', title='Report')",
+            "assets.push(assets.DataFrame(pd.DataFrame({'value': [1, 2]})), name='table', title='Table', asset_type=assets.DataFrame)",
+        ]
+    )
+    container.project_service.reparse_notebook_by_path(notebook_path)
+
+    refreshed_dashboard = client.get(f'/api/v1/dashboards/{dashboard_id}')
+    assert refreshed_dashboard.status_code == 200
+    assert [panel['asset_name'] for panel in refreshed_dashboard.json()['panels']] == ['report', 'table']
+
+    refreshed_snapshot = client.get('/api/v1/project/snapshot').json()
+    dashboard_node = next(node for node in refreshed_snapshot['graph']['nodes'] if node['id'] == dashboard_id)
+    assert dashboard_node['ui']['panel_count'] == 2
+
+    write_notebook(
+        [
+            "assets.push(assets.DataFrame(pd.DataFrame({'value': [1, 2]})), name='table', title='Table', asset_type=assets.DataFrame)",
+        ]
+    )
+    container.project_service.reparse_notebook_by_path(notebook_path)
+
+    trimmed_dashboard = client.get(f'/api/v1/dashboards/{dashboard_id}')
+    assert trimmed_dashboard.status_code == 200
+    assert [panel['asset_name'] for panel in trimmed_dashboard.json()['panels']] == ['table']
 
 
 def test_graph_patch_rejects_unknown_operation_fields(tmp_path) -> None:

@@ -5,7 +5,7 @@ from typing import Any
 
 from bulletjournal.domain.enums import ArtifactState, NodeKind, ValidationSeverity
 from bulletjournal.domain.errors import InvalidRequestError
-from bulletjournal.domain.models import NotebookInterface, ParsedNotebookContract, ValidationIssue
+from bulletjournal.domain.models import AssetDeclaration, NotebookInterface, ParsedNotebookContract, ValidationIssue
 from bulletjournal.parser import parse_notebook_contract
 from bulletjournal.parser.validation import build_issue
 
@@ -31,9 +31,11 @@ class NotebookService:
         removed_edges: list[dict[str, Any]] = []
         if not blocking_errors:
             removed_edges = self._sync_ports(node_id, previous_interface, contract.interface)
-            self._sync_asset_declarations(node_id, previous_contract, contract)
+            asset_declarations_changed = self._sync_asset_declarations(node_id, previous_contract, contract)
             durable_warnings = self._removed_edge_warnings(node_id=node_id, removed_edges=removed_edges)
             project.state_db.save_notebook_contract(node_id, contract.source_hash, contract.docs, contract.to_dict())
+            if asset_declarations_changed and self.project_service.dashboard_service is not None:
+                self.project_service.dashboard_service.refresh_dashboards_for_source(node_id)
             for warning in durable_warnings:
                 self.project_service.record_notice(
                     issue_id=warning.issue_id,
@@ -169,8 +171,14 @@ class NotebookService:
         node_id: str,
         previous_contract: dict[str, Any] | None,
         current: ParsedNotebookContract,
-    ) -> None:
+    ) -> bool:
         project = self.project_service.require_project()
+        previous_signatures = [
+            _asset_declaration_signature(declaration)
+            for declaration in (previous_contract or {}).get('asset_declarations', [])
+            if isinstance(declaration, dict)
+        ]
+        current_signatures = [_asset_declaration_signature(declaration) for declaration in current.asset_declarations]
         previous_names = {
             str(declaration['name'])
             for declaration in (previous_contract or {}).get('asset_declarations', [])
@@ -182,6 +190,7 @@ class NotebookService:
             project.state_db.ensure_asset_head(node_id, declaration.name, ArtifactState.PENDING)
         for removed_name in sorted(previous_names - current_names):
             project.state_db.delete_asset_state(node_id, removed_name)
+        return previous_signatures != current_signatures
 
 
 def _output_ports(interface_json: dict[str, Any] | None) -> dict[str, dict[str, Any]]:
@@ -210,3 +219,23 @@ def _contract_interface(contract_json: dict[str, Any] | None) -> dict[str, Any] 
     if isinstance(interface, dict):
         return interface
     return contract_json
+
+
+def _asset_declaration_signature(
+    declaration: dict[str, Any] | AssetDeclaration,
+) -> tuple[str, str | None, str | None, str | None, int | None]:
+    if isinstance(declaration, AssetDeclaration):
+        return (
+            declaration.name,
+            declaration.title,
+            declaration.description,
+            declaration.declared_asset_type,
+            declaration.declaration_index,
+        )
+    return (
+        str(declaration.get('name') or '').strip(),
+        None if declaration.get('title') is None else str(declaration.get('title')),
+        None if declaration.get('description') is None else str(declaration.get('description')),
+        None if declaration.get('declared_asset_type') is None else str(declaration.get('declared_asset_type')),
+        int(declaration['declaration_index']) if declaration.get('declaration_index') is not None else None,
+    )

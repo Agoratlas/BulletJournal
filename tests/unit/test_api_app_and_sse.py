@@ -74,9 +74,13 @@ class FakeRunService:
     def __init__(self) -> None:
         self.stop_calls = 0
         self.session_manager = SimpleNamespace(get=lambda session_id: None)
+        self.synced_node_ids: list[str] = []
 
     def stop(self) -> None:
         self.stop_calls += 1
+
+    def sync_editor_session_outputs(self, node_id: str) -> None:
+        self.synced_node_ids.append(node_id)
 
 
 class FakeContainer:
@@ -386,6 +390,7 @@ def test_edit_session_proxy_accepts_upstream_session_cookie(monkeypatch, tmp_pat
             return None
 
     session = SimpleNamespace(
+        node_id='demo_node',
         host='127.0.0.1',
         port=52012,
         base_url='/api/v1/edit/sessions/demo',
@@ -424,6 +429,7 @@ def test_edit_session_proxy_accepts_upstream_session_cookie(monkeypatch, tmp_pat
 
     assert response.status_code == 200
     assert response.text == 'ok'
+    assert container.run_service.synced_node_ids == ['demo_node']
 
 
 def test_edit_session_proxy_forwards_public_http_origin_headers(monkeypatch, tmp_path: Path) -> None:
@@ -582,6 +588,7 @@ def test_create_app_proxies_editor_websocket(monkeypatch, tmp_path: Path) -> Non
             return None
 
     session = SimpleNamespace(
+        node_id='demo_node',
         host='127.0.0.1',
         port=port,
         base_url='/api/v1/edit/sessions/demo',
@@ -601,6 +608,8 @@ def test_create_app_proxies_editor_websocket(monkeypatch, tmp_path: Path) -> Non
     finally:
         server.shutdown()
         thread.join(timeout=2)
+
+    assert container.run_service.synced_node_ids == ['demo_node']
 
 
 def test_create_app_preserves_upstream_websocket_close_reason(monkeypatch, tmp_path: Path) -> None:
@@ -790,6 +799,31 @@ def test_sse_response_filters_projects_and_emits_keepalive(monkeypatch) -> None:
     assert 'event: graph.updated' in chunks[1]
     assert '"project_id": "demo"' in chunks[1]
     assert chunks[2] == ': keepalive\n\n'
+
+
+def test_sse_response_starts_new_connections_from_latest_event_id(monkeypatch) -> None:
+    calls: list[int] = []
+
+    class FakeEventService:
+        def latest_event_id(self) -> int:
+            return 8
+
+        def events_after(self, last_event_id: int):
+            calls.append(last_event_id)
+            return {'reset_required': False, 'earliest_available_id': 1, 'events': []}
+
+    async def fake_sleep(seconds: float) -> None:
+        return None
+
+    monkeypatch.setattr(sse_module.asyncio, 'sleep', fake_sleep)
+    request: Any = FakeRequest([False, True])
+    response = sse_module.sse_response(SimpleNamespace(event_service=FakeEventService()), 'demo', request)
+
+    chunks = asyncio.run(_collect_chunks(response))
+
+    assert calls == [8]
+    assert chunks[0] == 'retry: 1000\n\n'
+    assert chunks[1] == ': keepalive\n\n'
 
 
 def test_resolve_last_event_id_prefers_header_and_defaults_query() -> None:
