@@ -4,6 +4,7 @@ import { AssetPanelFrame } from './shared/layout'
 import { BarChartAssetPanel } from './panels/BarChartAssetPanel'
 import { DataFrameAssetPanel } from './panels/DataFrameAssetPanel'
 import { HistogramAssetPanel } from './panels/HistogramAssetPanel'
+import { IframeAssetPanel } from './panels/IframeAssetPanel'
 import { MarkdownAssetPanel } from './panels/MarkdownAssetPanel'
 import { PieChartAssetPanel } from './panels/PieChartAssetPanel'
 import { ScatterPlotAssetPanel } from './panels/ScatterPlotAssetPanel'
@@ -48,6 +49,10 @@ export function AssetPanel({
 
   if (asset.asset_type === 'markdown') {
     return <MarkdownAssetPanel asset={asset} panelInfo={panelInfo} sectionId={sectionId} />
+  }
+
+  if (asset.asset_type === 'iframe') {
+    return <IframeAssetPanel asset={asset} panelInfo={panelInfo} sectionId={sectionId} />
   }
 
   if (asset.asset_type === 'dataframe') {

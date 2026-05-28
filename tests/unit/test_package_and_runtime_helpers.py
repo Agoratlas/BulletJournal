@@ -85,6 +85,7 @@ def test_runtime_assets_module_exposes_helper_functions_after_submodule_import()
     imported = runtime_package.assets
 
     assert callable(runtime_module.push)
+    assert runtime_module.Iframe is not None
     assert runtime_module.Markdown is not None
     assert runtime_module.DataFrame is not None
     assert runtime_module.ScatterPlot is not None
@@ -100,6 +101,7 @@ def test_asset_packages_only_expose_canonical_asset_class_names() -> None:
         assert module.BarChart is not None
         assert module.DataFrame is not None
         assert module.Histogram is not None
+        assert module.Iframe is not None
         assert module.Markdown is not None
         assert module.PieChart is not None
         assert module.ScatterPlot is not None
@@ -109,6 +111,7 @@ def test_asset_packages_only_expose_canonical_asset_class_names() -> None:
         'BarChartAsset',
         'DataFrameAsset',
         'HistogramAsset',
+        'IframeAsset',
         'MarkdownAsset',
         'PieChartAsset',
         'ScatterPlotAsset',

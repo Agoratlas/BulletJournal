@@ -479,6 +479,45 @@ def test_runtime_context_finalize_asset_push_persists_dataframe_backing_dataset(
     assert head['objects'][0]['object_role'] == 'backing_dataset'
 
 
+def test_runtime_context_finalize_asset_push_persists_iframe_asset(tmp_path) -> None:
+    project_root = init_project_root(tmp_path / 'project').root
+    context = RuntimeContext(
+        project_root=project_root,
+        node_id='producer',
+        run_id='run-iframe-asset',
+        source_hash='producer-source',
+        lineage_mode=LineageMode.MANAGED,
+        bindings={},
+        outputs={},
+        asset_declarations={
+            'embedded_report': AssetDeclaration(
+                node_id='producer',
+                name='embedded_report',
+                title='Embedded report',
+                description='External dashboard',
+                declared_asset_type='iframe',
+                declaration_index=0,
+            )
+        },
+    )
+
+    pushed = context.finalize_asset_push(
+        asset=runtime_assets.Iframe('https://example.com/report'),
+        name='embedded_report',
+        title='Embedded report',
+        description='External dashboard',
+        asset_type=runtime_assets.Iframe,
+    )
+    head = context.db.get_asset_head('producer', 'embedded_report')
+
+    assert pushed['asset_name'] == 'embedded_report'
+    assert head is not None
+    assert head['state'] == ArtifactState.READY.value
+    assert head['asset_type'] == 'iframe'
+    assert head['definition']['iframe_url'] == 'https://example.com/report'
+    assert head['objects'] == []
+
+
 def test_runtime_context_finalize_asset_push_persists_histogram_asset(tmp_path) -> None:
     project_root = init_project_root(tmp_path / 'project').root
     context = RuntimeContext(

@@ -227,6 +227,33 @@ def _(pd=__import__('pandas')):
     assert not any(issue.severity == ValidationSeverity.ERROR for issue in contract.issues)
 
 
+def test_parser_accepts_iframe_asset_type_reference(tmp_path) -> None:
+    notebook = tmp_path / 'iframe_asset_notebook.py'
+    notebook.write_text(
+        """
+import marimo
+
+app = marimo.App()
+
+with app.setup:
+    from bulletjournal.runtime import assets
+
+@app.cell
+def _():
+    assets.push(assets.Iframe('https://example.com/embed'), name='embedded_report', title='Embedded report', asset_type=assets.Iframe)
+    return
+""".strip()
+        + '\n',
+        encoding='utf-8',
+    )
+
+    contract = parse_notebook_contract(notebook, node_id='iframe_asset_notebook')
+
+    assert [declaration.name for declaration in contract.asset_declarations] == ['embedded_report']
+    assert contract.asset_declarations[0].declared_asset_type == 'iframe'
+    assert not any(issue.severity == ValidationSeverity.ERROR for issue in contract.issues)
+
+
 def test_parser_accepts_scatter_plot_asset_type_reference(tmp_path) -> None:
     notebook = tmp_path / 'scatter_plot_asset_notebook.py'
     notebook.write_text(

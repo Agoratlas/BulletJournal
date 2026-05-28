@@ -1,0 +1,30 @@
+import { AssetPanelFrame } from '../shared/layout'
+import type { SimpleAssetPanelProps } from '../shared/types'
+
+export function IframeAssetPanel({ asset, panelInfo, sectionId }: SimpleAssetPanelProps) {
+  const iframeUrl = typeof asset.definition?.iframe_url === 'string' ? asset.definition.iframe_url : null
+
+  if (!iframeUrl) {
+    return (
+      <AssetPanelFrame asset={asset} panelInfo={panelInfo} sectionId={sectionId}>
+        <div className="asset-panel-placeholder">
+          <p>This Iframe asset is missing its URL payload.</p>
+        </div>
+      </AssetPanelFrame>
+    )
+  }
+
+  return (
+    <AssetPanelFrame asset={asset} panelInfo={panelInfo} sectionId={sectionId}>
+      <div className="asset-iframe-panel">
+        <iframe
+          className="asset-iframe-frame"
+          src={iframeUrl}
+          title={asset.title || asset.asset_name}
+          loading="lazy"
+          allowFullScreen
+        />
+      </div>
+    </AssetPanelFrame>
+  )
+}

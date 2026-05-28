@@ -4101,6 +4101,20 @@ input.invalid {
   padding-top: 2px;
 }
 
+.asset-iframe-panel {
+  min-width: 0;
+}
+
+.asset-iframe-frame {
+  display: block;
+  width: 100%;
+  height: min(70vh, 640px);
+  min-height: 320px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--panel-2);
+}
+
 .asset-dataframe-panel {
   display: grid;
   gap: 6px;

@@ -9,6 +9,7 @@ from bulletjournal.assets.serialization import SerializedAssetVersion
 from bulletjournal.assets.types.bar_chart import BarChart, prepare_bar_chart, serialize_bar_chart
 from bulletjournal.assets.types.dataframe import DataFrame, prepare_dataframe, serialize_dataframe
 from bulletjournal.assets.types.histogram import Histogram, prepare_histogram, serialize_histogram
+from bulletjournal.assets.types.iframe import Iframe, serialize_iframe
 from bulletjournal.assets.types.markdown import Markdown, serialize_markdown
 from bulletjournal.assets.types.pie_chart import PieChart, prepare_pie_chart, serialize_pie_chart
 from bulletjournal.assets.types.scatter_plot import ScatterPlot, prepare_scatter_plot, serialize_scatter_plot
@@ -29,6 +30,7 @@ class AssetRegistration:
 
 _REGISTRATIONS = (
     AssetRegistration('markdown', 'Markdown', Markdown, serialize_markdown),
+    AssetRegistration('iframe', 'Iframe', Iframe, serialize_iframe),
     AssetRegistration('dataframe', 'DataFrame', DataFrame, serialize_dataframe, prepare_dataframe),
     AssetRegistration('bar_chart', 'BarChart', BarChart, serialize_bar_chart, prepare_bar_chart),
     AssetRegistration(
