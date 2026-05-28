@@ -9,6 +9,7 @@ import {
   buildChartPadding,
   buildChartTitle,
   buildScaleType,
+  buildVegaLiteChartConfig,
   eventHasShiftKey,
   opaqueColor,
   useAssetChartTheme,
@@ -538,20 +539,7 @@ function buildBarChartVegaLiteSpec(
     background: 'transparent',
     padding: buildChartPadding(overrides.title),
     title: buildChartTitle(overrides.title, defaultOverrides.title.text),
-    config: {
-      view: { stroke: 'transparent' },
-      axis: {
-        domainColor: theme.axisDomainColor,
-        labelColor: theme.axisLabelColor,
-        titleColor: theme.axisTitleColor,
-        gridColor: theme.gridColor,
-        tickColor: theme.axisDomainColor,
-      },
-      title: {
-        color: theme.axisTitleColor,
-        offset: 18,
-      },
-    },
+    config: buildVegaLiteChartConfig(theme),
     data: {
       values: barChart.bars.map((bar, index) => ({
         category_label: bar.label,

@@ -9,6 +9,7 @@ import {
   buildChartPadding,
   buildChartTitle,
   buildScaleType,
+  buildVegaLiteChartConfig,
   formatHistogramBound,
   parseSelectionRangeSignal,
   useAssetChartTheme,
@@ -730,20 +731,7 @@ function buildHistogramVegaLiteSpec(
     background: 'transparent',
     padding: buildChartPadding(overrides.title),
     title: buildChartTitle(overrides.title, defaultOverrides.title.text),
-    config: {
-      view: { stroke: 'transparent' },
-      title: {
-        color: theme.axisTitleColor,
-        offset: 18,
-      },
-      axis: {
-        domainColor: theme.axisDomainColor,
-        tickColor: theme.axisDomainColor,
-        labelColor: theme.axisLabelColor,
-        titleColor: theme.axisTitleColor,
-        gridColor: theme.gridColor,
-      },
-    },
+    config: buildVegaLiteChartConfig(theme),
     data: {
       values: histogram.bins.map((bin) => ({
         ...bin,

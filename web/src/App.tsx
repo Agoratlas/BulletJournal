@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { Suspense, lazy, useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import type { Connection, EdgeChange, Node } from 'reactflow'
 
@@ -8,8 +8,6 @@ import { areaSettings, type AreaColorKey, type AreaTitlePosition } from './lib/a
 import type { ArtifactRecord, DashboardRecord, GraphPatchOperation, LayoutRecord, NodeRecord, ProjectSnapshot, SessionRecord, TemplateRecord } from './lib/types'
 import type { AppNotice, ClipboardGraph, ClipboardNodeRecord, ConstantValueType, CsvSeparator, GraphHistoryEntry, GraphMutationPlan, NodeActionItem, OptimisticGraphState, PaletteEntry, PalettePreviewBlock, PortActionMenuState } from './appTypes'
 import { applyOptimisticDashboardSources, applyOptimisticGraphOperations, areaAddOperationForNode, artifactTargetForPort, blockCreateMode, clampContextMenuPosition, cloneSnapshot, constantAddOperationForNode, copiedTitle, createClientNotice, dashboardAddOperationForNode, edgeIdForPorts, edgeIdsForPort, editorSessionDetails, expandMutationPlan, fileInputAddOperationForNode, formatMarkdownCode, formatRunBlockedMessage, formatRunFailureMessage, freezeBlockMessage, frozenBlockBlockersForDelete, frozenBlockBlockersForRemovedEdges, frozenBlockBlockersForStaleRoots, isEditableTarget, isEditorOpenConflict, isFreezeConflict, isManagedRunFailure, mergeGraphIntoSnapshot, normalizeNodeId, notebookAddOperationForNode, organizerAddOperationForNode, pipelineTemplateNodeRecords, pipelineTopLeftForCenter, SNAPSHOT_REFRESH_EVENTS, SNAPSHOT_REFRESH_THROTTLE_MS, snapToGrid, uniqueCopiedNodeId } from './lib/appHelpers'
-import { NotebookAssetsPage } from './assets/NotebookAssetsPage'
-import { DashboardPage } from './dashboard/DashboardPage'
 import { ArtifactCard } from './components/ArtifactCard'
 import { ArtifactCounts } from './components/ArtifactCounts'
 import { BlockPalette } from './components/BlockPalette'
@@ -21,6 +19,30 @@ import { NodeInspector } from './components/NodeInspector'
 import { NoticeOverlay } from './components/NoticeOverlay'
 import { SessionLoadingScreen } from './components/SessionLoadingScreen'
 import { SimpleMarkdown } from './components/SimpleMarkdown'
+
+const NotebookAssetsPage = lazy(async () => {
+  const module = await import('./assets/NotebookAssetsPage')
+  return { default: module.NotebookAssetsPage }
+})
+
+const DashboardPage = lazy(async () => {
+  const module = await import('./dashboard/DashboardPage')
+  return { default: module.DashboardPage }
+})
+
+function PageLoadFallback({ title, message }: { title: string; message: string }) {
+  return (
+    <div className="assets-page-shell">
+      <div className="canvas-underlay" />
+      <div className="assets-page">
+        <div className="panel assets-empty-state">
+          <h2>{title}</h2>
+          <p>{message}</p>
+        </div>
+      </div>
+    </div>
+  )
+}
 
 type ThemeMode = 'system' | 'light' | 'dark'
 
@@ -4060,25 +4082,29 @@ function App() {
 
   if (savedDashboardId) {
     return (
-      <DashboardPage
-        dashboardId={savedDashboardId}
-        projectTitle={snapshot?.project.title ?? null}
-      />
+      <Suspense fallback={<PageLoadFallback title="Loading dashboard" message="Preparing dashboard assets and panels." />}>
+        <DashboardPage
+          dashboardId={savedDashboardId}
+          projectTitle={snapshot?.project.title ?? null}
+        />
+      </Suspense>
     )
   }
 
   if (notebookAssetsNodeId) {
     const notebookNode = snapshot?.graph.nodes.find((node) => node.id === notebookAssetsNodeId) ?? null
     return (
-      <NotebookAssetsPage
-        nodeId={notebookAssetsNodeId}
-        nodeTitle={notebookNode?.title ?? null}
-        projectTitle={snapshot?.project.title ?? null}
-        existingNodeIds={snapshot?.graph.nodes.map((node) => node.id) ?? []}
-        onOpenDashboard={(dashboardId) => {
-          navigateToPath(dashboardUrl(dashboardId))
-        }}
-      />
+      <Suspense fallback={<PageLoadFallback title="Loading notebook assets" message="Preparing notebook asset viewers." />}>
+        <NotebookAssetsPage
+          nodeId={notebookAssetsNodeId}
+          nodeTitle={notebookNode?.title ?? null}
+          projectTitle={snapshot?.project.title ?? null}
+          existingNodeIds={snapshot?.graph.nodes.map((node) => node.id) ?? []}
+          onOpenDashboard={(dashboardId) => {
+            navigateToPath(dashboardUrl(dashboardId))
+          }}
+        />
+      </Suspense>
     )
   }
 

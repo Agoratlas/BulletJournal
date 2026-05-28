@@ -9,6 +9,7 @@ import {
   buildChartPadding,
   buildChartTitle,
   buildScaleType,
+  buildVegaLiteChartConfig,
   combineScatterPlotSelection,
   formatHistogramBound,
   parseSelectionRangeSignal,
@@ -702,24 +703,7 @@ function buildScatterPlotVegaLiteSpec(
     background: 'transparent',
     padding: buildChartPadding(overrides.title),
     title: buildChartTitle(overrides.title, defaultOverrides.title.text),
-    config: {
-      view: { stroke: 'transparent' },
-      title: {
-        color: theme.axisTitleColor,
-        offset: 18,
-      },
-      axis: {
-        domainColor: theme.axisDomainColor,
-        tickColor: theme.axisDomainColor,
-        labelColor: theme.axisLabelColor,
-        titleColor: theme.axisTitleColor,
-        gridColor: theme.gridColor,
-      },
-      legend: {
-        labelColor: theme.legendLabelColor,
-        titleColor: theme.legendTitleColor,
-      },
-    },
+    config: buildVegaLiteChartConfig(theme),
     data: {
       values: scatterPlot.points.map((point) => ({
         ...point,

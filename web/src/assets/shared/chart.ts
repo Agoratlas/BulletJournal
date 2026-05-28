@@ -19,6 +19,42 @@ export function buildScaleType(scale: ChartAxisOverrides['scale']): 'linear' | '
   return scale === 'log' ? 'log' : 'linear'
 }
 
+export const VEGA_PANEL_FONT_FAMILY = 'Barlow'
+
+export function buildVegaLiteChartConfig(theme: AssetChartTheme) {
+  return {
+    font: VEGA_PANEL_FONT_FAMILY,
+    view: { stroke: 'transparent' },
+    title: {
+      color: theme.axisTitleColor,
+      offset: 18,
+      font: VEGA_PANEL_FONT_FAMILY,
+    },
+    axis: {
+      domainColor: theme.axisDomainColor,
+      tickColor: theme.axisDomainColor,
+      labelColor: theme.axisLabelColor,
+      labelFont: VEGA_PANEL_FONT_FAMILY,
+      titleColor: theme.axisTitleColor,
+      titleFont: VEGA_PANEL_FONT_FAMILY,
+      gridColor: theme.gridColor,
+    },
+    legend: {
+      labelColor: theme.legendLabelColor,
+      labelFont: VEGA_PANEL_FONT_FAMILY,
+      titleColor: theme.legendTitleColor,
+      titleFont: VEGA_PANEL_FONT_FAMILY,
+    },
+    header: {
+      labelFont: VEGA_PANEL_FONT_FAMILY,
+      titleFont: VEGA_PANEL_FONT_FAMILY,
+    },
+    text: {
+      font: VEGA_PANEL_FONT_FAMILY,
+    },
+  }
+}
+
 export function buildChartTitle(overrides: ChartTitleOverrides, defaultText: string) {
   if (overrides.hideTitle) {
     return undefined

@@ -4,7 +4,15 @@ import embed, { type Result as VegaEmbedResult, type VisualizationSpec } from 'v
 
 import { prepareAsset } from '../../lib/api'
 import type { AssetFilter, AssetSort, PreparedPieChartPayload } from '../../lib/types'
-import { buildChartPadding, buildChartTitle, eventHasShiftKey, formatPieChartShare, opaqueColor, useAssetChartTheme } from '../shared/chart'
+import {
+  buildChartPadding,
+  buildChartTitle,
+  buildVegaLiteChartConfig,
+  eventHasShiftKey,
+  formatPieChartShare,
+  opaqueColor,
+  useAssetChartTheme,
+} from '../shared/chart'
 import {
   AssetPanelFrame,
   DeferredModifierInput,
@@ -621,13 +629,7 @@ function buildPieChartVegaLiteSpec(
     background: 'transparent',
     padding: buildChartPadding(overrides.title),
     title: buildChartTitle(overrides.title, defaultOverrides.title.text),
-    config: {
-      view: { stroke: 'transparent' },
-      title: {
-        color: theme.axisTitleColor,
-        offset: 18,
-      },
-    },
+    config: buildVegaLiteChartConfig(theme),
     data: {
       values: displaySlices.map((slice, index) => {
         const labelText = pieChartLabelText(slice.label, slice.share, overrides.showPercentages)

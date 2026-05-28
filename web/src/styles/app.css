@@ -1,3 +1,35 @@
+@font-face {
+  font-family: 'Barlow';
+  src: url('/fonts/Barlow-Medium.ttf') format('truetype');
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Barlow';
+  src: url('/fonts/Barlow-Medium.ttf') format('truetype');
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Barlow';
+  src: url('/fonts/Barlow-Bold.ttf') format('truetype');
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Barlow';
+  src: url('/fonts/Barlow-Bold.ttf') format('truetype');
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+}
+
 :root {
   --bg: #f4f0e6;
   --bg-strong: #fcfaf4;
@@ -4364,10 +4396,15 @@ input.invalid {
 .asset-histogram-chart-shell .vega-embed {
   padding: 0;
   background: transparent;
+  font-family: "Barlow", sans-serif;
 }
 
 .asset-histogram-chart-shell .vega-embed summary {
   display: none;
+}
+
+.vg-tooltip {
+  font-family: "Barlow", sans-serif !important;
 }
 
 .asset-dataframe-shell {
