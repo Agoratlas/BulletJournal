@@ -518,6 +518,59 @@ def test_runtime_context_finalize_asset_push_persists_iframe_asset(tmp_path) -> 
     assert head['objects'] == []
 
 
+def test_runtime_context_asset_head_uses_versioned_metadata_after_declaration_changes(tmp_path) -> None:
+    project_root = init_project_root(tmp_path / 'project').root
+    context = RuntimeContext(
+        project_root=project_root,
+        node_id='producer',
+        run_id='run-versioned-asset-metadata',
+        source_hash='producer-source',
+        lineage_mode=LineageMode.MANAGED,
+        bindings={},
+        outputs={},
+        asset_declarations={
+            'notes': AssetDeclaration(
+                node_id='producer',
+                name='notes',
+                title='Original notes',
+                description='Original description',
+                declared_asset_type='markdown',
+                declaration_index=0,
+            )
+        },
+    )
+
+    context.finalize_asset_push(
+        asset=runtime_assets.Markdown('hello'),
+        name='notes',
+        title='Original notes',
+        description='Original description',
+        asset_type=runtime_assets.Markdown,
+    )
+    context.db.replace_asset_declarations(
+        'producer',
+        'updated-source-hash',
+        [
+            AssetDeclaration(
+                node_id='producer',
+                name='notes',
+                title='Renamed notes',
+                description='Updated description',
+                declared_asset_type='markdown',
+                declaration_index=0,
+            )
+        ],
+    )
+
+    head = context.db.get_asset_head('producer', 'notes')
+
+    assert head is not None
+    assert head['title'] == 'Original notes'
+    assert head['description'] == 'Original description'
+    assert head['definition']['display_title'] == 'Original notes'
+    assert head['definition']['description'] == 'Original description'
+
+
 def test_runtime_context_finalize_asset_push_persists_histogram_asset(tmp_path) -> None:
     project_root = init_project_root(tmp_path / 'project').root
     context = RuntimeContext(
@@ -673,6 +726,7 @@ def test_runtime_context_finalize_asset_push_persists_scatter_plot_asset(tmp_pat
                 {
                     'x': [1, 2, 3],
                     'y': [4, 5, 6],
+                    'name': ['one', 'two', 'three'],
                     'group': ['a', 'b', 'a'],
                     'weight': [10, 20, 30],
                     'palette': ['red', 'blue', 'green'],
@@ -680,9 +734,11 @@ def test_runtime_context_finalize_asset_push_persists_scatter_plot_asset(tmp_pat
             ),
             x='x',
             y='y',
+            label='name',
             shape='group',
             size='weight',
             color='palette',
+            size_scaling=1.8,
             min_point_size=24,
             max_point_size=160,
             show_legend=False,
@@ -719,12 +775,14 @@ def test_runtime_context_finalize_asset_push_persists_scatter_plot_asset(tmp_pat
     assert head['asset_type'] == 'scatter_plot'
     assert head['definition']['scatter_x_column'] == 'x'
     assert head['definition']['scatter_y_column'] == 'y'
+    assert head['definition']['scatter_label_column'] == 'name'
     assert head['definition']['scatter_shape_column'] == 'group'
     assert head['definition']['scatter_size_column'] == 'weight'
     assert head['definition']['scatter_color_column'] == 'palette'
     assert 'encodings' not in head['definition']
     assert head['default_modifiers']['min_point_size'] == 24
     assert head['default_modifiers']['max_point_size'] == 160
+    assert head['default_modifiers']['size_scaling'] == 1.8
     assert head['default_modifiers']['show_legend'] is False
     assert head['default_modifiers']['shape_style'] == 'filled'
     assert head['default_modifiers']['x_axis']['label'] == 'Custom x'
@@ -733,6 +791,7 @@ def test_runtime_context_finalize_asset_push_persists_scatter_plot_asset(tmp_pat
     assert {entry['id'] for entry in head['modifier_schema']} >= {
         'min_point_size',
         'max_point_size',
+        'size_scaling',
         'show_legend',
         'shape_style',
         'x_axis',
@@ -781,6 +840,7 @@ def test_runtime_context_finalize_asset_push_persists_pie_chart_asset(tmp_path) 
             label_position=130,
             merge_threshold=4,
             border_thickness=2,
+            category_order=['c', 'a'],
             merged_category_label='Remainder',
             show_merged_category=False,
             show_percentages=True,
@@ -810,6 +870,7 @@ def test_runtime_context_finalize_asset_push_persists_pie_chart_asset(tmp_path) 
     assert head['default_modifiers']['label_position'] == 130
     assert head['default_modifiers']['merge_threshold'] == 4
     assert head['default_modifiers']['border_thickness'] == 2
+    assert head['default_modifiers']['category_order'] == ['c', 'a']
     assert head['default_modifiers']['merged_category_label'] == 'Remainder'
     assert head['default_modifiers']['show_merged_category'] is False
     assert head['default_modifiers']['show_percentages'] is True
@@ -821,6 +882,7 @@ def test_runtime_context_finalize_asset_push_persists_pie_chart_asset(tmp_path) 
         'label_position',
         'merge_threshold',
         'border_thickness',
+        'category_order',
         'merged_category_label',
         'show_merged_category',
         'show_percentages',
@@ -866,6 +928,7 @@ def test_runtime_context_finalize_asset_push_persists_bar_chart_asset(tmp_path) 
             aggregation='mean',
             bar_width=75,
             border_thickness=1.5,
+            category_order='value_asc',
             x_axis={
                 'label_size': 11,
                 'label': 'Segment',
@@ -908,12 +971,14 @@ def test_runtime_context_finalize_asset_push_persists_bar_chart_asset(tmp_path) 
     ]
     assert head['default_modifiers']['bar_width'] == 75
     assert head['default_modifiers']['border_thickness'] == 1.5
+    assert head['default_modifiers']['category_order'] == 'value_asc'
     assert head['default_modifiers']['x_axis']['label'] == 'Segment'
     assert head['default_modifiers']['y_axis']['label'] == 'Average value'
     assert head['default_modifiers']['title']['position'] == 'bottom'
     assert {entry['id'] for entry in head['modifier_schema']} >= {
         'bar_width',
         'border_thickness',
+        'category_order',
         'x_axis',
         'y_axis',
         'title',

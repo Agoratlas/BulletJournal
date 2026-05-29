@@ -541,7 +541,7 @@ def _():
         'label': [f'row_{value}' for value in [1, 2, 3, 4, 5, 6]],
     })
     assets.push(
-        assets.ScatterPlot(frame, x='x', y='y', shape='group', size='weight', color='palette'),
+        assets.ScatterPlot(frame, x='x', y='y', label='label', shape='group', size='weight', color='palette'),
         name='xy_plot',
         title='XY plot',
         asset_type=assets.ScatterPlot,
@@ -583,9 +583,11 @@ def _():
     assert scatter_payload['kind'] == 'scatter_plot'
     assert scatter_payload['x_column'] == 'x'
     assert scatter_payload['y_column'] == 'y'
+    assert scatter_payload['label_column'] == 'label'
     assert scatter_payload['shape_column'] == 'group'
     assert scatter_payload['size_column'] == 'weight'
     assert scatter_payload['size_kind'] == 'quantitative'
+    assert scatter_payload['size_domain'] == {'min': 120.0, 'max': 180.0}
     assert scatter_payload['color_column'] == 'palette'
     assert scatter_payload['color_kind'] == 'nominal'
     assert scatter_payload['rows_total'] == 4
@@ -597,10 +599,10 @@ def _():
         'y': {'min': 11.0, 'max': 14.0},
     }
     assert scatter_payload['points'] == [
-        {'row_index': 1, 'x': 2, 'y': 11, 'shape': 'square', 'size': 120, 'color': 'blue'},
-        {'row_index': 2, 'x': 3, 'y': 12, 'shape': 'circle', 'size': 140, 'color': 'red'},
-        {'row_index': 3, 'x': 4, 'y': 13, 'shape': 'triangle', 'size': 160, 'color': 'green'},
-        {'row_index': 4, 'x': 5, 'y': 14, 'shape': 'square', 'size': 180, 'color': 'blue'},
+        {'row_index': 1, 'x': 2, 'y': 11, 'label': 'row_2', 'shape': 'square', 'size': 120, 'color': 'blue'},
+        {'row_index': 2, 'x': 3, 'y': 12, 'label': 'row_3', 'shape': 'circle', 'size': 140, 'color': 'red'},
+        {'row_index': 3, 'x': 4, 'y': 13, 'label': 'row_4', 'shape': 'triangle', 'size': 160, 'color': 'green'},
+        {'row_index': 4, 'x': 5, 'y': 14, 'label': 'row_5', 'shape': 'square', 'size': 180, 'color': 'blue'},
     ]
     table_payload = payload['payloads']['table']
     assert table_payload['kind'] == 'table'
@@ -829,14 +831,107 @@ def _():
     assert bar_payload['rows_total'] == 5
     assert bar_payload['non_null_rows'] == 5
     assert bar_payload['bars'] == [
-        {'value': 'c', 'label': 'c', 'aggregate_value': 15, 'color': '#00f'},
-        {'value': 'b', 'label': 'b', 'aggregate_value': 3, 'color': '#94a3b8'},
-        {'value': 'a', 'label': 'a', 'aggregate_value': 2, 'color': '#f00'},
+        {'value': 'a', 'label': 'a', 'aggregate_value': 2, 'color': '#f00', 'category_index': 0},
+        {'value': 'b', 'label': 'b', 'aggregate_value': 3, 'color': '#94a3b8', 'category_index': 1},
+        {'value': 'c', 'label': 'c', 'aggregate_value': 15, 'color': '#00f', 'category_index': 2},
     ]
     table_payload = payload['payloads']['table']
     assert table_payload['kind'] == 'table'
     assert table_payload['rows_total'] == 3
     assert [row['label'] for row in table_payload['rows']] == ['row_4', 'row_5', 'row_6']
+
+
+def test_chart_asset_prepare_respects_category_order_overrides(tmp_path) -> None:
+    project_root = init_project_root(tmp_path / 'project').root
+    app = create_app(project_path=project_root)
+    client = TestClient(app)
+    container = app.state.container
+
+    opened = client.get('/api/v1/project/snapshot')
+    graph_version = opened.json()['graph']['meta']['graph_version']
+
+    patched = client.patch(
+        '/api/v1/graph',
+        json={
+            'graph_version': graph_version,
+            'operations': [
+                {
+                    'type': 'add_notebook_node',
+                    'node_id': 'asset_node',
+                    'title': 'Asset Node',
+                }
+            ],
+        },
+    )
+    assert patched.status_code == 200
+
+    notebook_path = project_root / 'notebooks' / 'asset_node.py'
+    notebook_path.write_text(
+        """
+import marimo
+
+app = marimo.App()
+
+with app.setup:
+    import pandas as pd
+    from bulletjournal.runtime import assets
+
+@app.cell
+def _():
+    frame = pd.DataFrame({
+        'segment': ['a', 'a', 'b', 'c', 'c', 'c', None],
+        'value': [1, 2, 3, 4, 5, 6, 7],
+    })
+    assets.push(
+        assets.PieChart(frame, category='segment'),
+        name='segment_share',
+        title='Segment share',
+        asset_type=assets.PieChart,
+    )
+    assets.push(
+        assets.BarChart(frame, category='segment', value='value'),
+        name='segment_totals',
+        title='Segment totals',
+        asset_type=assets.BarChart,
+    )
+    return
+""".strip()
+        + '\n',
+        encoding='utf-8',
+    )
+    container.project_service.reparse_notebook_by_path(notebook_path)
+
+    run = client.post('/api/v1/nodes/asset_node/run', json={'mode': 'run_stale', 'action': 'use_stale'})
+    assert run.status_code == 200
+    assert run.json()['status'] == 'succeeded'
+
+    pie_prepared = client.post(
+        '/api/v1/assets/asset_node/segment_share/prepare',
+        json={
+            'modifier_overrides': {
+                'category_order': ['b'],
+            },
+            'transient_modifiers': {},
+        },
+    )
+    assert pie_prepared.status_code == 200
+    assert [slice_entry['value'] for slice_entry in pie_prepared.json()['payloads']['main']['slices']] == [
+        'b',
+        'c',
+        'a',
+    ]
+
+    bar_prepared = client.post(
+        '/api/v1/assets/asset_node/segment_totals/prepare',
+        json={
+            'modifier_overrides': {
+                'category_order': 'value_desc',
+            },
+            'transient_modifiers': {},
+        },
+    )
+    assert bar_prepared.status_code == 200
+    assert [bar_entry['value'] for bar_entry in bar_prepared.json()['payloads']['main']['bars']] == ['c', 'a', 'b']
 
 
 def test_saved_dashboard_crud_and_conflict_flow(tmp_path) -> None:
@@ -2016,6 +2111,50 @@ def test_uploaded_dataframe_constant_supports_semicolon_separator(tmp_path) -> N
     assert preview['kind'] == 'dataframe'
     assert preview['rows'] == 2
     assert preview['column_names'] == ['name', 'value']
+
+
+def test_uploaded_dataframe_constant_handles_large_mixed_type_columns(tmp_path) -> None:
+    project_root = init_project_root(tmp_path / 'project').root
+    app = create_app(project_path=project_root)
+    client = TestClient(app)
+
+    opened = client.get('/api/v1/project/snapshot')
+    graph_version = opened.json()['graph']['meta']['graph_version']
+
+    created = client.patch(
+        '/api/v1/graph',
+        json={
+            'graph_version': graph_version,
+            'operations': [
+                {
+                    'type': 'add_constant_node',
+                    'node_id': 'frame_source',
+                    'title': 'Frame Source',
+                    'data_type': 'pandas.DataFrame',
+                }
+            ],
+        },
+    )
+    assert created.status_code == 200
+
+    leading_rows = [f'{2000 + (index % 20)},1' for index in range(220_000)]
+    trailing_rows = [f'{2000 + (index % 20)},1' for index in range(220_000)]
+    csv_bytes = ('year,value\n' + '\n'.join([*leading_rows, 'unknown,1', *trailing_rows]) + '\n').encode('utf-8')
+
+    upload = client.post(
+        '/api/v1/constants/frame_source/upload',
+        content=csv_bytes,
+        headers={'X-Filename': 'frame.csv', 'Content-Type': 'text/csv'},
+    )
+    assert upload.status_code == 200
+
+    artifact = client.get('/api/v1/artifacts/frame_source/value')
+    assert artifact.status_code == 200
+    preview = artifact.json()['preview']
+    assert preview['kind'] == 'dataframe'
+    assert preview['rows'] == 440_001
+    assert preview['column_names'] == ['year', 'value']
+    assert preview['sample'][0]['year'] == '2000'
 
 
 def test_file_input_node_can_use_custom_artifact_name(tmp_path) -> None:

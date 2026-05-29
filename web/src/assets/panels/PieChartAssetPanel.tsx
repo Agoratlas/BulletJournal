@@ -95,7 +95,7 @@ export function PieChartAssetPanel({
   const [chartOverrides, setChartOverrides] = useState<PieChartChartOverrides>(initialChartOverrides)
   const [selectedCategories, setSelectedCategories] = useState<PieChartSelectionValue[]>([])
   const [pageInput, setPageInput] = useState(String(initialTableState.page.index + 1))
-  const overrideIncompatible = Boolean(
+  const requiresOverrideValidation = Boolean(
     persistedState
     && persistedState.override_schema_hash !== null
     && asset.override_schema_hash !== null
@@ -115,6 +115,16 @@ export function PieChartAssetPanel({
     filters,
   })
   const localChartOverridesKey = stableValueKey(chartOverrides)
+  const modifierOverrides = useMemo(
+    () => buildModifierOverridesRecord({
+      page: { index: pageIndex, size: pageSize },
+      sort: sort ? [sort] : [],
+      filters,
+      ...serializePieChartModifierValues(chartOverrides),
+    }, asset.default_modifiers),
+    [asset.default_modifiers, chartOverrides, filters, pageIndex, pageSize, sort],
+  )
+  const overrideValidationKey = requiresOverrideValidation ? stableValueKey(modifierOverrides) : null
 
   useEffect(() => {
     if (localStateKey === externalStateKey) {
@@ -144,30 +154,6 @@ export function PieChartAssetPanel({
   }, [externalChartOverridesKey, externalStateKey, localChartOverridesKey, localStateKey])
 
   useEffect(() => {
-    if (overrideIncompatible || isApplyingPersistedStateRef.current) {
-      return
-    }
-    const modifierOverrides = buildModifierOverridesRecord({
-      page: { index: pageIndex, size: pageSize },
-      sort: sort ? [sort] : [],
-      filters,
-      ...serializePieChartModifierValues(chartOverrides),
-    }, asset.default_modifiers)
-    const nextState = {
-      modifier_overrides: modifierOverrides,
-      override_schema_hash: asset.override_schema_hash,
-    }
-    if (
-      persistedState
-      && persistedState.override_schema_hash === nextState.override_schema_hash
-      && stableValueKey(persistedState.modifier_overrides) === stableValueKey(nextState.modifier_overrides)
-    ) {
-      return
-    }
-    onPersistedStateChange?.(nextState)
-  }, [asset.default_modifiers, asset.override_schema_hash, chartOverrides, filters, onPersistedStateChange, overrideIncompatible, pageIndex, pageSize, persistedState, sort])
-
-  useEffect(() => {
     setSelectedCategories([])
   }, [asset.current_asset_version_id, filtersKey])
 
@@ -183,21 +169,20 @@ export function PieChartAssetPanel({
       sort?.direction ?? null,
       filtersKey,
       selectionKey,
+      persistedState?.override_schema_hash ?? null,
+      overrideValidationKey,
       stableValueKey(preparePanelContext),
     ],
     queryFn: () => prepareAsset(prepareNodeId, prepareAssetName, {
       asset_version_id: asset.current_asset_version_id,
-      modifier_overrides: {
-        page: { index: pageIndex, size: pageSize },
-        sort: sort ? [sort] : [],
-        filters,
-      },
+      modifier_overrides: modifierOverrides,
       transient_modifiers: selectedCategories.length ? {
         selected_categories: selectedCategories,
       } : {},
       panel_context: preparePanelContext,
+      persisted_override_schema_hash: persistedState?.override_schema_hash ?? null,
     }),
-    enabled: asset.current_asset_version_id !== null && !overrideIncompatible,
+    enabled: asset.current_asset_version_id !== null,
     placeholderData: (previousData) => previousData,
     retry: false,
   })
@@ -205,6 +190,9 @@ export function PieChartAssetPanel({
   const response = prepareQuery.data ?? null
   const mainPayload = response?.payloads.main ?? null
   const pieChart = mainPayload?.kind === 'pie_chart' ? mainPayload : null
+  const overrideIncompatible = Boolean(response?.errors.some((error) => error.code === 'override_incompatible'))
+  const overrideValidationBlocked = requiresOverrideValidation && (prepareQuery.isFetching || !prepareQuery.isSuccess)
+  const prepareErrors = response?.errors.filter((error) => error.code !== 'override_incompatible') ?? []
   const isPanelReady = overrideIncompatible || prepareQuery.isError || prepareQuery.isSuccess
   const table = response?.payloads.table ?? null
   const resolvedPage = table?.page ?? { index: pageIndex, size: pageSize }
@@ -242,6 +230,24 @@ export function PieChartAssetPanel({
   useEffect(() => {
     onReadyStateChange?.(isPanelReady)
   }, [isPanelReady, onReadyStateChange])
+
+  useEffect(() => {
+    if (overrideIncompatible || overrideValidationBlocked || isApplyingPersistedStateRef.current) {
+      return
+    }
+    const nextState = {
+      modifier_overrides: modifierOverrides,
+      override_schema_hash: asset.override_schema_hash,
+    }
+    if (
+      persistedState
+      && persistedState.override_schema_hash === nextState.override_schema_hash
+      && stableValueKey(persistedState.modifier_overrides) === stableValueKey(nextState.modifier_overrides)
+    ) {
+      return
+    }
+    onPersistedStateChange?.(nextState)
+  }, [asset.override_schema_hash, modifierOverrides, onPersistedStateChange, overrideIncompatible, overrideValidationBlocked, persistedState])
 
   useEffect(() => {
     if (pieChart === null) {
@@ -433,7 +439,7 @@ export function PieChartAssetPanel({
     <AssetPanelFrame asset={asset} panelInfo={panelInfo} settingsTitle="Modifier overrides" settingsBody={settingsBody} settingsActive={hasSettingsOverrides} sectionId={sectionId} frameVariant={frameVariant}>
       <div className="asset-dataframe-panel asset-pie-chart-panel">
         {overrideIncompatible ? <OverrideIncompatibleNotice onReset={onPersistedStateChange ? handleResetOverrides : undefined} /> : null}
-        <PrepareErrorsNotice errors={response?.errors ?? []} />
+        <PrepareErrorsNotice errors={prepareErrors} />
         <ResizableDatavizContent height={resolvedPanelHeight} onHeightChange={onPanelHeightChange}>
           {(chartHeight) => (
             <>
@@ -464,7 +470,7 @@ export function PieChartAssetPanel({
             activeSort={resolvedSort}
             activeFilters={resolvedFilters}
             viewerMode={viewerMode}
-            disabled={overrideIncompatible || prepareQuery.isFetching}
+            disabled={overrideIncompatible || overrideValidationBlocked || prepareQuery.isFetching}
             totalRows={baseRows}
             displayedRows={displayedRows}
             columnCount={columnCount}
@@ -769,17 +775,17 @@ function preparePieChartDisplaySlices(
     isMerged: false,
   }))
   if (mergeThreshold <= 0) {
-    return sortPieChartDisplaySlices(baseSlices)
+    return baseSlices
   }
   const retainedSlices = baseSlices.filter((slice) => slice.share * 100 >= mergeThreshold)
   const mergedSlices = baseSlices.filter((slice) => slice.share * 100 < mergeThreshold)
   if (!mergedSlices.length) {
-    return sortPieChartDisplaySlices(retainedSlices)
+    return retainedSlices
   }
   if (!overrides.showMergedCategory) {
-    return sortPieChartDisplaySlices(retainedSlices)
+    return retainedSlices
   }
-  return sortPieChartDisplaySlices([
+  return [
     ...retainedSlices,
     {
       key: `merged:${pieChartSelectionKey(mergedSlices.flatMap((slice) => slice.rawValues))}`,
@@ -790,19 +796,7 @@ function preparePieChartDisplaySlices(
       rawValues: mergedSlices.flatMap((slice) => slice.rawValues),
       isMerged: true,
     },
-  ])
-}
-
-function sortPieChartDisplaySlices(slices: PieChartDisplaySlice[]): PieChartDisplaySlice[] {
-  return [...slices].sort((left, right) => {
-    if (left.isMerged !== right.isMerged) {
-      return left.isMerged ? 1 : -1
-    }
-    if (right.count !== left.count) {
-      return right.count - left.count
-    }
-    return left.label.localeCompare(right.label)
-  })
+  ]
 }
 
 function pieChartVisibleSelection(

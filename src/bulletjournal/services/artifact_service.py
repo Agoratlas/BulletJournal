@@ -152,10 +152,13 @@ class ArtifactService:
         if separator not in {',', ';', '\t'}:
             raise InvalidRequestError('CSV separator must be a comma, semicolon, or tab.')
         try:
-            frame = pd.read_csv(io.BytesIO(content), sep=separator)
+            frame = pd.read_csv(io.BytesIO(content), sep=separator, low_memory=False)
         except Exception as exc:  # pragma: no cover - pandas error surface varies by version
             raise InvalidRequestError(f'Failed to parse CSV upload for constant block: {exc}.') from exc
-        return self.project_service.require_project().object_store.persist_value(frame, 'pandas.DataFrame')
+        try:
+            return self.project_service.require_project().object_store.persist_value(frame, 'pandas.DataFrame')
+        except Exception as exc:  # pragma: no cover - parquet backend error surface varies by version
+            raise InvalidRequestError(f'Failed to store CSV upload for constant block: {exc}.') from exc
 
     def _save_managed_artifact(
         self,

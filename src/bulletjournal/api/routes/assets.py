@@ -31,4 +31,5 @@ def prepare_asset(node_id: str, asset_name: str, payload: AssetPrepareRequest, r
         modifier_overrides=payload.modifier_overrides,
         transient_modifiers=payload.transient_modifiers,
         panel_context=payload.panel_context,
+        persisted_override_schema_hash=payload.persisted_override_schema_hash,
     )

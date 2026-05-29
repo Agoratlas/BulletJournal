@@ -12,4 +12,4 @@ web/node_modules/
 web/*.tsbuildinfo
 web/.vite/
 
-testproject/
+testproject*/

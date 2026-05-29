@@ -102,9 +102,18 @@ export type HistogramChartOverrides = SharedChartOverrides & {
   borderThickness: string
 }
 
+export type BarChartGroupMode = 'grouped' | 'stacked'
+
+export type BarChartChartOverrides = HistogramChartOverrides & {
+  groupMode: BarChartGroupMode
+  groupNormalize: boolean
+  groupSpacing: number
+}
+
 export type ScatterPlotChartOverrides = SharedChartOverrides & {
   minPointSize: string
   maxPointSize: string
+  sizeScaling: number
   showLegend: boolean
   shapeStyle: ScatterPlotShapeStyle
 }

@@ -53,7 +53,7 @@ export function DataFrameAssetPanel({
   const [sort, setSort] = useState<AssetSort | null>(initialTableState.sort)
   const [filters, setFilters] = useState<AssetFilter[]>(initialTableState.filters)
   const [pageInput, setPageInput] = useState(String(initialTableState.page.index + 1))
-  const overrideIncompatible = Boolean(
+  const requiresOverrideValidation = Boolean(
     persistedState
     && persistedState.override_schema_hash !== null
     && asset.override_schema_hash !== null
@@ -70,6 +70,15 @@ export function DataFrameAssetPanel({
     sort,
     filters,
   })
+  const modifierOverrides = useMemo(
+    () => buildModifierOverridesRecord({
+      page: { index: pageIndex, size: pageSize },
+      sort: sort ? [sort] : [],
+      filters,
+    }, asset.default_modifiers),
+    [asset.default_modifiers, filters, pageIndex, pageSize, sort],
+  )
+  const overrideValidationKey = requiresOverrideValidation ? stableValueKey(modifierOverrides) : null
 
   useEffect(() => {
     if (localStateKey === externalStateKey) {
@@ -89,29 +98,6 @@ export function DataFrameAssetPanel({
     }
   }, [externalStateKey, localStateKey])
 
-  useEffect(() => {
-    if (overrideIncompatible || isApplyingPersistedStateRef.current) {
-      return
-    }
-    const modifierOverrides = buildModifierOverridesRecord({
-      page: { index: pageIndex, size: pageSize },
-      sort: sort ? [sort] : [],
-      filters,
-    }, asset.default_modifiers)
-    const nextState = {
-      modifier_overrides: modifierOverrides,
-      override_schema_hash: asset.override_schema_hash,
-    }
-    if (
-      persistedState
-      && persistedState.override_schema_hash === nextState.override_schema_hash
-      && stableValueKey(persistedState.modifier_overrides) === stableValueKey(nextState.modifier_overrides)
-    ) {
-      return
-    }
-    onPersistedStateChange?.(nextState)
-  }, [asset.default_modifiers, asset.override_schema_hash, filters, onPersistedStateChange, overrideIncompatible, pageIndex, pageSize, persistedState, sort])
-
   const prepareQuery = useQuery({
     queryKey: [
       'asset-prepare',
@@ -123,25 +109,27 @@ export function DataFrameAssetPanel({
       sort?.column ?? null,
       sort?.direction ?? null,
       filtersKey,
+      persistedState?.override_schema_hash ?? null,
+      overrideValidationKey,
       stableValueKey(preparePanelContext),
     ],
     queryFn: () => prepareAsset(prepareNodeId, prepareAssetName, {
       asset_version_id: asset.current_asset_version_id,
-      modifier_overrides: {
-        page: { index: pageIndex, size: pageSize },
-        sort: sort ? [sort] : [],
-        filters,
-      },
+      modifier_overrides: modifierOverrides,
       transient_modifiers: {},
       panel_context: preparePanelContext,
+      persisted_override_schema_hash: persistedState?.override_schema_hash ?? null,
     }),
-    enabled: asset.current_asset_version_id !== null && !overrideIncompatible,
+    enabled: asset.current_asset_version_id !== null,
     placeholderData: (previousData) => previousData,
     retry: false,
   })
 
   const response = prepareQuery.data ?? null
   const table = response?.payloads.table ?? null
+  const overrideIncompatible = Boolean(response?.errors.some((error) => error.code === 'override_incompatible'))
+  const overrideValidationBlocked = requiresOverrideValidation && (prepareQuery.isFetching || !prepareQuery.isSuccess)
+  const prepareErrors = response?.errors.filter((error) => error.code !== 'override_incompatible') ?? []
   const isPanelReady = overrideIncompatible || prepareQuery.isError || prepareQuery.isSuccess
   const resolvedPage = table?.page ?? { index: pageIndex, size: pageSize }
   const resolvedSort = table?.sort?.[0] ?? null
@@ -168,6 +156,24 @@ export function DataFrameAssetPanel({
   useEffect(() => {
     onReadyStateChange?.(isPanelReady)
   }, [isPanelReady, onReadyStateChange])
+
+  useEffect(() => {
+    if (overrideIncompatible || overrideValidationBlocked || isApplyingPersistedStateRef.current) {
+      return
+    }
+    const nextState = {
+      modifier_overrides: modifierOverrides,
+      override_schema_hash: asset.override_schema_hash,
+    }
+    if (
+      persistedState
+      && persistedState.override_schema_hash === nextState.override_schema_hash
+      && stableValueKey(persistedState.modifier_overrides) === stableValueKey(nextState.modifier_overrides)
+    ) {
+      return
+    }
+    onPersistedStateChange?.(nextState)
+  }, [asset.override_schema_hash, modifierOverrides, onPersistedStateChange, overrideIncompatible, overrideValidationBlocked, persistedState])
 
   function commitPageInput() {
     const parsed = Number(pageInput.trim())
@@ -204,7 +210,7 @@ export function DataFrameAssetPanel({
     <AssetPanelFrame asset={asset} panelInfo={panelInfo} sectionId={sectionId} frameVariant={frameVariant}>
       <div className="asset-dataframe-panel">
         {overrideIncompatible ? <OverrideIncompatibleNotice onReset={onPersistedStateChange ? handleResetOverrides : undefined} /> : null}
-        <PrepareErrorsNotice errors={response?.errors ?? []} />
+        <PrepareErrorsNotice errors={prepareErrors} />
         {prepareQuery.isLoading && !table ? <LoadingPlaceholder message="Preparing table view..." /> : null}
         {prepareQuery.isError ? (
           <ErrorPlaceholder message={prepareQuery.error instanceof Error ? prepareQuery.error.message : 'Could not prepare the table view.'} />
@@ -216,7 +222,7 @@ export function DataFrameAssetPanel({
             activeSort={resolvedSort}
             activeFilters={resolvedFilters}
             viewerMode={viewerMode}
-            disabled={overrideIncompatible || prepareQuery.isFetching}
+            disabled={overrideIncompatible || overrideValidationBlocked || prepareQuery.isFetching}
             totalRows={baseRows}
             displayedRows={displayedRows}
             columnCount={columnCount}

@@ -101,7 +101,7 @@ export function HistogramAssetPanel({
   const [selectedBarIndexes, setSelectedBarIndexes] = useState<number[]>([])
   const [pageInput, setPageInput] = useState(String(initialState.page.index + 1))
   const currentHistogramRef = useRef<PreparedHistogramPayload | null>(null)
-  const overrideIncompatible = Boolean(
+  const requiresOverrideValidation = Boolean(
     persistedState
     && persistedState.override_schema_hash !== null
     && asset.override_schema_hash !== null
@@ -123,6 +123,17 @@ export function HistogramAssetPanel({
     granularity: isTimeHistogram ? granularity : null,
   })
   const localChartOverridesKey = stableValueKey(chartOverrides)
+  const modifierOverrides = useMemo(
+    () => buildModifierOverridesRecord({
+      page: { index: pageIndex, size: pageSize },
+      sort: sort ? [sort] : [],
+      filters,
+      ...(isTimeHistogram ? { granularity } : { bin_count: binCount }),
+      ...serializeHistogramChartModifierValues(chartOverrides),
+    }, asset.default_modifiers),
+    [asset.default_modifiers, binCount, chartOverrides, filters, granularity, isTimeHistogram, pageIndex, pageSize, sort],
+  )
+  const overrideValidationKey = requiresOverrideValidation ? stableValueKey(modifierOverrides) : null
 
   useEffect(() => {
     if (localStateKey === externalStateKey) {
@@ -155,31 +166,6 @@ export function HistogramAssetPanel({
   }, [externalChartOverridesKey, externalStateKey, localChartOverridesKey, localStateKey])
 
   useEffect(() => {
-    if (overrideIncompatible || isApplyingPersistedStateRef.current) {
-      return
-    }
-    const modifierOverrides = buildModifierOverridesRecord({
-      page: { index: pageIndex, size: pageSize },
-      sort: sort ? [sort] : [],
-      filters,
-      ...(isTimeHistogram ? { granularity } : { bin_count: binCount }),
-      ...serializeHistogramChartModifierValues(chartOverrides),
-    }, asset.default_modifiers)
-    const nextState = {
-      modifier_overrides: modifierOverrides,
-      override_schema_hash: asset.override_schema_hash,
-    }
-    if (
-      persistedState
-      && persistedState.override_schema_hash === nextState.override_schema_hash
-      && stableValueKey(persistedState.modifier_overrides) === stableValueKey(nextState.modifier_overrides)
-    ) {
-      return
-    }
-    onPersistedStateChange?.(nextState)
-  }, [asset.default_modifiers, asset.override_schema_hash, binCount, chartOverrides, filters, granularity, isTimeHistogram, onPersistedStateChange, overrideIncompatible, pageIndex, pageSize, persistedState, sort])
-
-  useEffect(() => {
     setSelectedBarIndexes([])
   }, [asset.current_asset_version_id, binCount, filtersKey, granularity])
 
@@ -196,22 +182,20 @@ export function HistogramAssetPanel({
       filtersKey,
       isTimeHistogram ? granularity : binCount,
       selectionKey,
+      persistedState?.override_schema_hash ?? null,
+      overrideValidationKey,
       stableValueKey(preparePanelContext),
     ],
     queryFn: () => prepareAsset(prepareNodeId, prepareAssetName, {
       asset_version_id: asset.current_asset_version_id,
-      modifier_overrides: {
-        page: { index: pageIndex, size: pageSize },
-        sort: sort ? [sort] : [],
-        filters,
-        ...(isTimeHistogram ? { granularity } : { bin_count: binCount }),
-      },
+      modifier_overrides: modifierOverrides,
       transient_modifiers: currentHistogramRef.current && selectedBarIndexes.length ? {
         selection_ranges: histogramSelectionRangesFromIndexes(currentHistogramRef.current, selectedBarIndexes),
       } : {},
       panel_context: preparePanelContext,
+      persisted_override_schema_hash: persistedState?.override_schema_hash ?? null,
     }),
-    enabled: asset.current_asset_version_id !== null && !overrideIncompatible,
+    enabled: asset.current_asset_version_id !== null,
     placeholderData: (previousData) => previousData,
     retry: false,
   })
@@ -219,6 +203,9 @@ export function HistogramAssetPanel({
   const response = prepareQuery.data ?? null
   const mainPayload = response?.payloads.main ?? null
   const histogram = mainPayload?.kind === 'histogram' ? mainPayload : null
+  const overrideIncompatible = Boolean(response?.errors.some((error) => error.code === 'override_incompatible'))
+  const overrideValidationBlocked = requiresOverrideValidation && (prepareQuery.isFetching || !prepareQuery.isSuccess)
+  const prepareErrors = response?.errors.filter((error) => error.code !== 'override_incompatible') ?? []
   const isPanelReady = overrideIncompatible || prepareQuery.isError || prepareQuery.isSuccess
   currentHistogramRef.current = histogram
   const table = response?.payloads.table ?? null
@@ -257,6 +244,24 @@ export function HistogramAssetPanel({
   useEffect(() => {
     onReadyStateChange?.(isPanelReady)
   }, [isPanelReady, onReadyStateChange])
+
+  useEffect(() => {
+    if (overrideIncompatible || overrideValidationBlocked || isApplyingPersistedStateRef.current) {
+      return
+    }
+    const nextState = {
+      modifier_overrides: modifierOverrides,
+      override_schema_hash: asset.override_schema_hash,
+    }
+    if (
+      persistedState
+      && persistedState.override_schema_hash === nextState.override_schema_hash
+      && stableValueKey(persistedState.modifier_overrides) === stableValueKey(nextState.modifier_overrides)
+    ) {
+      return
+    }
+    onPersistedStateChange?.(nextState)
+  }, [asset.override_schema_hash, modifierOverrides, onPersistedStateChange, overrideIncompatible, overrideValidationBlocked, persistedState])
 
   useEffect(() => {
     setBinCountInput(String(resolvedBinCount))
@@ -341,7 +346,7 @@ export function HistogramAssetPanel({
                 setPageIndex(0)
                 setGranularity((granularityFromValue(event.target.value) ?? 'auto') as TimeHistogramGranularity)
               }}
-              disabled={overrideIncompatible || prepareQuery.isFetching}
+              disabled={overrideIncompatible || overrideValidationBlocked || prepareQuery.isFetching}
             >
               <option value="auto">Auto</option>
               <option value="year">Year</option>
@@ -370,7 +375,7 @@ export function HistogramAssetPanel({
                   setBinCountInput(String(resolvedBinCount))
                 }
               }}
-              disabled={overrideIncompatible || prepareQuery.isFetching}
+              disabled={overrideIncompatible || overrideValidationBlocked || prepareQuery.isFetching}
             />
           </label>
         )}
@@ -442,7 +447,7 @@ export function HistogramAssetPanel({
     <AssetPanelFrame asset={asset} panelInfo={panelInfo} settingsTitle="Modifier overrides" settingsBody={settingsBody} settingsActive={hasSettingsOverrides} sectionId={sectionId} frameVariant={frameVariant}>
       <div className="asset-dataframe-panel asset-histogram-panel">
         {overrideIncompatible ? <OverrideIncompatibleNotice onReset={onPersistedStateChange ? handleResetOverrides : undefined} /> : null}
-        <PrepareErrorsNotice errors={response?.errors ?? []} />
+        <PrepareErrorsNotice errors={prepareErrors} />
         <ResizableDatavizContent height={resolvedPanelHeight} onHeightChange={onPanelHeightChange}>
           {(chartHeight) => (
             <>
@@ -473,7 +478,7 @@ export function HistogramAssetPanel({
             activeSort={resolvedSort}
             activeFilters={resolvedFilters}
             viewerMode={viewerMode}
-            disabled={overrideIncompatible || prepareQuery.isFetching}
+            disabled={overrideIncompatible || overrideValidationBlocked || prepareQuery.isFetching}
             totalRows={baseRows}
             displayedRows={displayedRows}
             columnCount={columnCount}
@@ -790,7 +795,8 @@ function buildHistogramVegaLiteSpec(
     ],
     mark: {
       type: 'rect',
-      cornerRadius: 3,
+      cornerRadiusTopLeft: 3,
+      cornerRadiusTopRight: 3,
       stroke: borderThickness > 0 ? '#1d4ed8' : undefined,
       strokeWidth: borderThickness,
     },

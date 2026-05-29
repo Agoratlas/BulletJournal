@@ -3984,6 +3984,7 @@ input.invalid {
 }
 
 .dashboard-sidebar-link-label {
+  display: block;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;

@@ -1,5 +1,7 @@
 import type { AssetFilter, AssetFilterKind, AssetSort } from '../../lib/types'
 import type {
+  BarChartChartOverrides,
+  BarChartGroupMode,
   ChartAxisOverrides,
   ChartTitleOverrides,
   DatavizAxisScale,
@@ -66,6 +68,45 @@ export function emptyChartTitleOverrides(): ChartTitleOverrides {
   }
 }
 
+export function defaultBarChartChartOverrides(
+  defaultModifiers: Record<string, unknown>,
+  modifierSchema: Array<Record<string, unknown>>,
+): BarChartChartOverrides {
+  const histogram = defaultHistogramChartOverrides(defaultModifiers, modifierSchema)
+  return {
+    ...histogram,
+    groupMode: modifierDefaultValue(defaultModifiers, modifierSchema, 'group_mode') === 'stacked' ? 'stacked' : 'grouped',
+    groupNormalize: Boolean(modifierDefaultValue(defaultModifiers, modifierSchema, 'group_normalize')),
+    groupSpacing: clampPercentage(modifierDefaultValue(defaultModifiers, modifierSchema, 'group_spacing'), 10),
+  }
+}
+
+export function barChartChartOverridesFromModifiers(
+  defaultModifiers: Record<string, unknown>,
+  modifierOverrides: Record<string, unknown>,
+  modifierSchema: Array<Record<string, unknown>>,
+): BarChartChartOverrides {
+  const defaults = defaultBarChartChartOverrides(defaultModifiers, modifierSchema)
+  const histogram = histogramChartOverridesFromModifiers(defaultModifiers, modifierOverrides, modifierSchema)
+  return {
+    ...histogram,
+    groupMode: mergedModifierValue(defaultModifiers.group_mode, modifierOverrides.group_mode) === 'stacked' ? 'stacked' : defaults.groupMode,
+    groupNormalize: typeof mergedModifierValue(defaultModifiers.group_normalize, modifierOverrides.group_normalize) === 'boolean'
+      ? mergedModifierValue(defaultModifiers.group_normalize, modifierOverrides.group_normalize) as boolean
+      : defaults.groupNormalize,
+    groupSpacing: clampPercentage(mergedModifierValue(defaultModifiers.group_spacing, modifierOverrides.group_spacing), defaults.groupSpacing),
+  }
+}
+
+export function serializeBarChartModifierValues(overrides: BarChartChartOverrides): Record<string, unknown> {
+  return {
+    ...serializeHistogramChartModifierValues(overrides),
+    group_mode: overrides.groupMode,
+    group_normalize: overrides.groupNormalize,
+    group_spacing: overrides.groupSpacing,
+  }
+}
+
 export function defaultHistogramChartOverrides(
   defaultModifiers: Record<string, unknown>,
   modifierSchema: Array<Record<string, unknown>>,
@@ -83,12 +124,14 @@ export function defaultScatterPlotChartOverrides(
   defaultModifiers: Record<string, unknown>,
   modifierSchema: Array<Record<string, unknown>>,
 ): ScatterPlotChartOverrides {
+  const defaultSizeScalingValue = modifierDefaultValue(defaultModifiers, modifierSchema, 'size_scaling')
   return {
     xAxis: chartAxisOverridesFromValue(modifierDefaultValue(defaultModifiers, modifierSchema, 'x_axis'), emptyChartAxisOverrides()),
     yAxis: chartAxisOverridesFromValue(modifierDefaultValue(defaultModifiers, modifierSchema, 'y_axis'), emptyChartAxisOverrides()),
     title: chartTitleOverridesFromValue(modifierDefaultValue(defaultModifiers, modifierSchema, 'title'), emptyChartTitleOverrides()),
     minPointSize: numericInputString(modifierDefaultValue(defaultModifiers, modifierSchema, 'min_point_size'), ''),
     maxPointSize: numericInputString(modifierDefaultValue(defaultModifiers, modifierSchema, 'max_point_size'), ''),
+    sizeScaling: clampNumberToRange(defaultSizeScalingValue, 1, 0.1, 3),
     showLegend: typeof modifierDefaultValue(defaultModifiers, modifierSchema, 'show_legend') === 'boolean'
       ? modifierDefaultValue(defaultModifiers, modifierSchema, 'show_legend') as boolean
       : true,
@@ -147,6 +190,7 @@ export function scatterPlotChartOverridesFromModifiers(
     title: chartTitleOverridesFromValue(mergedModifierValue(defaultModifiers.title, modifierOverrides.title), defaults.title),
     minPointSize: numericInputString(mergedModifierValue(defaultModifiers.min_point_size, modifierOverrides.min_point_size), defaults.minPointSize),
     maxPointSize: numericInputString(mergedModifierValue(defaultModifiers.max_point_size, modifierOverrides.max_point_size), defaults.maxPointSize),
+    sizeScaling: clampNumberToRange(mergedModifierValue(defaultModifiers.size_scaling, modifierOverrides.size_scaling), defaults.sizeScaling, 0.1, 3),
     showLegend: typeof mergedModifierValue(defaultModifiers.show_legend, modifierOverrides.show_legend) === 'boolean'
       ? mergedModifierValue(defaultModifiers.show_legend, modifierOverrides.show_legend) as boolean
       : defaults.showLegend,
@@ -227,6 +271,7 @@ export function serializeScatterPlotChartModifierValues(overrides: ScatterPlotCh
   return {
     min_point_size: optionalNumberFromInput(overrides.minPointSize),
     max_point_size: optionalNumberFromInput(overrides.maxPointSize),
+    size_scaling: overrides.sizeScaling,
     show_legend: overrides.showLegend,
     shape_style: overrides.shapeStyle,
     x_axis: serializeChartAxisModifierValue(overrides.xAxis),

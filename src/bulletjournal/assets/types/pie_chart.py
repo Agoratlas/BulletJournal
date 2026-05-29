@@ -28,6 +28,12 @@ from bulletjournal.assets.serialization import (
     json_safe_modifier_value,
     title_modifier_defaults,
 )
+from bulletjournal.assets.types.category_order import (
+    normalize_category_order_modifier_value,
+    resolve_category_order,
+    sort_category_rows,
+    validate_category_order_value,
+)
 from bulletjournal.assets.validation import (
     merge_nested_dicts,
     validate_modifier_defaults,
@@ -38,6 +44,7 @@ from bulletjournal.assets.validation import (
 from bulletjournal.domain.errors import InvalidRequestError
 
 DEFAULT_PIE_CHART_COLOR = '#94a3b8'
+DEFAULT_PIE_CHART_CATEGORY_ORDER = 'value_desc'
 DEFAULT_PIE_CHART_PALETTE = [
     '#2563eb',
     '#14b8a6',
@@ -95,6 +102,7 @@ def validate_pie_chart_modifier_defaults(value: dict[str, object] | None) -> Non
             'label_position',
             'merge_threshold',
             'border_thickness',
+            'category_order',
             'merged_category_label',
             'show_merged_category',
             'show_percentages',
@@ -128,6 +136,8 @@ def validate_pie_chart_modifier_defaults(value: dict[str, object] | None) -> Non
         validate_number(value['border_thickness'], label='Pie chart modifier `border_thickness`')
         if float(value['border_thickness']) < 0:
             raise TypeError('Pie chart modifier `border_thickness` must be non-negative.')
+    if 'category_order' in value:
+        validate_category_order_value(value['category_order'], label='Pie chart modifier `category_order`')
     if 'merged_category_label' in value and not isinstance(value['merged_category_label'], str):
         raise TypeError('Pie chart modifier `merged_category_label` must be a string.')
     if 'show_merged_category' in value and not isinstance(value['show_merged_category'], bool):
@@ -224,6 +234,7 @@ def pie_chart_modifier_defaults(*, title: str, category_column: str) -> dict[str
         'label_position': 102,
         'merge_threshold': 0,
         'border_thickness': 3,
+        'category_order': DEFAULT_PIE_CHART_CATEGORY_ORDER,
         'merged_category_label': 'Others',
         'show_merged_category': True,
         'show_percentages': False,
@@ -286,6 +297,14 @@ def pie_chart_modifier_schema(default_modifiers: dict[str, Any]) -> list[dict[st
             'min_value': 0,
             'max_value': 100,
             'step': 1,
+        },
+        {
+            'id': 'category_order',
+            'title': 'Category order',
+            'kind': 'value',
+            'category': 'saved_view',
+            'server_targets': ['main'],
+            'default_value': default_modifiers['category_order'],
         },
         {
             'id': 'border_thickness',
@@ -358,6 +377,10 @@ def serialize_pie_chart(
             asset.modifier_defaults,
         ),
     }
+    default_modifiers['category_order'] = normalize_category_order_modifier_value(
+        default_modifiers.get('category_order', DEFAULT_PIE_CHART_CATEGORY_ORDER),
+        label='Pie chart modifier `category_order`',
+    )
     modifier_schema = [
         *dataset_modifier_schema(column_definitions, default_modifiers, filters_targets=['main', 'table']),
         *pie_chart_modifier_schema(default_modifiers),
@@ -378,6 +401,7 @@ def serialize_pie_chart(
             **base_asset_definition(
                 asset_type=asset.asset_type_id,
                 interactive=True,
+                title=title,
                 description=description,
                 modifier_schema=modifier_schema,
                 default_modifiers=default_modifiers,
@@ -413,6 +437,13 @@ def prepare_pie_chart(
     resolved_page = resolve_page(default_modifiers, modifier_overrides)
     resolved_sort = resolve_sort(default_modifiers, modifier_overrides, column_id_map)
     resolved_filters = resolve_filters(default_modifiers, modifier_overrides, column_id_map, schema)
+    resolved_category_order = resolve_category_order(
+        default_modifiers,
+        modifier_overrides,
+        default_mode=DEFAULT_PIE_CHART_CATEGORY_ORDER,
+        column=category_column,
+        dtype=category_dtype,
+    )
     filtered_frame = frame_with_filters(frame, resolved_filters, column_id_map)
     selected_categories = resolve_pie_chart_selected_categories(
         transient_modifiers,
@@ -429,6 +460,7 @@ def prepare_pie_chart(
             column=category_column,
             column_id_map=column_id_map,
             color_mapping_entries=definition.get('pie_color_mapping'),
+            category_order=resolved_category_order,
             default_color=definition.get('pie_default_color'),
         ),
         'table': prepared_table_payload(
@@ -451,6 +483,7 @@ def prepare_pie_chart_main_payload(
     column: str,
     column_id_map: dict[str, Any],
     color_mapping_entries: object,
+    category_order: str | list[Any],
     default_color: object,
 ) -> dict[str, Any]:
     column_name = column_id_map[column]
@@ -470,14 +503,17 @@ def prepare_pie_chart_main_payload(
             'slices': [],
         }
     grouped = (
-        frame.filter(pl.col(column_name).is_not_null())
-        .group_by(column_name)
-        .agg(pl.len().alias('count'))
-        .sort(['count', column_name], descending=[True, False])
-        .collect()
+        frame.filter(pl.col(column_name).is_not_null()).group_by(column_name).agg(pl.len().alias('count')).collect()
     )
     slices: list[dict[str, Any]] = []
-    for row in grouped.to_dicts():
+    grouped_rows = sort_category_rows(
+        grouped.to_dicts(),
+        category_field=column_name,
+        value_field='count',
+        default_mode=DEFAULT_PIE_CHART_CATEGORY_ORDER,
+        category_order=category_order,
+    )
+    for row in grouped_rows:
         value = json_safe_value(row.get(column_name))
         if value is None:
             continue

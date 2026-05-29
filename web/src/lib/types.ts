@@ -265,6 +265,7 @@ export type PreparedScatterPlotPoint = {
   row_index: number
   x: number
   y: number
+  label?: string | number | boolean | null
   shape?: string | number | boolean | null
   size?: string | number | boolean | null
   color?: string | number | boolean | null
@@ -274,9 +275,14 @@ export type PreparedScatterPlotPayload = {
   kind: 'scatter_plot'
   x_column: string
   y_column: string
+  label_column: string | null
   shape_column: string | null
   size_column: string | null
   size_kind: 'quantitative' | 'nominal' | null
+  size_domain: {
+    min: number
+    max: number
+  } | null
   color_column: string | null
   color_kind: 'quantitative' | 'nominal' | null
   rows_total: number
@@ -301,6 +307,11 @@ export type PreparedBarChartBar = {
   label: string
   aggregate_value: number
   color: string
+  group?: string | number | boolean
+  group_label?: string
+  group_proportion?: number
+  category_index?: number
+  group_index?: number
 }
 
 export type PreparedBarChartPayload = {
@@ -311,6 +322,7 @@ export type PreparedBarChartPayload = {
   rows_total: number
   non_null_rows: number
   bars: PreparedBarChartBar[]
+  group_column?: string
 }
 
 export type PreparedPieChartSlice = {

@@ -302,6 +302,25 @@ def test_pie_chart_rejects_inconsistent_color_column() -> None:
         runtime_assets.PieChart(frame, category='segment', color='segment_color')
 
 
+@pytest.mark.parametrize(
+    ('factory', 'kwargs'),
+    [
+        (runtime_assets.PieChart, {'category': 'segment', 'category_order': 'alphabetical'}),
+        (runtime_assets.BarChart, {'category': 'segment', 'value': 'value', 'category_order': {'a': 1}}),
+    ],
+)
+def test_chart_assets_reject_invalid_category_order(factory, kwargs: dict[str, object]) -> None:
+    frame = pd.DataFrame(
+        {
+            'segment': ['a', 'b'],
+            'value': [1, 2],
+        }
+    )
+
+    with pytest.raises(TypeError, match='category_order'):
+        factory(frame, **kwargs)
+
+
 def test_collection_auto_names_children_and_rejects_nested_collections() -> None:
     collection = runtime_assets.Collection(display_mode='single')
     collection.add_asset(runtime_assets.Markdown('hello'))

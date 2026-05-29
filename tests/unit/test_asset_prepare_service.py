@@ -3,9 +3,11 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import pandas as pd
+import pytest
 
 import bulletjournal.runtime.assets as runtime_assets
 from bulletjournal.domain.enums import LineageMode
+from bulletjournal.domain.errors import InvalidRequestError
 from bulletjournal.domain.models import AssetDeclaration
 from bulletjournal.runtime.context import RuntimeContext
 from bulletjournal.services.asset_prepare_service import AssetPrepareService
@@ -65,9 +67,102 @@ def test_asset_prepare_service_prepares_interactive_collection_child(tmp_path) -
         modifier_overrides={'page': {'index': 0, 'size': 25}},
         transient_modifiers={},
         panel_context={'collection_child_name': 'left_table'},
+        persisted_override_schema_hash=None,
     )
 
     assert response['payloads']['table']['kind'] == 'table'
     assert response['payloads']['table']['rows_total'] == 3
     assert response['override_schema_hash'] is not None
     assert response['resolved_modifiers']['page'] == {'index': 0, 'size': 25}
+
+
+def test_asset_prepare_service_accepts_valid_persisted_overrides_after_schema_change(tmp_path) -> None:
+    context = _dataframe_asset_context(tmp_path)
+    service = AssetPrepareService(
+        _FakeProjectService(project=SimpleNamespace(state_db=context.db, object_store=context.object_store))
+    )
+
+    response = service.prepare_asset(
+        'producer',
+        'table',
+        asset_version_id=None,
+        modifier_overrides={'page': {'index': 0, 'size': 25}},
+        transient_modifiers={},
+        panel_context=None,
+        persisted_override_schema_hash='outdated-schema-hash',
+    )
+
+    assert response['errors'] == []
+    assert response['payloads']['table']['kind'] == 'table'
+    assert response['resolved_modifiers']['page'] == {'index': 0, 'size': 25}
+
+
+def test_asset_prepare_service_marks_invalid_persisted_overrides_incompatible(tmp_path) -> None:
+    context = _dataframe_asset_context(tmp_path)
+    service = AssetPrepareService(
+        _FakeProjectService(project=SimpleNamespace(state_db=context.db, object_store=context.object_store))
+    )
+
+    response = service.prepare_asset(
+        'producer',
+        'table',
+        asset_version_id=None,
+        modifier_overrides={'sort': [{'column': 'missing_column', 'direction': 'asc'}]},
+        transient_modifiers={},
+        panel_context=None,
+        persisted_override_schema_hash='outdated-schema-hash',
+    )
+
+    assert response['payloads'] == {}
+    assert response['resolved_modifiers'] == {}
+    assert response['errors'][0]['code'] == 'override_incompatible'
+    assert 'missing_column' in response['errors'][0]['message']
+
+
+def test_asset_prepare_service_still_rejects_invalid_overrides_without_schema_mismatch(tmp_path) -> None:
+    context = _dataframe_asset_context(tmp_path)
+    service = AssetPrepareService(
+        _FakeProjectService(project=SimpleNamespace(state_db=context.db, object_store=context.object_store))
+    )
+
+    with pytest.raises(InvalidRequestError, match='missing_column'):
+        service.prepare_asset(
+            'producer',
+            'table',
+            asset_version_id=None,
+            modifier_overrides={'sort': [{'column': 'missing_column', 'direction': 'asc'}]},
+            transient_modifiers={},
+            panel_context=None,
+            persisted_override_schema_hash=None,
+        )
+
+
+def _dataframe_asset_context(tmp_path) -> RuntimeContext:
+    project_root = init_project_root(tmp_path / 'project').root
+    context = RuntimeContext(
+        project_root=project_root,
+        node_id='producer',
+        run_id='run-dataframe-prepare',
+        source_hash='producer-source',
+        lineage_mode=LineageMode.MANAGED,
+        bindings={},
+        outputs={},
+        asset_declarations={
+            'table': AssetDeclaration(
+                node_id='producer',
+                name='table',
+                title='Table',
+                description='Rows',
+                declared_asset_type='dataframe',
+                declaration_index=0,
+            )
+        },
+    )
+    context.finalize_asset_push(
+        asset=runtime_assets.DataFrame(pd.DataFrame({'value': [1, 2, 3]})),
+        name='table',
+        title='Table',
+        description='Rows',
+        asset_type=runtime_assets.DataFrame,
+    )
+    return context

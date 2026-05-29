@@ -1191,11 +1191,21 @@ class StateDB:
     @staticmethod
     def _row_to_asset(row: sqlite3.Row, objects: list[dict[str, Any]]) -> dict[str, Any]:
         source_hash = row['source_hash'] if row['source_hash'] is not None else row['declaration_source_hash']
+        definition = None if row['definition_json'] is None else json.loads(str(row['definition_json']))
+        title = row['title']
+        description = row['description']
+        if isinstance(definition, dict):
+            versioned_title = definition.get('display_title')
+            if isinstance(versioned_title, str) and versioned_title.strip():
+                title = versioned_title
+            versioned_description = definition.get('description')
+            if versioned_description is None or isinstance(versioned_description, str):
+                description = versioned_description
         return {
             'node_id': row['node_id'],
             'asset_name': row['asset_name'],
-            'title': row['title'],
-            'description': row['description'],
+            'title': title,
+            'description': description,
             'declared_asset_type': row['declared_asset_type'],
             'declaration_index': row['declaration_index'],
             'current_asset_version_id': row['current_asset_version_id'],
@@ -1207,7 +1217,7 @@ class StateDB:
             'upstream_data_hash': row['upstream_data_hash'],
             'run_id': row['run_id'],
             'lineage_mode': row['lineage_mode'],
-            'definition': None if row['definition_json'] is None else json.loads(str(row['definition_json'])),
+            'definition': definition,
             'modifier_schema': []
             if row['modifier_schema_json'] is None
             else json.loads(str(row['modifier_schema_json'])),

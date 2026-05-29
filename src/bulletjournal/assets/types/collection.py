@@ -72,7 +72,6 @@ def serialize_collection(
     title: str,
     description: str | None,
 ) -> SerializedAssetVersion:
-    del title
     from bulletjournal.assets.registry import serialize_asset
 
     modifier_schema: list[dict[str, Any]] = []
@@ -135,6 +134,7 @@ def serialize_collection(
             **base_asset_definition(
                 asset_type=asset.asset_type_id,
                 interactive=False,
+                title=title,
                 description=description,
                 modifier_schema=modifier_schema,
                 default_modifiers=default_modifiers,

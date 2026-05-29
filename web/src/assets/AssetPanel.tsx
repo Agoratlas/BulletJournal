@@ -178,6 +178,7 @@ export function AssetPanel({
       <ScatterPlotAssetPanel
         nodeId={nodeId}
         asset={asset}
+        prepareTarget={resolvedPrepareTarget}
         viewerMode={viewerMode}
         panelInfo={panelInfo}
         persistedState={persistedState ?? null}

@@ -223,6 +223,7 @@ def serialize_histogram(
             **base_asset_definition(
                 asset_type=asset.asset_type_id,
                 interactive=True,
+                title=title,
                 description=description,
                 modifier_schema=modifier_schema,
                 default_modifiers=default_modifiers,

@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from bulletjournal.assets.prepare_utils import backing_dataset_object
+from bulletjournal.assets.prepare_utils import ALLOWED_PAGE_SIZES, backing_dataset_object
 from bulletjournal.assets.registry import asset_registration_for_type_id
 from bulletjournal.domain.errors import InvalidRequestError, NotFoundError
 
@@ -23,6 +23,7 @@ class AssetPrepareService:
         modifier_overrides: dict[str, Any],
         transient_modifiers: dict[str, Any],
         panel_context: dict[str, Any] | None,
+        persisted_override_schema_hash: str | None,
     ) -> dict[str, Any]:
         self.project_service.get_node(node_id)
         head = self.project_service.require_project().state_db.get_asset_head(node_id, asset_name)
@@ -38,11 +39,12 @@ class AssetPrepareService:
 
         definition = head.get('definition') or {}
         default_modifiers = head.get('default_modifiers') or {}
+        modifier_schema = head.get('modifier_schema') or []
         objects = head.get('objects')
         override_schema_hash = head.get('override_schema_hash')
         registration = asset_registration_for_type_id(head.get('asset_type'))
         if head.get('asset_type') == 'collection':
-            registration, definition, default_modifiers, objects, override_schema_hash = (
+            registration, definition, default_modifiers, modifier_schema, objects, override_schema_hash = (
                 self._collection_child_prepare_target(
                     node_id=node_id,
                     asset_name=asset_name,
@@ -69,17 +71,46 @@ class AssetPrepareService:
                 }
             )
 
+        validating_persisted_overrides = (
+            isinstance(persisted_override_schema_hash, str)
+            and persisted_override_schema_hash != ''
+            and isinstance(override_schema_hash, str)
+            and persisted_override_schema_hash != override_schema_hash
+        )
+        if validating_persisted_overrides:
+            try:
+                self._validate_modifier_overrides(modifier_overrides, modifier_schema)
+            except InvalidRequestError as exc:
+                return self._override_incompatible_response(
+                    current_asset_version_id=int(current_asset_version_id),
+                    state=str(head['state']),
+                    override_schema_hash=override_schema_hash,
+                    errors=errors,
+                    exc=exc,
+                )
+
         project = self.project_service.require_project()
         dataset_object = backing_dataset_object(objects)
         project.state_db.touch_artifact_object(dataset_object['artifact_hash'])
         dataset_path = project.object_store.load_file_path(str(dataset_object['artifact_hash']))
-        payloads, resolved_modifiers = registration.prepare(
-            dataset_path=dataset_path,
-            definition=definition,
-            default_modifiers=default_modifiers,
-            modifier_overrides=modifier_overrides,
-            transient_modifiers=transient_modifiers,
-        )
+        try:
+            payloads, resolved_modifiers = registration.prepare(
+                dataset_path=dataset_path,
+                definition=definition,
+                default_modifiers=default_modifiers,
+                modifier_overrides=modifier_overrides,
+                transient_modifiers=transient_modifiers,
+            )
+        except InvalidRequestError as exc:
+            if validating_persisted_overrides:
+                return self._override_incompatible_response(
+                    current_asset_version_id=int(current_asset_version_id),
+                    state=str(head['state']),
+                    override_schema_hash=override_schema_hash,
+                    errors=errors,
+                    exc=exc,
+                )
+            raise
         response = {
             'asset_version_id': int(current_asset_version_id),
             'state': head['state'],
@@ -100,7 +131,7 @@ class AssetPrepareService:
         definition: dict[str, Any],
         objects: Any,
         panel_context: dict[str, Any] | None,
-    ) -> tuple[Any, dict[str, Any], dict[str, Any], list[dict[str, Any]], str | None]:
+    ) -> tuple[Any, dict[str, Any], dict[str, Any], list[dict[str, Any]], list[dict[str, Any]], str | None]:
         if not isinstance(panel_context, dict):
             raise InvalidRequestError(
                 f'Collection asset `{node_id}/{asset_name}` requires '
@@ -124,15 +155,226 @@ class AssetPrepareService:
             child_default_modifiers = child_definition.get('modifier_defaults')
         if not isinstance(child_default_modifiers, dict):
             child_default_modifiers = {}
+        child_modifier_schema = child_definition.get('modifier_schema')
+        if not isinstance(child_modifier_schema, list):
+            child_modifier_schema = []
         child_objects = self._collection_child_objects(child_definition=child_definition, parent_objects=objects)
         child_override_schema_hash = child_definition.get('override_schema_hash')
         return (
             registration,
             child_definition,
             child_default_modifiers,
+            child_modifier_schema,
             child_objects,
             child_override_schema_hash if isinstance(child_override_schema_hash, str) else None,
         )
+
+    @staticmethod
+    def _override_incompatible_response(
+        *,
+        current_asset_version_id: int,
+        state: str,
+        override_schema_hash: str | None,
+        errors: list[dict[str, str]],
+        exc: InvalidRequestError,
+    ) -> dict[str, Any]:
+        return {
+            'asset_version_id': current_asset_version_id,
+            'state': state,
+            'resolved_modifiers': {},
+            'override_schema_hash': override_schema_hash,
+            'payloads': {},
+            'errors': [
+                *errors,
+                {
+                    'code': 'override_incompatible',
+                    'message': str(exc),
+                },
+            ],
+        }
+
+    @classmethod
+    def _validate_modifier_overrides(
+        cls,
+        modifier_overrides: dict[str, Any],
+        modifier_schema: list[dict[str, Any]],
+    ) -> None:
+        if not isinstance(modifier_overrides, dict):
+            raise InvalidRequestError('modifier_overrides must be an object.')
+        schema_by_id = {
+            entry['id']: entry
+            for entry in modifier_schema
+            if isinstance(entry, dict) and isinstance(entry.get('id'), str)
+        }
+        for key, value in modifier_overrides.items():
+            schema_entry = schema_by_id.get(key)
+            if schema_entry is None:
+                raise InvalidRequestError(f'Unknown modifier `{key}`.')
+            cls._validate_modifier_override_value(key=key, value=value, schema_entry=schema_entry)
+
+    @classmethod
+    def _validate_modifier_override_value(cls, *, key: str, value: Any, schema_entry: dict[str, Any]) -> None:
+        kind = schema_entry.get('kind')
+        if kind == 'sort':
+            cls._validate_sort_override(key=key, value=value, schema_entry=schema_entry)
+            return
+        if kind == 'filters':
+            cls._validate_filters_override(key=key, value=value, schema_entry=schema_entry)
+            return
+        if kind == 'enum':
+            cls._validate_enum_override(key=key, value=value, schema_entry=schema_entry)
+            return
+        default_value = schema_entry.get('default_value')
+        cls._validate_partial_value_shape(label=key, value=value, default_value=default_value)
+
+    @classmethod
+    def _validate_sort_override(cls, *, key: str, value: Any, schema_entry: dict[str, Any]) -> None:
+        if not isinstance(value, list):
+            raise InvalidRequestError(f'modifier_overrides.{key} must be an array.')
+        if len(value) > 1:
+            raise InvalidRequestError('Only one active sort key is supported in this release.')
+        column_ids = {
+            column['id']
+            for column in schema_entry.get('columns', [])
+            if isinstance(column, dict) and isinstance(column.get('id'), str)
+        }
+        for entry in value:
+            if not isinstance(entry, dict):
+                raise InvalidRequestError(f'modifier_overrides.{key} entries must be objects.')
+            column = entry.get('column')
+            direction = entry.get('direction')
+            if not isinstance(column, str) or column not in column_ids:
+                raise InvalidRequestError(f'Unknown sort column `{column}`.')
+            if direction not in {'asc', 'desc'}:
+                raise InvalidRequestError('Sort direction must be `asc` or `desc`.')
+
+    @classmethod
+    def _validate_filters_override(cls, *, key: str, value: Any, schema_entry: dict[str, Any]) -> None:
+        if not isinstance(value, list):
+            raise InvalidRequestError(f'modifier_overrides.{key} must be an array.')
+        columns_by_id = {
+            column['id']: column
+            for column in schema_entry.get('columns', [])
+            if isinstance(column, dict) and isinstance(column.get('id'), str)
+        }
+        seen_columns: set[str] = set()
+        for entry in value:
+            if not isinstance(entry, dict):
+                raise InvalidRequestError(f'modifier_overrides.{key} entries must be objects.')
+            column = entry.get('column')
+            if not isinstance(column, str) or column not in columns_by_id:
+                raise InvalidRequestError(f'Unknown filter column `{column}`.')
+            if column in seen_columns:
+                raise InvalidRequestError(f'Only one active filter per column is supported for `{column}`.')
+            seen_columns.add(column)
+            kind = entry.get('kind')
+            allowed_kinds = columns_by_id[column].get('filter_kinds')
+            if kind not in {'range', 'value', 'regex'}:
+                raise InvalidRequestError('Filter kind must be `range`, `value`, or `regex`.')
+            if isinstance(allowed_kinds, list) and kind not in allowed_kinds:
+                raise InvalidRequestError(f'Filter kind `{kind}` is not supported for column `{column}`.')
+            if kind == 'range':
+                lower = entry.get('lower')
+                upper = entry.get('upper')
+                if lower is None and upper is None:
+                    raise InvalidRequestError(f'Range filter `{column}` must define `lower`, `upper`, or both.')
+                if not cls._is_scalar_or_none(lower) or not cls._is_scalar_or_none(upper):
+                    raise InvalidRequestError(f'Range filter `{column}` bounds must be scalar values.')
+                continue
+            if kind == 'value':
+                values = entry.get('values', [])
+                if not isinstance(values, list):
+                    raise InvalidRequestError(f'Value filter `{column}` must define `values` as an array.')
+                if any(not cls._is_scalar(item) for item in values):
+                    raise InvalidRequestError(f'Value filter `{column}` must contain only scalar values.')
+                include_null = entry.get('include_null', False)
+                if not isinstance(include_null, bool):
+                    raise InvalidRequestError(f'Value filter `{column}` include_null must be boolean.')
+                if not values and not include_null:
+                    raise InvalidRequestError(
+                        f'Value filter `{column}` must define at least one value or include nulls.'
+                    )
+                continue
+            pattern = entry.get('pattern')
+            if not isinstance(pattern, str) or not pattern:
+                raise InvalidRequestError(f'Regex filter `{column}` must define a non-empty `pattern`.')
+            case_sensitive = entry.get('case_sensitive', False)
+            if not isinstance(case_sensitive, bool):
+                raise InvalidRequestError(f'Regex filter `{column}` case_sensitive must be boolean.')
+
+    @classmethod
+    def _validate_enum_override(cls, *, key: str, value: Any, schema_entry: dict[str, Any]) -> None:
+        allowed_values = cls._enum_option_values(schema_entry.get('options'))
+        if not cls._is_scalar(value) or value not in allowed_values:
+            allowed = ', '.join(repr(item) for item in allowed_values)
+            raise InvalidRequestError(f'modifier_overrides.{key} must be one of: {allowed}.')
+
+    @classmethod
+    def _validate_partial_value_shape(cls, *, label: str, value: Any, default_value: Any) -> None:
+        if default_value is None:
+            if value is None or cls._is_scalar(value) or isinstance(value, list | dict):
+                return
+            raise InvalidRequestError(f'modifier_overrides.{label} has an invalid value.')
+        if isinstance(default_value, bool):
+            if not isinstance(value, bool):
+                raise InvalidRequestError(f'modifier_overrides.{label} must be boolean.')
+            return
+        if isinstance(default_value, int) and not isinstance(default_value, bool):
+            if not isinstance(value, int) or isinstance(value, bool):
+                raise InvalidRequestError(f'modifier_overrides.{label} must be an integer.')
+            if label.endswith('.size') and value not in ALLOWED_PAGE_SIZES:
+                allowed = ', '.join(str(size) for size in sorted(ALLOWED_PAGE_SIZES))
+                raise InvalidRequestError(f'Page size must be one of: {allowed}.')
+            if label.endswith('.index') and value < 0:
+                raise InvalidRequestError('Page index must be a zero-based integer.')
+            return
+        if isinstance(default_value, float):
+            if not isinstance(value, int | float) or isinstance(value, bool):
+                raise InvalidRequestError(f'modifier_overrides.{label} must be numeric.')
+            return
+        if isinstance(default_value, str):
+            if not isinstance(value, str):
+                raise InvalidRequestError(f'modifier_overrides.{label} must be a string.')
+            return
+        if isinstance(default_value, list):
+            if not isinstance(value, list):
+                raise InvalidRequestError(f'modifier_overrides.{label} must be an array.')
+            return
+        if not isinstance(default_value, dict):
+            return
+        if not isinstance(value, dict):
+            raise InvalidRequestError(f'modifier_overrides.{label} must be an object.')
+        unexpected_keys = sorted(set(value) - set(default_value))
+        if unexpected_keys:
+            formatted = ', '.join(f'`{item}`' for item in unexpected_keys)
+            raise InvalidRequestError(f'modifier_overrides.{label} contains unknown fields: {formatted}.')
+        for child_key, child_value in value.items():
+            cls._validate_partial_value_shape(
+                label=f'{label}.{child_key}',
+                value=child_value,
+                default_value=default_value.get(child_key),
+            )
+
+    @staticmethod
+    def _enum_option_values(options: Any) -> list[Any]:
+        if not isinstance(options, list):
+            return []
+        values: list[Any] = []
+        for option in options:
+            if isinstance(option, dict) and 'value' in option and isinstance(option['value'], str | int | float | bool):
+                values.append(option['value'])
+                continue
+            if isinstance(option, str | int | float | bool):
+                values.append(option)
+        return values
+
+    @staticmethod
+    def _is_scalar(value: Any) -> bool:
+        return isinstance(value, str | int | float | bool)
+
+    @classmethod
+    def _is_scalar_or_none(cls, value: Any) -> bool:
+        return value is None or cls._is_scalar(value)
 
     @staticmethod
     def _collection_child_definition(

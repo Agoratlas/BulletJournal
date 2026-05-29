@@ -26,7 +26,7 @@ def serialize_iframe(
     title: str,
     description: str | None,
 ) -> SerializedAssetVersion:
-    del object_store, title
+    del object_store
     modifier_schema: list[dict[str, Any]] = []
     default_modifiers: dict[str, Any] = {}
     return SerializedAssetVersion(
@@ -36,6 +36,7 @@ def serialize_iframe(
             **base_asset_definition(
                 asset_type=asset.asset_type_id,
                 interactive=False,
+                title=title,
                 description=description,
                 modifier_schema=modifier_schema,
                 default_modifiers=default_modifiers,

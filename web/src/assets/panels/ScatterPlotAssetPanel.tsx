@@ -38,6 +38,7 @@ import {
   modifierFieldLabelClassName,
   modifierTitle,
   nextSortForColumn,
+  clampNumberToRange,
   normalizePanelHeight,
   optionalPositiveNumberFromInput,
   optionalNumberFromInput,
@@ -105,7 +106,7 @@ export function ScatterPlotAssetPanel({
   const [selectedPointRowIndex, setSelectedPointRowIndex] = useState<number | null>(null)
   const [selectedLegend, setSelectedLegend] = useState<ScatterPlotLegendSelection | null>(null)
   const [pageInput, setPageInput] = useState(String(initialTableState.page.index + 1))
-  const overrideIncompatible = Boolean(
+  const requiresOverrideValidation = Boolean(
     persistedState
     && persistedState.override_schema_hash !== null
     && asset.override_schema_hash !== null
@@ -125,6 +126,16 @@ export function ScatterPlotAssetPanel({
     filters,
   })
   const localChartOverridesKey = stableValueKey(chartOverrides)
+  const modifierOverrides = useMemo(
+    () => buildModifierOverridesRecord({
+      page: { index: pageIndex, size: pageSize },
+      sort: sort ? [sort] : [],
+      filters,
+      ...serializeScatterPlotChartModifierValues(chartOverrides),
+    }, asset.default_modifiers),
+    [asset.default_modifiers, chartOverrides, filters, pageIndex, pageSize, sort],
+  )
+  const overrideValidationKey = requiresOverrideValidation ? stableValueKey(modifierOverrides) : null
 
   useEffect(() => {
     if (localStateKey === externalStateKey) {
@@ -156,30 +167,6 @@ export function ScatterPlotAssetPanel({
   }, [externalChartOverridesKey, externalStateKey, localChartOverridesKey, localStateKey])
 
   useEffect(() => {
-    if (overrideIncompatible || isApplyingPersistedStateRef.current) {
-      return
-    }
-    const modifierOverrides = buildModifierOverridesRecord({
-      page: { index: pageIndex, size: pageSize },
-      sort: sort ? [sort] : [],
-      filters,
-      ...serializeScatterPlotChartModifierValues(chartOverrides),
-    }, asset.default_modifiers)
-    const nextState = {
-      modifier_overrides: modifierOverrides,
-      override_schema_hash: asset.override_schema_hash,
-    }
-    if (
-      persistedState
-      && persistedState.override_schema_hash === nextState.override_schema_hash
-      && stableValueKey(persistedState.modifier_overrides) === stableValueKey(nextState.modifier_overrides)
-    ) {
-      return
-    }
-    onPersistedStateChange?.(nextState)
-  }, [asset.default_modifiers, asset.override_schema_hash, chartOverrides, filters, onPersistedStateChange, overrideIncompatible, pageIndex, pageSize, persistedState, sort])
-
-  useEffect(() => {
     setSelectedBounds(null)
     setSelectedPointRowIndex(null)
     setSelectedLegend(null)
@@ -197,23 +184,22 @@ export function ScatterPlotAssetPanel({
       sort?.direction ?? null,
       filtersKey,
       selectionKey,
+      persistedState?.override_schema_hash ?? null,
+      overrideValidationKey,
       stableValueKey(preparePanelContext),
     ],
     queryFn: () => prepareAsset(prepareNodeId, prepareAssetName, {
       asset_version_id: asset.current_asset_version_id,
-      modifier_overrides: {
-        page: { index: pageIndex, size: pageSize },
-        sort: sort ? [sort] : [],
-        filters,
-      },
+      modifier_overrides: modifierOverrides,
       transient_modifiers: {
         ...(selectedBounds ? { selection_bounds: selectedBounds } : {}),
         ...(selectedPointRowIndex !== null ? { selected_row_index: selectedPointRowIndex } : {}),
         ...(selectedLegend ? { selected_legend: selectedLegend } : {}),
       },
       panel_context: preparePanelContext,
+      persisted_override_schema_hash: persistedState?.override_schema_hash ?? null,
     }),
-    enabled: asset.current_asset_version_id !== null && !overrideIncompatible,
+    enabled: asset.current_asset_version_id !== null,
     placeholderData: (previousData) => previousData,
     retry: false,
   })
@@ -221,6 +207,9 @@ export function ScatterPlotAssetPanel({
   const response = prepareQuery.data ?? null
   const mainPayload = response?.payloads.main ?? null
   const scatterPlot = mainPayload?.kind === 'scatter_plot' ? mainPayload : null
+  const overrideIncompatible = Boolean(response?.errors.some((error) => error.code === 'override_incompatible'))
+  const overrideValidationBlocked = requiresOverrideValidation && (prepareQuery.isFetching || !prepareQuery.isSuccess)
+  const prepareErrors = response?.errors.filter((error) => error.code !== 'override_incompatible') ?? []
   const isPanelReady = overrideIncompatible || prepareQuery.isError || prepareQuery.isSuccess
   const table = response?.payloads.table ?? null
   const resolvedPage = table?.page ?? { index: pageIndex, size: pageSize }
@@ -260,6 +249,24 @@ export function ScatterPlotAssetPanel({
   useEffect(() => {
     onReadyStateChange?.(isPanelReady)
   }, [isPanelReady, onReadyStateChange])
+
+  useEffect(() => {
+    if (overrideIncompatible || overrideValidationBlocked || isApplyingPersistedStateRef.current) {
+      return
+    }
+    const nextState = {
+      modifier_overrides: modifierOverrides,
+      override_schema_hash: asset.override_schema_hash,
+    }
+    if (
+      persistedState
+      && persistedState.override_schema_hash === nextState.override_schema_hash
+      && stableValueKey(persistedState.modifier_overrides) === stableValueKey(nextState.modifier_overrides)
+    ) {
+      return
+    }
+    onPersistedStateChange?.(nextState)
+  }, [asset.override_schema_hash, modifierOverrides, onPersistedStateChange, overrideIncompatible, overrideValidationBlocked, persistedState])
 
   useEffect(() => {
     if (selectedPointRowIndex === null || scatterPlot === null) {
@@ -354,6 +361,24 @@ export function ScatterPlotAssetPanel({
           />
         </label>
 
+        <label className="asset-dataviz-field">
+          <span className={modifierFieldLabelClassName(!valuesEqual(chartOverrides.sizeScaling, chartOverrideDefaults.sizeScaling))}>{modifierTitle(asset.modifier_schema, 'size_scaling', 'Size scaling')}</span>
+          <div className="asset-dataviz-slider-field">
+            <input
+              type="range"
+              min={0.1}
+              max={3}
+              step={0.1}
+              value={chartOverrides.sizeScaling}
+              onChange={(event) => setChartOverrides((current) => ({
+                ...current,
+                sizeScaling: clampNumberToRange(Number(event.target.value), current.sizeScaling, 0.1, 3),
+              }))}
+            />
+            <strong>{formatScatterPlotSizeScaling(chartOverrides.sizeScaling)}</strong>
+          </div>
+        </label>
+
         <label className="asset-dataviz-checkbox-field">
           <input
             type="checkbox"
@@ -405,7 +430,7 @@ export function ScatterPlotAssetPanel({
     <AssetPanelFrame asset={asset} panelInfo={panelInfo} settingsTitle="Modifier overrides" settingsBody={settingsBody} settingsActive={hasSettingsOverrides} sectionId={sectionId} frameVariant={frameVariant}>
       <div className="asset-dataframe-panel asset-scatter-plot-panel">
         {overrideIncompatible ? <OverrideIncompatibleNotice onReset={onPersistedStateChange ? handleResetOverrides : undefined} /> : null}
-        <PrepareErrorsNotice errors={response?.errors ?? []} />
+        <PrepareErrorsNotice errors={prepareErrors} />
         <ResizableDatavizContent height={resolvedPanelHeight} onHeightChange={onPanelHeightChange}>
           {(chartHeight) => (
             <>
@@ -458,7 +483,7 @@ export function ScatterPlotAssetPanel({
             activeSort={resolvedSort}
             activeFilters={resolvedFilters}
             viewerMode={viewerMode}
-            disabled={overrideIncompatible || prepareQuery.isFetching}
+            disabled={overrideIncompatible || overrideValidationBlocked || prepareQuery.isFetching}
             totalRows={baseRows}
             displayedRows={displayedRows}
             columnCount={columnCount}
@@ -723,25 +748,8 @@ function buildScatterPlotVegaLiteSpec(
   const showLegend = overrides.showLegend
   const minPointSize = optionalPositiveNumberFromInput(overrides.minPointSize)
   const maxPointSize = optionalPositiveNumberFromInput(overrides.maxPointSize)
-  const tooltip = [
-    { field: 'x', type: 'quantitative' as const, title: scatterPlot.x_column },
-    { field: 'y', type: 'quantitative' as const, title: scatterPlot.y_column },
-    ...(scatterPlot.shape_column ? [{ field: 'shape', type: 'nominal' as const, title: scatterPlot.shape_column }] : []),
-    ...(scatterPlot.size_column ? [{ field: 'size', type: sizeType as 'quantitative' | 'nominal', title: scatterPlot.size_column }] : []),
-    ...(scatterPlot.color_column ? [{ field: 'color', type: colorType as 'quantitative' | 'nominal', title: scatterPlot.color_column }] : []),
-  ]
-  const sizeEncoding = scatterPlot.size_column
-    ? {
-      field: 'size',
-      type: sizeType as 'quantitative' | 'nominal',
-      title: scatterPlot.size_column,
-      legend: showLegend ? undefined : null,
-      scale: {
-        ...(minPointSize !== undefined ? { rangeMin: minPointSize } : {}),
-        ...(maxPointSize !== undefined ? { rangeMax: maxPointSize } : {}),
-      },
-    }
-    : undefined
+  const sizeScaling = clampNumberToRange(overrides.sizeScaling, defaultOverrides.sizeScaling, 0.1, 3)
+  const sizeEncoding = buildScatterPlotSizeEncoding(scatterPlot, sizeType, showLegend, minPointSize, maxPointSize, sizeScaling)
   const shapeEncoding = scatterPlot.shape_column
     ? {
       field: 'shape',
@@ -783,6 +791,7 @@ function buildScatterPlotVegaLiteSpec(
     data: {
       values: scatterPlot.points.map((point) => ({
         ...point,
+        tooltip: buildScatterPlotTooltip(point, scatterPlot),
         is_persistently_emphasized: (
           (selectedPointRowIndex === null || point.row_index === selectedPointRowIndex)
           &&
@@ -826,7 +835,7 @@ function buildScatterPlotVegaLiteSpec(
     mark: {
       type: 'point',
       filled: overrides.shapeStyle === 'filled',
-      size: scatterPlot.size_column ? undefined : (maxPointSize ?? minPointSize ?? 60),
+      size: scatterPlot.size_column ? undefined : 100,
     },
     encoding: {
       x: {
@@ -872,9 +881,78 @@ function buildScatterPlotVegaLiteSpec(
         ],
         value: 0.18,
       },
-      tooltip,
+      tooltip: { field: 'tooltip' },
     },
   }
+}
+
+function buildScatterPlotTooltip(
+  point: PreparedScatterPlotPayload['points'][number],
+  scatterPlot: PreparedScatterPlotPayload,
+): Record<string, string | number | boolean | null> {
+  return {
+    ...(point.label !== null && point.label !== undefined ? { title: point.label } : {}),
+    [scatterPlot.x_column]: point.x,
+    [scatterPlot.y_column]: point.y,
+    ...(scatterPlot.shape_column ? { [scatterPlot.shape_column]: point.shape ?? null } : {}),
+    ...(scatterPlot.size_column ? { [scatterPlot.size_column]: point.size ?? null } : {}),
+    ...(scatterPlot.color_column ? { [scatterPlot.color_column]: point.color ?? null } : {}),
+  }
+}
+
+function buildScatterPlotSizeEncoding(
+  scatterPlot: PreparedScatterPlotPayload,
+  sizeType: 'quantitative' | 'nominal',
+  showLegend: boolean,
+  minPointSize: number | undefined,
+  maxPointSize: number | undefined,
+  sizeScaling: number,
+): Record<string, unknown> | undefined {
+  if (!scatterPlot.size_column) {
+    return undefined
+  }
+  if (sizeType !== 'quantitative') {
+    return {
+      field: 'size',
+      type: sizeType,
+      title: scatterPlot.size_column,
+      legend: showLegend ? undefined : null,
+      scale: {
+        ...(minPointSize !== undefined ? { rangeMin: minPointSize } : {}),
+        ...(maxPointSize !== undefined ? { rangeMax: maxPointSize } : {}),
+      },
+    }
+  }
+  if (scatterPlot.size_domain && scatterPlot.size_domain.min === scatterPlot.size_domain.max) {
+    return {
+      field: 'size',
+      type: sizeType,
+      title: scatterPlot.size_column,
+      legend: showLegend ? undefined : null,
+      scale: {
+        type: 'pow',
+        exponent: sizeScaling,
+        domain: [scatterPlot.size_domain.min, scatterPlot.size_domain.max],
+        range: [100, 100],
+      },
+    }
+  }
+  return {
+    field: 'size',
+    type: sizeType,
+    title: scatterPlot.size_column,
+    legend: showLegend ? undefined : null,
+    scale: {
+      type: 'pow',
+      exponent: sizeScaling,
+      ...(minPointSize !== undefined ? { rangeMin: minPointSize } : {}),
+      ...(maxPointSize !== undefined ? { rangeMax: maxPointSize } : {}),
+    },
+  }
+}
+
+function formatScatterPlotSizeScaling(value: number): string {
+  return value.toFixed(1).replace(/\.0$/, '')
 }
 
 function parseScatterPlotClickedPointRowIndex(item: unknown): number | null {

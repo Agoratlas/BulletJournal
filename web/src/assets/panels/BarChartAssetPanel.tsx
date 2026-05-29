@@ -30,9 +30,9 @@ import {
 import {
   buildModifierOverridesRecord,
   clampPercentage,
-  defaultHistogramChartOverrides,
+  defaultBarChartChartOverrides,
+  barChartChartOverridesFromModifiers,
   filterKindsForDataType,
-  histogramChartOverridesFromModifiers,
   initialTableStateFromModifiers,
   modifierFieldLabelClassName,
   modifierColumnsFromSchema,
@@ -42,13 +42,13 @@ import {
   optionalNonNegativeNumberFromInput,
   optionalNumberFromInput,
   removeFilter,
-  serializeHistogramChartModifierValues,
+  serializeBarChartModifierValues,
   stableValueKey,
   tableStateKey,
   upsertFilter,
   valuesEqual,
 } from '../shared/modifiers'
-import type { DatavizAssetPanelProps, HistogramChartOverrides } from '../shared/types'
+import type { BarChartChartOverrides, DatavizAssetPanelProps } from '../shared/types'
 import { DEFAULT_DATAVIZ_TABLE_PAGE_SIZE, DEFAULT_HISTOGRAM_CHART_HEIGHT } from '../shared/types'
 
 type BarChartSelectionValue = string | number | boolean
@@ -72,7 +72,7 @@ export function BarChartAssetPanel({
   const preparePanelContext = prepareTarget?.panelContext ?? null
   const modifierColumns = useMemo(() => modifierColumnsFromSchema(asset.modifier_schema), [asset.modifier_schema])
   const chartOverrideDefaults = useMemo(
-    () => defaultHistogramChartOverrides(asset.default_modifiers, asset.modifier_schema),
+    () => defaultBarChartChartOverrides(asset.default_modifiers, asset.modifier_schema),
     [asset.default_modifiers, asset.modifier_schema],
   )
   const persistedOverrideKey = useMemo(
@@ -88,17 +88,17 @@ export function BarChartAssetPanel({
     [asset.default_modifiers, persistedOverrideKey, persistedState?.modifier_overrides],
   )
   const initialChartOverrides = useMemo(
-    () => histogramChartOverridesFromModifiers(asset.default_modifiers, persistedState?.modifier_overrides ?? {}, asset.modifier_schema),
+    () => barChartChartOverridesFromModifiers(asset.default_modifiers, persistedState?.modifier_overrides ?? {}, asset.modifier_schema),
     [asset.default_modifiers, asset.modifier_schema, persistedOverrideKey, persistedState?.modifier_overrides],
   )
   const [pageIndex, setPageIndex] = useState(initialTableState.page.index)
   const [pageSize, setPageSize] = useState(initialTableState.page.size)
   const [sort, setSort] = useState<AssetSort | null>(initialTableState.sort)
   const [filters, setFilters] = useState<AssetFilter[]>(initialTableState.filters)
-  const [chartOverrides, setChartOverrides] = useState<HistogramChartOverrides>(initialChartOverrides)
+  const [chartOverrides, setChartOverrides] = useState<BarChartChartOverrides>(initialChartOverrides)
   const [selectedCategories, setSelectedCategories] = useState<BarChartSelectionValue[]>([])
   const [pageInput, setPageInput] = useState(String(initialTableState.page.index + 1))
-  const overrideIncompatible = Boolean(
+  const requiresOverrideValidation = Boolean(
     persistedState
     && persistedState.override_schema_hash !== null
     && asset.override_schema_hash !== null
@@ -118,6 +118,16 @@ export function BarChartAssetPanel({
     filters,
   })
   const localChartOverridesKey = stableValueKey(chartOverrides)
+  const modifierOverrides = useMemo(
+    () => buildModifierOverridesRecord({
+      page: { index: pageIndex, size: pageSize },
+      sort: sort ? [sort] : [],
+      filters,
+      ...serializeBarChartModifierValues(chartOverrides),
+    }, asset.default_modifiers),
+    [asset.default_modifiers, chartOverrides, filters, pageIndex, pageSize, sort],
+  )
+  const overrideValidationKey = requiresOverrideValidation ? stableValueKey(modifierOverrides) : null
 
   useEffect(() => {
     if (localStateKey === externalStateKey) {
@@ -147,30 +157,6 @@ export function BarChartAssetPanel({
   }, [externalChartOverridesKey, externalStateKey, localChartOverridesKey, localStateKey])
 
   useEffect(() => {
-    if (overrideIncompatible || isApplyingPersistedStateRef.current) {
-      return
-    }
-    const modifierOverrides = buildModifierOverridesRecord({
-      page: { index: pageIndex, size: pageSize },
-      sort: sort ? [sort] : [],
-      filters,
-      ...serializeHistogramChartModifierValues(chartOverrides),
-    }, asset.default_modifiers)
-    const nextState = {
-      modifier_overrides: modifierOverrides,
-      override_schema_hash: asset.override_schema_hash,
-    }
-    if (
-      persistedState
-      && persistedState.override_schema_hash === nextState.override_schema_hash
-      && stableValueKey(persistedState.modifier_overrides) === stableValueKey(nextState.modifier_overrides)
-    ) {
-      return
-    }
-    onPersistedStateChange?.(nextState)
-  }, [asset.default_modifiers, asset.override_schema_hash, chartOverrides, filters, onPersistedStateChange, overrideIncompatible, pageIndex, pageSize, persistedState, sort])
-
-  useEffect(() => {
     setSelectedCategories([])
   }, [asset.current_asset_version_id, filtersKey])
 
@@ -186,21 +172,22 @@ export function BarChartAssetPanel({
       sort?.direction ?? null,
       filtersKey,
       selectionKey,
+      persistedState?.override_schema_hash ?? null,
+      overrideValidationKey,
       stableValueKey(preparePanelContext),
     ],
     queryFn: () => prepareAsset(prepareNodeId, prepareAssetName, {
       asset_version_id: asset.current_asset_version_id,
-      modifier_overrides: {
-        page: { index: pageIndex, size: pageSize },
-        sort: sort ? [sort] : [],
-        filters,
-      },
-      transient_modifiers: selectedCategories.length ? {
-        selected_categories: selectedCategories,
-      } : {},
+      modifier_overrides: modifierOverrides,
+      transient_modifiers: selectedCategories.length ? (
+        asset.definition?.bar_group_column
+          ? { selected_groups: selectedCategories }
+          : { selected_categories: selectedCategories }
+      ) : {},
       panel_context: preparePanelContext,
+      persisted_override_schema_hash: persistedState?.override_schema_hash ?? null,
     }),
-    enabled: asset.current_asset_version_id !== null && !overrideIncompatible,
+    enabled: asset.current_asset_version_id !== null,
     placeholderData: (previousData) => previousData,
     retry: false,
   })
@@ -208,6 +195,9 @@ export function BarChartAssetPanel({
   const response = prepareQuery.data ?? null
   const mainPayload = response?.payloads.main ?? null
   const barChart = mainPayload?.kind === 'bar_chart' ? mainPayload : null
+  const overrideIncompatible = Boolean(response?.errors.some((error) => error.code === 'override_incompatible'))
+  const overrideValidationBlocked = requiresOverrideValidation && (prepareQuery.isFetching || !prepareQuery.isSuccess)
+  const prepareErrors = response?.errors.filter((error) => error.code !== 'override_incompatible') ?? []
   const isPanelReady = overrideIncompatible || prepareQuery.isError || prepareQuery.isSuccess
   const table = response?.payloads.table ?? null
   const resolvedPage = table?.page ?? { index: pageIndex, size: pageSize }
@@ -230,7 +220,7 @@ export function BarChartAssetPanel({
   const canGoNext = resolvedPage.index + 1 < pageCount
   const resolvedPanelHeight = normalizePanelHeight(panelHeight) ?? DEFAULT_HISTOGRAM_CHART_HEIGHT
   const hasSettingsOverrides = Object.keys(buildModifierOverridesRecord(
-    serializeHistogramChartModifierValues(chartOverrides),
+    serializeBarChartModifierValues(chartOverrides),
     asset.default_modifiers,
   )).length > 0
 
@@ -241,6 +231,24 @@ export function BarChartAssetPanel({
   useEffect(() => {
     onReadyStateChange?.(isPanelReady)
   }, [isPanelReady, onReadyStateChange])
+
+  useEffect(() => {
+    if (overrideIncompatible || overrideValidationBlocked || isApplyingPersistedStateRef.current) {
+      return
+    }
+    const nextState = {
+      modifier_overrides: modifierOverrides,
+      override_schema_hash: asset.override_schema_hash,
+    }
+    if (
+      persistedState
+      && persistedState.override_schema_hash === nextState.override_schema_hash
+      && stableValueKey(persistedState.modifier_overrides) === stableValueKey(nextState.modifier_overrides)
+    ) {
+      return
+    }
+    onPersistedStateChange?.(nextState)
+  }, [asset.override_schema_hash, modifierOverrides, onPersistedStateChange, overrideIncompatible, overrideValidationBlocked, persistedState])
 
   useEffect(() => {
     if (barChart === null) {
@@ -327,6 +335,55 @@ export function BarChartAssetPanel({
             onCommit={(nextValue) => setChartOverrides((current) => ({ ...current, borderThickness: nextValue }))}
           />
         </label>
+
+        {barChart?.group_column ? (
+          <PanelSettingsSection title="Grouping">
+            <label className="asset-dataviz-field">
+              <span className={modifierFieldLabelClassName(!valuesEqual(chartOverrides.groupMode, chartOverrideDefaults.groupMode))}>{modifierTitle(asset.modifier_schema, 'group_mode', 'Group mode')}</span>
+              <select
+                className="asset-dataviz-select-field"
+                value={chartOverrides.groupMode}
+                onChange={(event) => setChartOverrides((current) => ({
+                  ...current,
+                  groupMode: event.target.value as 'grouped' | 'stacked',
+                }))}
+              >
+                <option value="grouped">Grouped</option>
+                <option value="stacked">Stacked</option>
+              </select>
+            </label>
+
+            <label className="asset-dataviz-field">
+              <span className={modifierFieldLabelClassName(!valuesEqual(chartOverrides.groupNormalize, chartOverrideDefaults.groupNormalize))}>{modifierTitle(asset.modifier_schema, 'group_normalize', 'Normalize groups')}</span>
+              <input
+                type="checkbox"
+                className="asset-dataviz-checkbox-field"
+                checked={chartOverrides.groupNormalize}
+                onChange={(event) => setChartOverrides((current) => ({
+                  ...current,
+                  groupNormalize: event.target.checked,
+                }))}
+              />
+            </label>
+
+            <label className="asset-dataviz-field">
+              <span className={modifierFieldLabelClassName(!valuesEqual(chartOverrides.groupSpacing, chartOverrideDefaults.groupSpacing))}>{modifierTitle(asset.modifier_schema, 'group_spacing', 'Group spacing')}</span>
+              <div className="asset-dataviz-slider-field">
+                <input
+                  type="range"
+                  min={0}
+                  max={50}
+                  value={chartOverrides.groupSpacing}
+                  onChange={(event) => setChartOverrides((current) => ({
+                    ...current,
+                    groupSpacing: clampPercentage(Number(event.target.value), current.groupSpacing),
+                  }))}
+                />
+                <strong>{chartOverrides.groupSpacing}%</strong>
+              </div>
+            </label>
+          </PanelSettingsSection>
+        ) : null}
       </PanelSettingsSection>
 
       <AxisOverridesSection
@@ -360,7 +417,7 @@ export function BarChartAssetPanel({
     <AssetPanelFrame asset={asset} panelInfo={panelInfo} settingsTitle="Modifier overrides" settingsBody={settingsBody} settingsActive={hasSettingsOverrides} sectionId={sectionId} frameVariant={frameVariant}>
       <div className="asset-dataframe-panel asset-histogram-panel">
         {overrideIncompatible ? <OverrideIncompatibleNotice onReset={onPersistedStateChange ? handleResetOverrides : undefined} /> : null}
-        <PrepareErrorsNotice errors={response?.errors ?? []} />
+        <PrepareErrorsNotice errors={prepareErrors} />
         <ResizableDatavizContent height={resolvedPanelHeight} onHeightChange={onPanelHeightChange}>
           {(chartHeight) => (
             <>
@@ -374,7 +431,7 @@ export function BarChartAssetPanel({
                   chartHeight={chartHeight}
                   overrides={chartOverrides}
                   defaultOverrides={chartOverrideDefaults}
-                  selectedCategories={selectedCategories}
+                  selectedGroups={selectedCategories}
                   onSelectionChange={(nextSelection) => {
                     setPageIndex(0)
                     setSelectedCategories(nextSelection)
@@ -391,7 +448,7 @@ export function BarChartAssetPanel({
             activeSort={resolvedSort}
             activeFilters={resolvedFilters}
             viewerMode={viewerMode}
-            disabled={overrideIncompatible || prepareQuery.isFetching}
+            disabled={overrideIncompatible || overrideValidationBlocked || prepareQuery.isFetching}
             totalRows={baseRows}
             displayedRows={displayedRows}
             columnCount={columnCount}
@@ -437,35 +494,46 @@ function BarChartChart({
   chartHeight,
   overrides,
   defaultOverrides,
-  selectedCategories,
+  selectedGroups,
   onSelectionChange,
 }: {
   barChart: PreparedBarChartPayload
   chartHeight: number
-  overrides: HistogramChartOverrides
-  defaultOverrides: HistogramChartOverrides
-  selectedCategories: BarChartSelectionValue[]
-  onSelectionChange: (categories: BarChartSelectionValue[]) => void
+  overrides: BarChartChartOverrides
+  defaultOverrides: BarChartChartOverrides
+  selectedGroups: BarChartSelectionValue[]
+  onSelectionChange: (groups: BarChartSelectionValue[]) => void
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null)
   const [chartError, setChartError] = useState<string | null>(null)
   const viewRef = useRef<VegaEmbedResult | null>(null)
   const onSelectionChangeRef = useRef(onSelectionChange)
+  const selectedGroupsRef = useRef(selectedGroups)
+  const shiftHeldRef = useRef(false)
   const chartTheme = useAssetChartTheme()
+  const hasGroup = Boolean(barChart.group_column)
 
   onSelectionChangeRef.current = onSelectionChange
+  selectedGroupsRef.current = selectedGroups
 
   const spec = useMemo(
-    () => buildBarChartVegaLiteSpec(barChart, selectedCategories, chartTheme, chartHeight, overrides, defaultOverrides),
-    [barChart, chartHeight, chartTheme, defaultOverrides, overrides, selectedCategories],
+    () => buildBarChartVegaLiteSpec(barChart, selectedGroups, chartTheme, chartHeight, overrides, defaultOverrides),
+    [barChart, chartHeight, chartTheme, defaultOverrides, overrides, selectedGroups],
   )
 
   useEffect(() => {
+    const handleKey = (e: KeyboardEvent) => {
+      shiftHeldRef.current = e.shiftKey
+    }
+    window.addEventListener('keydown', handleKey)
+    window.addEventListener('keyup', handleKey)
+
     if (!containerRef.current) {
       return
     }
     let viewResult: VegaEmbedResult | null = null
     let disposed = false
+    let legendSignalName: string | null = null
 
     async function renderChart() {
       setChartError(null)
@@ -482,22 +550,39 @@ function BarChartChart({
         }
         viewResult = result
         viewRef.current = result
+
+        if (hasGroup) {
+          legendSignalName = barChartLegendSignalName()
+          const handleLegendSignal = (_name: string, value: unknown) => {
+            const legendValue = parseBarChartLegendSignalValue(value)
+            if (legendValue !== null) {
+              onSelectionChangeRef.current(
+                toggleBarChartSelection(selectedGroupsRef.current, [legendValue], shiftHeldRef.current),
+              )
+            }
+          }
+          result.view.addSignalListener(legendSignalName, handleLegendSignal)
+        }
+
         const handleClick = (_event: Event, item: unknown) => {
+          if (hasGroup && isBarChartLegendItem(item)) {
+            return
+          }
           const clickedValues = parseBarChartClickedValues(item)
           if (clickedValues !== null) {
             onSelectionChangeRef.current(
-              toggleBarChartSelection(selectedCategories, clickedValues, eventHasShiftKey(_event)),
+              toggleBarChartSelection(selectedGroups, clickedValues, eventHasShiftKey(_event)),
             )
             return
           }
-          if (selectedCategories.length) {
+          if (selectedGroups.length) {
             onSelectionChangeRef.current([])
           }
         }
         const handleDoubleClick = (event: Event) => {
           event.preventDefault()
           event.stopPropagation()
-          if (selectedCategories.length) {
+          if (selectedGroups.length) {
             onSelectionChangeRef.current([])
           }
         }
@@ -514,11 +599,16 @@ function BarChartChart({
 
     return () => {
       disposed = true
+      window.removeEventListener('keydown', handleKey)
+      window.removeEventListener('keyup', handleKey)
+      if (viewResult !== null && legendSignalName !== null) {
+        viewResult.view.removeSignalListener(legendSignalName, () => {})
+      }
       viewResult?.finalize()
       viewResult = null
       viewRef.current = null
     }
-  }, [selectedCategories, spec])
+  }, [selectedGroups, spec, hasGroup])
 
   useEffect(() => {
     const result = viewRef.current
@@ -548,17 +638,46 @@ function BarChartChart({
 
 function buildBarChartVegaLiteSpec(
   barChart: PreparedBarChartPayload,
-  selectedCategories: BarChartSelectionValue[],
+  selectedGroups: BarChartSelectionValue[],
   theme: ReturnType<typeof useAssetChartTheme>,
   chartHeight: number,
-  overrides: HistogramChartOverrides,
-  defaultOverrides: HistogramChartOverrides,
+  overrides: BarChartChartOverrides,
+  defaultOverrides: BarChartChartOverrides,
 ): VisualizationSpec {
   const borderThickness = optionalNonNegativeNumberFromInput(overrides.borderThickness) ?? 0
   const barWidth = clampPercentage(overrides.barWidth, 90)
-  const paddingInner = Math.max(0.02, 1 - (barWidth / 100))
   const yScaleType = buildScaleType(overrides.yAxis.scale)
-  return {
+  const hasGroup = Boolean(barChart.group_column)
+  const isStacked = overrides.groupMode === 'stacked'
+  const isNormalized = overrides.groupNormalize
+  const groupSpacing = overrides.groupSpacing / 100
+
+  const tooltipFields: Record<string, unknown>[] = [
+    { field: 'category_label', type: 'nominal' as const, title: barChart.category_column },
+  ]
+  if (hasGroup) {
+    tooltipFields.push({
+      field: 'group_label', type: 'nominal' as const, title: barChart.group_column ?? 'Group',
+    })
+    tooltipFields.push({
+      field: 'aggregate_label', type: 'nominal' as const, title: `${capitalizeAggregation(barChart.aggregation)} of ${barChart.value_column}`,
+    })
+    if (isNormalized) {
+      tooltipFields.push({
+        field: 'group_proportion_label', type: 'nominal' as const, title: 'Proportion',
+      })
+    }
+  } else {
+    tooltipFields.push({
+      field: 'aggregate_label', type: 'nominal' as const, title: `${capitalizeAggregation(barChart.aggregation)} of ${barChart.value_column}`,
+    })
+  }
+
+  const colorScale = hasGroup ? buildBarChartColorScale(barChart.bars) : null
+
+  const xPaddingInner = Math.max(0.02, 1 - (barWidth / 100))
+
+  const spec: VisualizationSpec = {
     $schema: 'https://vega.github.io/schema/vega-lite/v6.json',
     autosize: { type: 'fit-x', contains: 'padding' },
     width: 'container',
@@ -568,31 +687,50 @@ function buildBarChartVegaLiteSpec(
     title: buildChartTitle(overrides.title, defaultOverrides.title.text),
     config: buildVegaLiteChartConfig(theme),
     data: {
-      values: barChart.bars.map((bar, index) => ({
-        category_label: bar.label,
-        aggregate_value: bar.aggregate_value,
-        aggregate_label: formatBarChartAggregateValue(bar.aggregate_value),
-        color: bar.color,
-        raw_values: [bar.value],
-        bar_order: index,
-        is_selected: barChartSelectionIncludes(selectedCategories, [bar.value]),
-      })),
+      values: barChart.bars.map((bar, index) => {
+        const selectionValue = hasGroup ? (bar.group ?? bar.value) : bar.value
+        return {
+          category_label: bar.label,
+          group_label: bar.group_label ?? '',
+          group_index: bar.group_index ?? 0,
+          category_index: bar.category_index ?? index,
+          aggregate_value: bar.aggregate_value,
+          aggregate_label: formatBarChartAggregateValue(bar.aggregate_value),
+          group_proportion_label: hasGroup && bar.group_proportion !== undefined
+            ? formatBarChartProportion(bar.group_proportion)
+            : '',
+          color: bar.color,
+          raw_values: [selectionValue],
+          is_selected: barChartSelectionIncludes(selectedGroups, [selectionValue]),
+        }
+      }),
     },
     mark: {
       type: 'bar',
       cursor: 'pointer',
       stroke: opaqueColor(theme.axisDomainColor),
       strokeWidth: borderThickness,
-      cornerRadiusTopLeft: 3,
-      cornerRadiusTopRight: 3,
+      ...(isStacked
+        ? {
+          cornerRadiusTopLeft: { signal: 'datum.max_aggregate_value_end > 0 ? 3 : 0' },
+          cornerRadiusTopRight: { signal: 'datum.max_aggregate_value_end > 0 ? 3 : 0' },
+          cornerRadiusBottomLeft: { signal: 'datum.min_aggregate_value_start < 0 ? 3 : 0' },
+          cornerRadiusBottomRight: { signal: 'datum.min_aggregate_value_start < 0 ? 3 : 0' },
+        }
+        : {
+          cornerRadiusTopLeft: { signal: 'datum.aggregate_value > 0 ? 3 : 0' },
+          cornerRadiusTopRight: { signal: 'datum.aggregate_value > 0 ? 3 : 0' },
+          cornerRadiusBottomLeft: { signal: 'datum.aggregate_value < 0 ? 3 : 0' },
+          cornerRadiusBottomRight: { signal: 'datum.aggregate_value < 0 ? 3 : 0' },
+        }),
     },
     encoding: {
       x: {
         field: 'category_label',
         type: 'nominal',
-        sort: { field: 'bar_order', order: 'ascending' },
+        sort: { field: 'category_index', order: 'ascending' },
         scale: {
-          paddingInner,
+          paddingInner: xPaddingInner,
           paddingOuter: 0.08,
         },
         axis: {
@@ -603,14 +741,23 @@ function buildBarChartVegaLiteSpec(
       y: {
         field: 'aggregate_value',
         type: 'quantitative',
+        stack: isStacked ? (isNormalized ? 'normalize' : 'zero') : false,
         scale: {
           type: yScaleType,
-          zero: yScaleType !== 'log',
+          zero: yScaleType !== 'log' && !isNormalized,
           nice: yScaleType !== 'log',
         },
-        axis: buildAxisSpec(overrides.yAxis, defaultOverrides.yAxis.label),
+        axis: {
+          ...buildAxisSpec(overrides.yAxis, defaultOverrides.yAxis.label),
+          ...(isNormalized ? { title: 'Percentage', format: isStacked ? '.1%' : '.1f' } : {}),
+        },
       },
-      color: {
+      color: colorScale ? {
+        field: 'group_label',
+        type: 'nominal',
+        scale: { domain: colorScale.domain, range: colorScale.range },
+        legend: { title: barChart.group_column ?? 'Group', symbolStrokeWidth: 0 },
+      } : {
         field: 'color',
         type: 'nominal',
         scale: null,
@@ -618,17 +765,87 @@ function buildBarChartVegaLiteSpec(
       },
       opacity: {
         condition: {
-          test: selectedCategories.length ? 'datum.is_selected' : 'true',
+          test: selectedGroups.length ? 'datum.is_selected' : 'true',
           value: 0.96,
         },
-        value: selectedCategories.length ? 0.34 : 0.96,
+        value: selectedGroups.length ? 0.34 : 0.96,
       },
-      tooltip: [
-        { field: 'category_label', type: 'nominal' as const, title: barChart.category_column },
-        { field: 'aggregate_label', type: 'nominal' as const, title: `${capitalizeAggregation(barChart.aggregation)} of ${barChart.value_column}` },
-      ],
+      tooltip: tooltipFields,
     },
   }
+
+  if (hasGroup) {
+    spec.params = [
+      {
+        name: barChartLegendParamName(),
+        select: { type: 'point' as const, fields: ['group_label'], toggle: 'true', clear: false },
+        bind: 'legend' as const,
+      },
+    ]
+  }
+
+  if (hasGroup && !isStacked) {
+    spec.encoding = {
+      ...spec.encoding,
+      xOffset: {
+        field: 'group_label',
+        type: 'nominal',
+        sort: { field: 'group_index', order: 'ascending' },
+        scale: {
+          paddingInner: groupSpacing,
+        },
+      },
+    }
+  }
+
+  return spec
+}
+
+function buildBarChartColorScale(
+  bars: PreparedBarChartPayload['bars'],
+): { domain: string[]; range: string[] } {
+  const seen = new Map<string, { label: string; color: string; index: number }>()
+  for (const bar of bars) {
+    if (bar.group !== undefined && bar.group_label) {
+      const key = barChartSelectionPrimitiveKey(bar.group)
+      if (!seen.has(key)) {
+        seen.set(key, {
+          label: bar.group_label,
+          color: bar.color,
+          index: bar.group_index ?? seen.size,
+        })
+      }
+    }
+  }
+  const sorted = [...seen.values()].sort((a, b) => a.index - b.index)
+  return {
+    domain: sorted.map((e) => e.label),
+    range: sorted.map((e) => e.color),
+  }
+}
+
+function isBarChartLegendItem(item: unknown): boolean {
+  if (!item || typeof item !== 'object') {
+    return false
+  }
+  const role = typeof (item as { mark?: { role?: unknown } }).mark?.role === 'string'
+    ? (item as { mark?: { role?: string } }).mark?.role ?? ''
+    : ''
+  return role.includes('legend')
+}
+
+function barChartLegendParamName(): string {
+  return 'legend_group'
+}
+
+function barChartLegendSignalName(): string {
+  return `${barChartLegendParamName()}_group_label_legend`
+}
+
+function parseBarChartLegendSignalValue(value: unknown): BarChartSelectionValue | null {
+  return typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean'
+    ? value
+    : null
 }
 
 function parseBarChartClickedValues(item: unknown): BarChartSelectionValue[] | null {
@@ -657,8 +874,9 @@ function barChartVisibleSelection(
     return []
   }
   const normalizedSelection = normalizeBarChartSelection(selectedCategories)
+  const hasGroup = Boolean(barChart.group_column)
   const visibleValues = new Set(
-    barChart.bars.map((bar) => barChartSelectionPrimitiveKey(bar.value)),
+    barChart.bars.map((bar) => barChartSelectionPrimitiveKey(hasGroup ? (bar.group ?? bar.value) : bar.value)),
   )
   return normalizedSelection.filter((value) => visibleValues.has(barChartSelectionPrimitiveKey(value)))
 }
@@ -730,4 +948,8 @@ function capitalizeAggregation(value: string): string {
     return 'Value'
   }
   return value[0].toUpperCase() + value.slice(1)
+}
+
+function formatBarChartProportion(value: number): string {
+  return `${(value * 100).toFixed(1).replace(/\.0$/, '')}%`
 }

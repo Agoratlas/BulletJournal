@@ -258,6 +258,7 @@ class AssetPrepareRequest(StrictModel):
     modifier_overrides: dict[str, Any] = Field(default_factory=dict)
     transient_modifiers: dict[str, Any] = Field(default_factory=dict)
     panel_context: dict[str, Any] | None = None
+    persisted_override_schema_hash: str | None = None
 
 
 class DashboardSourceInput(StrictModel):

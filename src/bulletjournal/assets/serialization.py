@@ -28,14 +28,17 @@ def base_asset_definition(
     *,
     asset_type: str,
     interactive: bool,
+    title: str,
     description: str | None,
     modifier_schema: list[dict[str, Any]],
     default_modifiers: dict[str, Any],
 ) -> dict[str, Any]:
-    del description, modifier_schema, default_modifiers
+    del modifier_schema, default_modifiers
     return {
         'asset_type': asset_type,
         'interactive': interactive,
+        'display_title': title,
+        'description': description,
     }
 
 

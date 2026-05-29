@@ -47,6 +47,7 @@ class ScatterPlot(BaseAsset):
     dataframe: pd.DataFrame
     x: str
     y: str
+    label: str | None
     shape: str | None
     size: str | None
     color: str | None
@@ -61,18 +62,24 @@ class ScatterPlot(BaseAsset):
         *,
         x,
         y,
+        label=None,
         shape=None,
         size=None,
         color=None,
+        size_scaling=1,
         **modifier_kwargs: Any,
     ) -> None:
         self.dataframe = dataframe
         self.x = x
         self.y = y
+        self.label = label
         self.shape = shape
         self.size = size
         self.color = color
-        self.modifier_defaults = modifier_kwargs or None
+        modifier_defaults = dict(modifier_kwargs)
+        if size_scaling != 1:
+            modifier_defaults['size_scaling'] = size_scaling
+        self.modifier_defaults = modifier_defaults or None
         self.__post_init__()
 
     def __post_init__(self) -> None:
@@ -90,6 +97,7 @@ class ScatterPlot(BaseAsset):
             raise TypeError(f'Scatter plot x column `{self.x}` must use a numeric dtype.')
         if not pd.api.types.is_numeric_dtype(self.dataframe[self.y]):
             raise TypeError(f'Scatter plot y column `{self.y}` must use a numeric dtype.')
+        validate_optional_asset_column(self.dataframe, self.label, label='Scatter plot `label`')
         validate_optional_asset_column(self.dataframe, self.shape, label='Scatter plot `shape`')
         validate_optional_asset_column(self.dataframe, self.size, label='Scatter plot `size`')
         validate_optional_asset_column(self.dataframe, self.color, label='Scatter plot `color`')
@@ -99,7 +107,16 @@ class ScatterPlot(BaseAsset):
 def validate_scatter_plot_modifier_defaults(value: dict[str, object] | None) -> None:
     validate_modifier_defaults(
         value,
-        allowed_keys={'min_point_size', 'max_point_size', 'show_legend', 'shape_style', 'x_axis', 'y_axis', 'title'},
+        allowed_keys={
+            'min_point_size',
+            'max_point_size',
+            'size_scaling',
+            'show_legend',
+            'shape_style',
+            'x_axis',
+            'y_axis',
+            'title',
+        },
         context='Scatter plot assets',
     )
     if value is None:
@@ -108,6 +125,10 @@ def validate_scatter_plot_modifier_defaults(value: dict[str, object] | None) -> 
         validate_number(value['min_point_size'], label='Scatter plot modifier `min_point_size`')
     if 'max_point_size' in value:
         validate_number(value['max_point_size'], label='Scatter plot modifier `max_point_size`')
+    if 'size_scaling' in value:
+        validate_number(value['size_scaling'], label='Scatter plot modifier `size_scaling`')
+        if not 0.1 <= float(value['size_scaling']) <= 3.0:
+            raise ValueError('Scatter plot modifier `size_scaling` must be between 0.1 and 3.0.')
     if 'show_legend' in value and not isinstance(value['show_legend'], bool):
         raise TypeError('Scatter plot modifier `show_legend` must be a bool.')
     if 'shape_style' in value and value['shape_style'] not in {'outline', 'filled'}:
@@ -122,8 +143,9 @@ def validate_scatter_plot_modifier_defaults(value: dict[str, object] | None) -> 
 
 def scatter_plot_modifier_defaults(*, title: str, x_column: str, y_column: str) -> dict[str, Any]:
     return {
-        'min_point_size': 60,
-        'max_point_size': 400,
+        'min_point_size': 50,
+        'max_point_size': 250,
+        'size_scaling': 1,
         'show_legend': True,
         'shape_style': 'outline',
         'x_axis': axis_modifier_defaults(x_column),
@@ -153,6 +175,17 @@ def scatter_plot_modifier_schema(default_modifiers: dict[str, Any]) -> list[dict
             'default_value': default_modifiers['max_point_size'],
             'min_value': 0,
             'step': 1,
+        },
+        {
+            'id': 'size_scaling',
+            'title': 'Size scaling',
+            'kind': 'float',
+            'category': 'saved_view',
+            'server_targets': [],
+            'default_value': default_modifiers['size_scaling'],
+            'min_value': 0.1,
+            'max_value': 3.0,
+            'step': 0.1,
         },
         {
             'id': 'show_legend',
@@ -245,6 +278,7 @@ def serialize_scatter_plot(
             **base_asset_definition(
                 asset_type=asset.asset_type_id,
                 interactive=True,
+                title=title,
                 description=description,
                 modifier_schema=modifier_schema,
                 default_modifiers=default_modifiers,
@@ -253,6 +287,7 @@ def serialize_scatter_plot(
             'row_count': int(asset.dataframe.shape[0]),
             'scatter_x_column': str(asset.x),
             'scatter_y_column': str(asset.y),
+            'scatter_label_column': str(asset.label) if asset.label is not None else None,
             'scatter_shape_column': str(asset.shape) if asset.shape is not None else None,
             'scatter_size_column': str(asset.size) if asset.size is not None else None,
             'scatter_color_column': str(asset.color) if asset.color is not None else None,
@@ -278,6 +313,7 @@ def prepare_scatter_plot(
     frame = base_frame.with_row_index('__scatter_row_index')
     x_column = definition.get('scatter_x_column')
     y_column = definition.get('scatter_y_column')
+    label_column = resolve_optional_scatter_encoding_column(definition, 'scatter_label_column', column_id_map)
     shape_column = resolve_optional_scatter_encoding_column(definition, 'scatter_shape_column', column_id_map)
     size_column = resolve_optional_scatter_encoding_column(definition, 'scatter_size_column', column_id_map)
     color_column = resolve_optional_scatter_encoding_column(definition, 'scatter_color_column', column_id_map)
@@ -324,6 +360,7 @@ def prepare_scatter_plot(
             filtered_frame,
             x_column=x_column,
             y_column=y_column,
+            label_column=label_column,
             shape_column=shape_column,
             size_column=size_column,
             color_column=color_column,
@@ -349,6 +386,7 @@ def prepare_scatter_plot_main_payload(
     *,
     x_column: str,
     y_column: str,
+    label_column: str | None,
     shape_column: str | None,
     size_column: str | None,
     color_column: str | None,
@@ -358,27 +396,37 @@ def prepare_scatter_plot_main_payload(
     x_name = column_id_map[x_column]
     y_name = column_id_map[y_column]
     row_index_name = '__scatter_row_index'
+    size_kind = scatter_encoding_kind(size_column, schema, column_id_map)
     rows_total_frame = frame.select(pl.len().alias('rows_total')).collect()
     rows_total = int(rows_total_frame['rows_total'][0]) if rows_total_frame.height else 0
     points_frame = frame.filter(pl.col(x_name).is_not_null() & pl.col(y_name).is_not_null())
-    stats = points_frame.select(
-        [
-            pl.len().alias('non_null_rows'),
-            pl.col(x_name).min().alias('x_min'),
-            pl.col(x_name).max().alias('x_max'),
-            pl.col(y_name).min().alias('y_min'),
-            pl.col(y_name).max().alias('y_max'),
-        ]
-    ).collect()
+    stats_columns: list[pl.Expr] = [
+        pl.len().alias('non_null_rows'),
+        pl.col(x_name).min().alias('x_min'),
+        pl.col(x_name).max().alias('x_max'),
+        pl.col(y_name).min().alias('y_min'),
+        pl.col(y_name).max().alias('y_max'),
+    ]
+    if size_column is not None and size_kind == 'quantitative':
+        size_name = column_id_map[size_column]
+        stats_columns.extend(
+            [
+                pl.col(size_name).min().alias('size_min'),
+                pl.col(size_name).max().alias('size_max'),
+            ]
+        )
+    stats = points_frame.select(stats_columns).collect()
     non_null_rows = int(stats['non_null_rows'][0]) if stats.height else 0
     if non_null_rows == 0:
         return {
             'kind': 'scatter_plot',
             'x_column': x_column,
             'y_column': y_column,
+            'label_column': label_column,
             'shape_column': shape_column,
             'size_column': size_column,
-            'size_kind': scatter_encoding_kind(size_column, schema, column_id_map),
+            'size_kind': size_kind,
+            'size_domain': None,
             'color_column': color_column,
             'color_kind': scatter_encoding_kind(color_column, schema, column_id_map),
             'rows_total': rows_total,
@@ -398,6 +446,8 @@ def prepare_scatter_plot_main_payload(
         pl.col(x_name).alias('x'),
         pl.col(y_name).alias('y'),
     ]
+    if label_column is not None:
+        point_columns.append(pl.col(column_id_map[label_column]).alias('label'))
     if shape_column is not None:
         point_columns.append(pl.col(column_id_map[shape_column]).alias('shape'))
     if size_column is not None:
@@ -405,13 +455,21 @@ def prepare_scatter_plot_main_payload(
     if color_column is not None:
         point_columns.append(pl.col(column_id_map[color_column]).alias('color'))
     points = points_frame.slice(0, MAX_SCATTER_PLOT_POINTS).select(point_columns).collect().to_dicts()
+    size_domain = None
+    if size_column is not None and size_kind == 'quantitative' and stats.height:
+        size_min = stats['size_min'][0]
+        size_max = stats['size_max'][0]
+        if size_min is not None and size_max is not None:
+            size_domain = {'min': float(size_min), 'max': float(size_max)}
     return {
         'kind': 'scatter_plot',
         'x_column': x_column,
         'y_column': y_column,
+        'label_column': label_column,
         'shape_column': shape_column,
         'size_column': size_column,
-        'size_kind': scatter_encoding_kind(size_column, schema, column_id_map),
+        'size_kind': size_kind,
+        'size_domain': size_domain,
         'color_column': color_column,
         'color_kind': scatter_encoding_kind(color_column, schema, column_id_map),
         'rows_total': rows_total,

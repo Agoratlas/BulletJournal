@@ -334,6 +334,7 @@ export async function prepareAsset(
     modifier_overrides?: Record<string, unknown>
     transient_modifiers?: Record<string, unknown>
     panel_context?: Record<string, unknown> | null
+    persisted_override_schema_hash?: string | null
   },
 ): Promise<AssetPrepareResponse> {
   return request(`/api/v1/assets/${encodeURIComponent(nodeId)}/${encodeURIComponent(assetName)}/prepare`, {
