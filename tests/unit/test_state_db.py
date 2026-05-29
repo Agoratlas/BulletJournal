@@ -234,6 +234,25 @@ def test_state_db_hides_dismissed_warning_but_keeps_active_errors(tmp_path) -> N
     assert {issue['issue_id'] for issue in all_issues} == {warning.issue_id, error.issue_id}
 
 
+def test_state_db_deduplicates_validation_issues_by_issue_id(tmp_path) -> None:
+    paths = init_project_root(tmp_path / 'project')
+    db = StateDB(paths.state_db_path)
+
+    duplicate = ValidationIssue(
+        issue_id='issue-1',
+        node_id='node_a',
+        severity=ValidationSeverity.ERROR,
+        code='bad',
+        message='broken',
+    )
+
+    db.replace_validation_issues('node_a', [duplicate, duplicate])
+
+    issues = db.list_validation_issues(include_dismissed=True)
+
+    assert [issue['issue_id'] for issue in issues] == ['issue-1']
+
+
 def test_state_db_preserves_persistent_notice_dismissal_across_updates(tmp_path) -> None:
     paths = init_project_root(tmp_path / 'project')
     db = StateDB(paths.state_db_path)
