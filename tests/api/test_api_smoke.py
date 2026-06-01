@@ -1,5 +1,6 @@
 import io
 import json
+from pathlib import Path
 
 import pandas as pd
 from fastapi.testclient import TestClient
@@ -1555,7 +1556,7 @@ def test_snapshot_includes_pipeline_templates(tmp_path) -> None:
     assert opened.status_code == 200
     templates = opened.json()['templates']
     pipeline = next(item for item in templates if item['kind'] == 'pipeline')
-    assert pipeline['ref'] == 'examples/example_iris_pipeline'
+    assert pipeline['ref'] == 'examples/example_movie_pipeline'
     assert pipeline['definition']['nodes']
 
 
@@ -1751,7 +1752,7 @@ def test_graph_patch_can_add_pipeline_template(tmp_path) -> None:
             'operations': [
                 {
                     'type': 'add_pipeline_template',
-                    'template_ref': 'builtin/example_iris_pipeline',
+                    'template_ref': 'builtin/example_movie_pipeline',
                     'x': 200,
                     'y': 240,
                 }
@@ -1762,15 +1763,29 @@ def test_graph_patch_can_add_pipeline_template(tmp_path) -> None:
     assert created.status_code == 200
     snapshot = client.get('/api/v1/project/snapshot').json()
     node_ids = {node['id'] for node in snapshot['graph']['nodes']}
-    assert {'constant', 'example_1', 'example_2', 'example_3', 'example_4'} <= node_ids
+    assert {
+        'area',
+        'analysis_dashboard',
+        'constant',
+        'constant_2',
+        'movie_dataset_download',
+        'duration_and_date_analysis',
+        'advanced_rating_analysis',
+        'movie_genre_analysis',
+        'movie_recommendation',
+    } <= node_ids
     constant_node = next(node for node in snapshot['graph']['nodes'] if node['id'] == 'constant')
-    assert constant_node['interface']['outputs'][0]['name'] == 'file'
+    constant_2_node = next(node for node in snapshot['graph']['nodes'] if node['id'] == 'constant_2')
+    assert constant_node['interface']['outputs'][0]['name'] == 'url'
+    assert constant_2_node['interface']['outputs'][0]['name'] == 'ratings_url'
     edge_ids = {edge['id'] for edge in snapshot['graph']['edges']}
-    assert 'constant.file__example_1.iris_csv' in edge_ids
+    assert 'constant.url__movie_dataset_download.url' in edge_ids
+    assert 'constant_2.ratings_url__advanced_rating_analysis.ratings_url' in edge_ids
     layout_by_node = {entry['node_id']: entry for entry in snapshot['graph']['layout']}
-    assert layout_by_node['constant']['x'] == 200
-    assert layout_by_node['example_4']['y'] == 240
-    assert layout_by_node['constant']['y'] - layout_by_node['example_4']['y'] == 240
+    assert layout_by_node['area']['x'] == 200
+    assert layout_by_node['area']['y'] == 240
+    assert layout_by_node['constant']['x'] == 280
+    assert layout_by_node['analysis_dashboard']['y'] == 320
 
 
 def test_graph_patch_requires_prefix_when_pipeline_template_collides(tmp_path) -> None:
@@ -1789,7 +1804,7 @@ def test_graph_patch_requires_prefix_when_pipeline_template_collides(tmp_path) -
             'operations': [
                 {
                     'type': 'add_pipeline_template',
-                    'template_ref': 'builtin/example_iris_pipeline',
+                    'template_ref': 'builtin/example_movie_pipeline',
                 }
             ],
         },
@@ -1803,7 +1818,7 @@ def test_graph_patch_requires_prefix_when_pipeline_template_collides(tmp_path) -
             'operations': [
                 {
                     'type': 'add_pipeline_template',
-                    'template_ref': 'builtin/example_iris_pipeline',
+                    'template_ref': 'builtin/example_movie_pipeline',
                 }
             ],
         },
@@ -1829,7 +1844,7 @@ def test_graph_patch_accepts_prefixed_pipeline_template(tmp_path) -> None:
             'operations': [
                 {
                     'type': 'add_pipeline_template',
-                    'template_ref': 'builtin/example_iris_pipeline',
+                    'template_ref': 'builtin/example_movie_pipeline',
                 }
             ],
         },
@@ -1843,7 +1858,7 @@ def test_graph_patch_accepts_prefixed_pipeline_template(tmp_path) -> None:
             'operations': [
                 {
                     'type': 'add_pipeline_template',
-                    'template_ref': 'builtin/example_iris_pipeline',
+                    'template_ref': 'builtin/example_movie_pipeline',
                     'node_id_prefix': 'study_b',
                 }
             ],
@@ -1855,10 +1870,14 @@ def test_graph_patch_accepts_prefixed_pipeline_template(tmp_path) -> None:
     node_ids = {node['id'] for node in snapshot['graph']['nodes']}
     assert {
         'study_b_constant',
-        'study_b_example_1',
-        'study_b_example_2',
-        'study_b_example_3',
-        'study_b_example_4',
+        'study_b_constant_2',
+        'study_b_movie_dataset_download',
+        'study_b_duration_and_date_analysis',
+        'study_b_advanced_rating_analysis',
+        'study_b_movie_genre_analysis',
+        'study_b_movie_recommendation',
+        'study_b_analysis_dashboard',
+        'study_b_area',
     } <= node_ids
 
 
@@ -2028,7 +2047,7 @@ def test_pipeline_template_constant_value_is_ready_immediately(tmp_path, monkeyp
     assert output.json()['preview']['rows'] == 7
 
 
-def test_uploaded_constant_file_unblocks_downstream_notebook_run(tmp_path) -> None:
+def test_example_movie_pipeline_constants_are_ready_and_local_dataset_run_succeeds(tmp_path) -> None:
     project_root = init_project_root(tmp_path / 'project').root
     app = create_app(project_path=project_root)
     client = TestClient(app)
@@ -2043,35 +2062,42 @@ def test_uploaded_constant_file_unblocks_downstream_notebook_run(tmp_path) -> No
             'operations': [
                 {
                     'type': 'add_pipeline_template',
-                    'template_ref': 'builtin/example_iris_pipeline',
+                    'template_ref': 'builtin/example_movie_pipeline',
                 }
             ],
         },
     )
     assert created.status_code == 200
 
-    blocked = client.post('/api/v1/nodes/example_1/run', json={'mode': 'run_stale', 'action': 'run_upstream'})
-    assert blocked.status_code == 200
-    assert blocked.json()['status'] == 'blocked'
-    assert blocked.json()['blocked_inputs'][0]['source'] == 'constant/file'
+    movie_url = client.get('/api/v1/artifacts/constant/url')
+    ratings_url = client.get('/api/v1/artifacts/constant_2/ratings_url')
+    assert movie_url.status_code == 200
+    assert ratings_url.status_code == 200
+    assert movie_url.json()['state'] == 'ready'
+    assert ratings_url.json()['state'] == 'ready'
 
-    csv_bytes = b'sepal_length,sepal_width,petal_length,petal_width,species\n5.1,3.5,1.4,0.2,setosa\n'
-    upload = client.post(
-        '/api/v1/constants/constant/upload',
-        content=csv_bytes,
-        headers={'X-Filename': 'iris.csv', 'Content-Type': 'text/csv'},
+    movies_path = (
+        Path(__file__).resolve().parents[2]
+        / 'src'
+        / 'bulletjournal'
+        / 'templates'
+        / 'examples'
+        / 'movie_dataset'
+        / 'movies.csv'
     )
-    assert upload.status_code == 200
-    assert upload.json()['artifact_name'] == 'file'
-    assert upload.json()['state'] == 'ready'
+    updated = client.post('/api/v1/constants/constant/value', json={'value': str(movies_path)})
+    assert updated.status_code == 200
+    assert updated.json()['artifact_name'] == 'url'
+    assert updated.json()['state'] == 'ready'
 
-    run = client.post('/api/v1/nodes/example_1/run', json={'mode': 'run_stale'})
+    run = client.post('/api/v1/nodes/movie_dataset_download/run', json={'mode': 'run_stale'})
     assert run.status_code == 200
     assert run.json()['status'] == 'succeeded'
 
-    dataframe = client.get('/api/v1/artifacts/example_1/iris_dataframe')
+    dataframe = client.get('/api/v1/artifacts/movie_dataset_download/movies')
     assert dataframe.status_code == 200
-    assert dataframe.json()['preview']['rows'] == 1
+    assert dataframe.json()['preview']['rows'] > 1000
+    assert 'title' in dataframe.json()['preview']['column_names']
 
 
 def test_uploaded_dataframe_constant_supports_semicolon_separator(tmp_path) -> None:

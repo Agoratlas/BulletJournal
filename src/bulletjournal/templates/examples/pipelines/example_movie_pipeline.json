@@ -1,0 +1,276 @@
+{
+  "title": "Movie Database Example Pipeline",
+  "documentation": "A ready-made multi-step example that downloads a movie database, analyzes runtimes and genres, compares audience ratings, and builds a dashboard of recommendations.",
+  "nodes": [
+    {
+      "id": "area",
+      "kind": "area",
+      "title": "Movie analytics pipeline",
+      "ui": {
+        "area_color": "purple",
+        "area_filled": true,
+        "frozen": false,
+        "title_position": "top-left"
+      }
+    },
+    {
+      "id": "movie_dataset_url",
+      "kind": "constant",
+      "title": "Movie dataset URL",
+      "artifact_name": "url",
+      "data_type": "str",
+      "value": "https://raw.githubusercontent.com/Agoratlas/BulletJournal/main/src/bulletjournal/templates/examples/movie_dataset/movies.csv"
+    },
+    {
+      "id": "ratings_dataset_url",
+      "kind": "constant",
+      "title": "Ratings dataset URL",
+      "artifact_name": "ratings_url",
+      "data_type": "str",
+      "value": "https://raw.githubusercontent.com/Agoratlas/BulletJournal/main/src/bulletjournal/templates/examples/movie_dataset/ratings.csv"
+    },
+    {
+      "id": "movie_dataset_download",
+      "kind": "notebook",
+      "title": "Movie dataset download",
+      "template_ref": "examples/movie_dataset_download"
+    },
+    {
+      "id": "duration_and_date_analysis",
+      "kind": "notebook",
+      "title": "Duration and date analysis",
+      "template_ref": "examples/duration_and_date_analysis"
+    },
+    {
+      "id": "advanced_rating_analysis",
+      "kind": "notebook",
+      "title": "Advanced rating analysis",
+      "template_ref": "examples/advanced_rating_analysis"
+    },
+    {
+      "id": "movie_genre_analysis",
+      "kind": "notebook",
+      "title": "Movie genre analysis",
+      "template_ref": "examples/movie_genre_analysis"
+    },
+    {
+      "id": "movie_recommendation",
+      "kind": "notebook",
+      "title": "Movie recommendation",
+      "template_ref": "examples/movie_recommendation"
+    },
+    {
+      "id": "analysis_dashboard",
+      "kind": "dashboard",
+      "title": "Analysis dashboard",
+      "dashboard": {
+        "sources": [
+          {
+            "node_id": "movie_dataset_download"
+          },
+          {
+            "node_id": "duration_and_date_analysis"
+          },
+          {
+            "node_id": "advanced_rating_analysis"
+          },
+          {
+            "node_id": "movie_genre_analysis"
+          },
+          {
+            "node_id": "movie_recommendation"
+          }
+        ],
+        "panels": [
+          {
+            "node_id": "movie_dataset_download",
+            "asset_name": "dataset_summary",
+            "position": 0,
+            "visible": true
+          },
+          {
+            "node_id": "movie_dataset_download",
+            "asset_name": "movie_dataset",
+            "position": 1,
+            "visible": true
+          },
+          {
+            "node_id": "duration_and_date_analysis",
+            "asset_name": "duration_hist",
+            "position": 2,
+            "visible": true
+          },
+          {
+            "node_id": "duration_and_date_analysis",
+            "asset_name": "publication_hist",
+            "position": 3,
+            "visible": true
+          },
+          {
+            "node_id": "duration_and_date_analysis",
+            "asset_name": "year_duration_bars",
+            "position": 4,
+            "visible": true
+          },
+          {
+            "node_id": "duration_and_date_analysis",
+            "asset_name": "year_duration_scatter",
+            "position": 5,
+            "visible": true
+          },
+          {
+            "node_id": "advanced_rating_analysis",
+            "asset_name": "male_female_scatter",
+            "position": 6,
+            "visible": true
+          },
+          {
+            "node_id": "movie_genre_analysis",
+            "asset_name": "genre_breakdown",
+            "position": 7,
+            "visible": true
+          },
+          {
+            "node_id": "movie_genre_analysis",
+            "asset_name": "genre_breakdown_yearly",
+            "position": 8,
+            "visible": true
+          },
+          {
+            "node_id": "movie_recommendation",
+            "asset_name": "best_movie_genres",
+            "position": 9,
+            "visible": true
+          },
+          {
+            "node_id": "movie_recommendation",
+            "asset_name": "best_movie_directors",
+            "position": 10,
+            "visible": true
+          },
+          {
+            "node_id": "movie_recommendation",
+            "asset_name": "gender_difference_by_genre",
+            "position": 11,
+            "visible": true
+          },
+          {
+            "node_id": "movie_recommendation",
+            "asset_name": "imdb_top_movies",
+            "position": 12,
+            "visible": true
+          }
+        ]
+      }
+    }
+  ],
+  "edges": [
+    {
+      "source_node": "movie_dataset_url",
+      "source_port": "url",
+      "target_node": "movie_dataset_download",
+      "target_port": "url"
+    },
+    {
+      "source_node": "ratings_dataset_url",
+      "source_port": "ratings_url",
+      "target_node": "advanced_rating_analysis",
+      "target_port": "ratings_url"
+    },
+    {
+      "source_node": "movie_dataset_download",
+      "source_port": "movies",
+      "target_node": "duration_and_date_analysis",
+      "target_port": "movies"
+    },
+    {
+      "source_node": "movie_dataset_download",
+      "source_port": "movies",
+      "target_node": "advanced_rating_analysis",
+      "target_port": "movies"
+    },
+    {
+      "source_node": "movie_dataset_download",
+      "source_port": "movies",
+      "target_node": "movie_genre_analysis",
+      "target_port": "movies"
+    },
+    {
+      "source_node": "movie_genre_analysis",
+      "source_port": "movies_single_genre",
+      "target_node": "movie_recommendation",
+      "target_port": "movies"
+    },
+    {
+      "source_node": "advanced_rating_analysis",
+      "source_port": "ratings",
+      "target_node": "movie_recommendation",
+      "target_port": "ratings"
+    }
+  ],
+  "layout": [
+    {
+      "node_id": "area",
+      "x": 1060,
+      "y": -80,
+      "w": 1780,
+      "h": 1160
+    },
+    {
+      "node_id": "movie_dataset_url",
+      "x": 1140,
+      "y": 580,
+      "w": 100,
+      "h": 40
+    },
+    {
+      "node_id": "ratings_dataset_url",
+      "x": 1700,
+      "y": 840,
+      "w": 100,
+      "h": 40
+    },
+    {
+      "node_id": "movie_dataset_download",
+      "x": 1280,
+      "y": 520,
+      "w": 360,
+      "h": 220
+    },
+    {
+      "node_id": "duration_and_date_analysis",
+      "x": 1840,
+      "y": 260,
+      "w": 360,
+      "h": 220
+    },
+    {
+      "node_id": "advanced_rating_analysis",
+      "x": 1840,
+      "y": 780,
+      "w": 360,
+      "h": 220
+    },
+    {
+      "node_id": "movie_genre_analysis",
+      "x": 1840,
+      "y": 520,
+      "w": 360,
+      "h": 220
+    },
+    {
+      "node_id": "movie_recommendation",
+      "x": 2400,
+      "y": 520,
+      "w": 360,
+      "h": 220
+    },
+    {
+      "node_id": "analysis_dashboard",
+      "x": 1900,
+      "y": 0,
+      "w": 240,
+      "h": 140
+    }
+  ]
+}

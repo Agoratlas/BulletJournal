@@ -9,13 +9,14 @@ BUILTIN_PROVIDER = 'builtin'
 EXAMPLES_PROVIDER = 'examples'
 HIDDEN_BUILTIN_NOTEBOOK_TEMPLATES = {'empty_notebook', 'test_starter_notebook', 'value_input'}
 LEGACY_EXAMPLE_NOTEBOOK_REFS = {
-    'example_1': ('builtin/example_1',),
-    'example_2': ('builtin/example_2',),
-    'example_3': ('builtin/example_3',),
-    'example_4': ('builtin/example_4',),
+    'movie_dataset_download': ('builtin/movie_dataset_download', 'builtin/example_1'),
+    'duration_and_date_analysis': ('builtin/duration_and_date_analysis', 'builtin/example_2'),
+    'advanced_rating_analysis': ('builtin/advanced_rating_analysis', 'builtin/example_3'),
+    'movie_genre_analysis': ('builtin/movie_genre_analysis',),
+    'movie_recommendation': ('builtin/movie_recommendation', 'builtin/example_4'),
 }
 LEGACY_EXAMPLE_PIPELINE_REFS = {
-    'example_iris_pipeline': ('builtin/example_iris_pipeline',),
+    'example_movie_pipeline': ('builtin/example_movie_pipeline', 'builtin/example_iris_pipeline'),
 }
 
 

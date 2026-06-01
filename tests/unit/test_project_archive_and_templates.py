@@ -233,8 +233,8 @@ def test_template_service_lists_examples_but_not_builtin_templates(monkeypatch: 
     templates = TemplateService().list_templates()
     refs = {template['ref'] for template in templates}
 
-    assert 'examples/example_1' in refs
-    assert 'examples/example_iris_pipeline' in refs
+    assert 'examples/movie_dataset_download' in refs
+    assert 'examples/example_movie_pipeline' in refs
     assert not any(ref.startswith('builtin/') for ref in refs)
 
 
@@ -246,10 +246,10 @@ def test_example_templates_use_notebook_markdown_as_documentation(monkeypatch: p
 
     templates = {template['ref']: template for template in TemplateService().list_templates()}
 
-    assert templates['examples/example_1']['documentation'].startswith('# Example 1')
-    assert 'Load the iris dataset from a CSV file input block' in templates['examples/example_1']['documentation']
-    assert templates['examples/example_4']['documentation'].startswith('# Example 4')
-    assert 'Build a markdown summary and a matplotlib visualization' in templates['examples/example_4']['documentation']
+    assert templates['examples/movie_dataset_download']['documentation'].startswith('# Download movie dataset')
+    assert 'downloads a CSV file from the provided URL' in templates['examples/movie_dataset_download']['documentation']
+    assert templates['examples/movie_recommendation']['documentation'].startswith('# Movie recommendation')
+    assert 'high-signal recommendations' in templates['examples/movie_recommendation']['documentation']
 
 
 def test_template_service_supports_legacy_example_aliases_when_examples_are_active(
@@ -264,9 +264,9 @@ def test_template_service_supports_legacy_example_aliases_when_examples_are_acti
     notebook = service.resolve_template_source('builtin/example_1', allow_inactive=False)
     pipeline = service.resolve_pipeline_template('builtin/example_iris_pipeline', allow_inactive=False)
 
-    assert notebook.ref == 'examples/example_1'
-    assert service.template_ref('builtin/example_1').ref == 'examples/example_1'
-    assert pipeline.ref == 'examples/example_iris_pipeline'
+    assert notebook.ref == 'examples/movie_dataset_download'
+    assert service.template_ref('builtin/example_1').ref == 'examples/movie_dataset_download'
+    assert pipeline.ref == 'examples/example_movie_pipeline'
 
 
 def test_template_service_hides_examples_when_external_provider_is_active(monkeypatch: pytest.MonkeyPatch) -> None:
