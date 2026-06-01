@@ -36,6 +36,17 @@ def _database_journal_mode(path: Path, *, in_container: bool | None = None) -> s
     return 'WAL'
 
 
+def _unique_validation_issues(issues: Iterable[ValidationIssue]) -> list[ValidationIssue]:
+    unique_issues: list[ValidationIssue] = []
+    seen_issue_ids: set[str] = set()
+    for issue in issues:
+        if issue.issue_id in seen_issue_ids:
+            continue
+        seen_issue_ids.add(issue.issue_id)
+        unique_issues.append(issue)
+    return unique_issues
+
+
 class StateDB:
     def __init__(self, path: Path):
         self.path = path
@@ -165,6 +176,7 @@ class StateDB:
         return None if row is None else str(row['source_hash'])
 
     def replace_validation_issues(self, node_id: str, issues: Iterable[ValidationIssue]) -> None:
+        unique_issues = _unique_validation_issues(issues)
         with self._connection() as connection:
             connection.execute('DELETE FROM validation_issues WHERE node_id = ?', (node_id,))
             now = utc_now_iso()
@@ -182,7 +194,7 @@ class StateDB:
                         json_dumps(issue.details),
                         now,
                     )
-                    for issue in issues
+                    for issue in unique_issues
                 ],
             )
             self._prune_stale_validation_issue_dismissals(connection)

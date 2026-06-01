@@ -461,6 +461,33 @@ def test_parser_rejects_alias_calls() -> None:
     assert any(issue.severity == ValidationSeverity.ERROR for issue in interface.issues)
 
 
+def test_parser_deduplicates_repeated_alias_issues(tmp_path) -> None:
+    notebook = tmp_path / 'duplicate_alias_issues.py'
+    notebook.write_text(
+        """
+import marimo
+
+app = marimo.App()
+
+with app.setup:
+    from bulletjournal.runtime import artifacts
+
+@app.cell
+def _():
+    pull_one = artifacts.pull
+    pull_two = artifacts.pull
+    return
+""".strip()
+        + '\n',
+        encoding='utf-8',
+    )
+
+    interface = parse_notebook_interface(notebook, node_id='duplicate_alias_issues')
+
+    alias_issues = [issue for issue in interface.issues if issue.code == 'artifact_aliasing']
+    assert len(alias_issues) == 1
+
+
 def test_parser_reports_duplicate_cell_globals() -> None:
     notebook = FIXTURES / 'bad_notebook_duplicate_globals.py'
     interface = parse_notebook_interface(notebook, node_id='bad_notebook_duplicate_globals')

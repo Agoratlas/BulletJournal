@@ -160,7 +160,7 @@ def parse_notebook_contract(path: NotebookSource, node_id: str) -> ParsedNoteboo
                 asset_declarations.append(declaration)
         _collect_duplicate_export_issues(cell, node_id=node_id, exported_names=exported_names, issues=issues)
 
-    issues = sorted(issues, key=lambda item: (item.severity.value, item.code, item.message))
+    issues = _normalize_issues(issues)
     docs = extract_notebook_docs_from_module(module)
     interface = NotebookInterface(
         node_id=node_id,
@@ -188,6 +188,18 @@ def _empty_contract(*, node_id: str, source_hash: str, issues: list[ValidationIs
         interface=interface,
         asset_declarations=[],
     )
+
+
+def _normalize_issues(issues: list[ValidationIssue]) -> list[ValidationIssue]:
+    ordered = sorted(issues, key=lambda item: (item.severity.value, item.code, item.message, item.issue_id))
+    deduplicated: list[ValidationIssue] = []
+    seen_issue_ids: set[str] = set()
+    for issue in ordered:
+        if issue.issue_id in seen_issue_ids:
+            continue
+        seen_issue_ids.add(issue.issue_id)
+        deduplicated.append(issue)
+    return deduplicated
 
 
 def _notebook_source(path: NotebookSource) -> tuple[str, str]:
