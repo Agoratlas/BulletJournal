@@ -19,6 +19,7 @@ For multi-project orchestration with separated environments through Docker conta
 ```bash
 pip install bulletjournal-editor
 bulletjournal init testproject
+bulletjournal init /project --project-id study-a --skip-environment
 bulletjournal start testproject --open
 ```
 
@@ -29,6 +30,7 @@ If you are already inside a project root, running `bulletjournal` with no subcom
 ```bash
 bulletjournal init testproject
 bulletjournal init testproject --project-id custom-id
+bulletjournal init /project --project-id study-a --skip-environment
 bulletjournal start .
 bulletjournal dev . --open
 bulletjournal doctor .
@@ -49,17 +51,25 @@ project_root/
 │  ├─ edges.json
 │  └─ layout.json
 ├─ notebooks/
-├─ artifacts/
-│  └─ objects/
+├─ objects/
+├─ dashboards/
 ├─ metadata/
 │  ├─ project.json
 │  └─ state.db
 ├─ checkpoints/
-├─ uploads/
-│  └─ temp/
+├─ temp/
+│  ├─ uploads/
+│  ├─ execution_logs/
+│  └─ worker/
 ├─ pyproject.toml
 └─ uv.lock
 ```
+
+BulletJournal owns the project layout and schema files under `graph/`, `metadata/`, `objects/`, `dashboards/`, `checkpoints/`, and `temp/`.
+
+`pyproject.toml` and `uv.lock` define the project environment, but they can be managed externally. Use `bulletjournal init ... --skip-environment` when another controller is responsible for environment definition and install orchestration.
+
+`bulletjournal init` is safe to rerun. It leaves valid existing layout files in place, recreates missing required directories and runtime directories, fails on unsupported schema versions, and never overwrites existing `pyproject.toml` or `uv.lock` when `--skip-environment` is used.
 
 ## Docs
 

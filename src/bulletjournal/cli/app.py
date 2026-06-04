@@ -24,6 +24,11 @@ def build_parser() -> argparse.ArgumentParser:
     init_parser.add_argument('path')
     init_parser.add_argument('--project-id', default=None)
     init_parser.add_argument('--title', default=None)
+    init_parser.add_argument(
+        '--skip-environment',
+        action='store_true',
+        help='Create or repair BulletJournal-owned layout without creating pyproject.toml or uv.lock',
+    )
 
     start_parser = subparsers.add_parser('start', help='Start the BulletJournal server')
     start_parser.add_argument('path')
@@ -71,7 +76,12 @@ def app() -> None:
         start_server(str(current), open_browser=False)
         return
     if args.command == 'init':
-        root = init_project(args.path, title=args.title, project_id=args.project_id)
+        root = init_project(
+            args.path,
+            title=args.title,
+            project_id=args.project_id,
+            initialize_environment=not args.skip_environment,
+        )
         print(root)
         return
     if args.command == 'start':

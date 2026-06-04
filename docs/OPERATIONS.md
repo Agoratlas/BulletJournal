@@ -8,6 +8,15 @@ bulletjournal start .
 
 `bulletjournal start` fails fast unless the path is already a valid BulletJournal project root.
 
+## Initialize project layout
+
+```bash
+bulletjournal init my-project
+bulletjournal init /project --project-id study-a --skip-environment
+```
+
+Use `--skip-environment` when a controller or external automation owns `pyproject.toml`, `uv.lock`, and dependency installation. In that mode, BulletJournal creates or repairs only BulletJournal-owned project files and runtime directories.
+
 ## Development mode
 
 ```bash

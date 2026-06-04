@@ -33,6 +33,90 @@ def test_project_init_defaults_project_id_from_directory_name(tmp_path) -> None:
     assert paths.object_store_dir == paths.root / 'objects'
 
 
+def test_layout_only_init_creates_schema_v2_files_and_directories(tmp_path) -> None:
+    paths = init_project_root(
+        tmp_path / 'study-a',
+        title='Study A',
+        project_id='study-a',
+        initialize_environment=False,
+    )
+
+    graph_meta = json.loads((paths.graph_dir / 'meta.json').read_text(encoding='utf-8'))
+    project_json = json.loads(paths.project_json_path.read_text(encoding='utf-8'))
+
+    assert graph_meta['schema_version'] == 1
+    assert graph_meta['project_id'] == 'study-a'
+    assert project_json['schema_version'] == 2
+    assert project_json['project_id'] == 'study-a'
+    assert project_json['title'] == 'Study A'
+    assert paths.graph_dir.is_dir()
+    assert paths.metadata_dir.is_dir()
+    assert paths.object_store_dir.is_dir()
+    assert paths.dashboards_dir.is_dir()
+    assert paths.temp_dir.is_dir()
+    assert paths.uploads_dir.is_dir()
+    assert paths.execution_logs_dir.is_dir()
+    assert paths.worker_temp_dir.is_dir()
+    assert paths.state_db_path.is_file()
+
+
+def test_layout_only_init_does_not_create_environment_files(tmp_path) -> None:
+    paths = init_project_root(tmp_path / 'study-a', project_id='study-a', initialize_environment=False)
+
+    assert paths.pyproject_path.exists() is False
+    assert paths.uv_lock_path.exists() is False
+
+
+def test_layout_only_init_does_not_overwrite_existing_environment_files(tmp_path) -> None:
+    project_root = tmp_path / 'study-a'
+    project_root.mkdir()
+    pyproject_path = project_root / 'pyproject.toml'
+    uv_lock_path = project_root / 'uv.lock'
+    pyproject_path.write_text('[project]\nname = "external"\n', encoding='utf-8')
+    uv_lock_path.write_text('version = 1\n', encoding='utf-8')
+
+    paths = init_project_root(project_root, project_id='study-a', initialize_environment=False)
+
+    assert pyproject_path.read_text(encoding='utf-8') == '[project]\nname = "external"\n'
+    assert uv_lock_path.read_text(encoding='utf-8') == 'version = 1\n'
+    assert paths.pyproject_path == pyproject_path
+    assert paths.uv_lock_path == uv_lock_path
+
+
+def test_layout_only_init_is_idempotent(tmp_path) -> None:
+    paths = init_project_root(tmp_path / 'study-a', title='Study A', project_id='study-a', initialize_environment=False)
+    initial_graph_meta = (paths.graph_dir / 'meta.json').read_text(encoding='utf-8')
+    initial_project_json = paths.project_json_path.read_text(encoding='utf-8')
+
+    repeated = init_project_root(
+        paths.root, title='Different Title', project_id='study-a', initialize_environment=False
+    )
+
+    assert (repeated.graph_dir / 'meta.json').read_text(encoding='utf-8') == initial_graph_meta
+    assert repeated.project_json_path.read_text(encoding='utf-8') == initial_project_json
+
+
+def test_layout_only_init_repairs_missing_transient_directories(tmp_path) -> None:
+    paths = init_project_root(tmp_path / 'study-a', project_id='study-a', initialize_environment=False)
+    paths.dashboards_dir.rmdir()
+    paths.execution_logs_dir.rmdir()
+
+    repaired = init_project_root(paths.root, project_id='study-a', initialize_environment=False)
+
+    assert repaired.dashboards_dir.is_dir()
+    assert repaired.execution_logs_dir.is_dir()
+
+
+def test_layout_only_init_fails_on_invalid_existing_schema_version(tmp_path) -> None:
+    paths = init_project_root(tmp_path / 'study-a', project_id='study-a', initialize_environment=False)
+    project_json = json.loads(paths.project_json_path.read_text(encoding='utf-8'))
+    project_json['schema_version'] = 1
+    paths.project_json_path.write_text(json.dumps(project_json), encoding='utf-8')
+
+    with pytest.raises(ProjectValidationError, match='Schema version 1 projects are no longer supported'):
+        init_project_root(paths.root, project_id='study-a', initialize_environment=False)
+
+
 def test_require_project_root_rejects_schema_version_1(tmp_path) -> None:
     paths = init_project_root(tmp_path / 'project')
     project_json = json.loads(paths.project_json_path.read_text(encoding='utf-8'))

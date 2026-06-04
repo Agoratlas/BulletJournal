@@ -39,6 +39,7 @@ def test_build_parser_parses_supported_commands() -> None:
     parser = cli_app.build_parser()
 
     init_args = parser.parse_args(['init', 'demo', '--title', 'Demo'])
+    init_skip_environment_args = parser.parse_args(['init', 'demo', '--project-id', 'demo-id', '--skip-environment'])
     init_with_project_id_args = parser.parse_args(['init', 'demo', '--project-id', 'demo-id', '--title', 'Demo'])
     start_args = parser.parse_args(['start', 'demo', '--open', '--base-path', '/p/demo'])
     dev_args = parser.parse_args(['dev', 'demo', '--base-path', '/p/demo'])
@@ -52,6 +53,8 @@ def test_build_parser_parses_supported_commands() -> None:
     assert init_args.command == 'init'
     assert init_args.project_id is None
     assert init_args.title == 'Demo'
+    assert init_args.skip_environment is False
+    assert init_skip_environment_args.skip_environment is True
     assert init_with_project_id_args.project_id == 'demo-id'
     assert start_args.open is True
     assert start_args.base_path == '/p/demo'
@@ -88,13 +91,36 @@ def test_app_errors_when_no_command_outside_project(monkeypatch: pytest.MonkeyPa
 
 
 def test_app_dispatches_init_command(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
-    parser = DummyParser(argparse.Namespace(command='init', path='demo', title='Demo', project_id='demo-id'))
+    parser = DummyParser(
+        argparse.Namespace(command='init', path='demo', title='Demo', project_id='demo-id', skip_environment=True)
+    )
+    init_calls: list[dict[str, object]] = []
 
     monkeypatch.setattr(cli_app, 'build_parser', lambda: parser)
-    monkeypatch.setattr(cli_app, 'init_project', lambda path, title=None, project_id=None: Path('/tmp/demo'))
+    monkeypatch.setattr(
+        cli_app,
+        'init_project',
+        lambda path, title=None, project_id=None, initialize_environment=True: init_calls.append(
+            {
+                'path': path,
+                'title': title,
+                'project_id': project_id,
+                'initialize_environment': initialize_environment,
+            }
+        )
+        or Path('/tmp/demo'),
+    )
 
     cli_app.app()
 
+    assert init_calls == [
+        {
+            'path': 'demo',
+            'title': 'Demo',
+            'project_id': 'demo-id',
+            'initialize_environment': False,
+        }
+    ]
     assert capsys.readouterr().out.strip() == '/tmp/demo'
 
 
@@ -364,10 +390,47 @@ def test_init_project_returns_initialized_root(monkeypatch: pytest.MonkeyPatch) 
     monkeypatch.setattr(
         init_project_module,
         'init_project_root',
-        lambda path, title=None, project_id=None: SimpleNamespace(root=Path('/tmp/bj-project')),
+        lambda path, title=None, project_id=None, initialize_environment=True: SimpleNamespace(
+            root=Path('/tmp/bj-project')
+        ),
     )
 
     assert init_project_module.init_project('demo', title='Demo', project_id='demo-id') == Path('/tmp/bj-project')
+
+
+def test_init_project_passes_skip_environment_to_storage(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[dict[str, object]] = []
+
+    monkeypatch.setattr(
+        init_project_module,
+        'init_project_root',
+        lambda path, title=None, project_id=None, initialize_environment=True: calls.append(
+            {
+                'path': path,
+                'title': title,
+                'project_id': project_id,
+                'initialize_environment': initialize_environment,
+            }
+        )
+        or SimpleNamespace(root=Path('/tmp/bj-project')),
+    )
+
+    result = init_project_module.init_project(
+        'demo',
+        title='Demo',
+        project_id='demo-id',
+        initialize_environment=False,
+    )
+
+    assert result == Path('/tmp/bj-project')
+    assert calls == [
+        {
+            'path': Path('demo'),
+            'title': 'Demo',
+            'project_id': 'demo-id',
+            'initialize_environment': False,
+        }
+    ]
 
 
 def test_mark_environment_changed_opens_project_and_updates_state(monkeypatch: pytest.MonkeyPatch) -> None:

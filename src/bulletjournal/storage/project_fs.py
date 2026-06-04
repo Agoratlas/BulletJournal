@@ -120,10 +120,26 @@ def validate_project_id(project_id: str) -> str:
     return candidate
 
 
-def init_project_root(path: Path, title: str | None = None, project_id: str | None = None) -> ProjectPaths:
+def init_project_root(
+    path: Path,
+    title: str | None = None,
+    project_id: str | None = None,
+    *,
+    initialize_environment: bool = True,
+) -> ProjectPaths:
     root = path.resolve()
     root.mkdir(parents=True, exist_ok=True)
     paths = ProjectPaths(root)
+    now = utc_now_iso()
+    resolved_project_id = validate_project_id(project_id or slugify(root.name))
+
+    _initialize_project_layout(paths, project_id=resolved_project_id, title=title, now=now)
+    if initialize_environment:
+        _initialize_project_environment(paths, project_id=resolved_project_id)
+    return paths
+
+
+def _initialize_project_layout(paths: ProjectPaths, *, project_id: str, title: str | None, now: str) -> None:
     ensure_directory(paths.graph_dir)
     ensure_directory(paths.notebooks_dir)
     ensure_directory(paths.object_store_dir)
@@ -135,40 +151,97 @@ def init_project_root(path: Path, title: str | None = None, project_id: str | No
     ensure_directory(paths.execution_logs_dir)
     ensure_directory(paths.worker_temp_dir)
 
-    now = utc_now_iso()
-    resolved_project_id = validate_project_id(project_id or slugify(root.name))
+    _ensure_graph_files(paths, project_id=project_id, now=now)
+    _ensure_project_json(paths, project_id=project_id, title=title, now=now)
+    StateDB(paths.state_db_path)
 
-    meta = {
-        'schema_version': GRAPH_SCHEMA_VERSION,
-        'project_id': resolved_project_id,
-        'graph_version': 1,
-        'updated_at': now,
-    }
-    nodes: list[dict[str, object]] = []
-    edges: list[dict[str, object]] = []
-    layout: list[dict[str, object]] = []
-    atomic_write_text(paths.graph_dir / 'meta.json', json_dumps(meta, pretty=True) + '\n')
-    atomic_write_text(paths.graph_dir / 'nodes.json', json_dumps(nodes, pretty=True) + '\n')
-    atomic_write_text(paths.graph_dir / 'edges.json', json_dumps(edges, pretty=True) + '\n')
-    atomic_write_text(paths.graph_dir / 'layout.json', json_dumps(layout, pretty=True) + '\n')
+
+def _initialize_project_environment(paths: ProjectPaths, *, project_id: str) -> None:
+    if not paths.pyproject_path.exists():
+        atomic_write_text(paths.pyproject_path, _default_project_pyproject(project_id=project_id))
+    if not paths.uv_lock_path.exists():
+        _initialize_project_uv_lock(paths, project_id=project_id)
+
+
+def load_project_json(paths: ProjectPaths) -> dict[str, object]:
+    return json.loads(paths.project_json_path.read_text(encoding='utf-8'))
+
+
+def _load_json_file(path: Path) -> object:
+    try:
+        return json.loads(path.read_text(encoding='utf-8'))
+    except FileNotFoundError:
+        raise
+    except json.JSONDecodeError as exc:
+        raise ProjectValidationError(f'{path} is not valid JSON.') from exc
+
+
+def _ensure_graph_files(paths: ProjectPaths, *, project_id: str, now: str) -> None:
+    meta_path = paths.graph_dir / 'meta.json'
+    if meta_path.exists():
+        _validate_graph_meta(meta_path, project_id=project_id)
+    else:
+        meta = {
+            'schema_version': GRAPH_SCHEMA_VERSION,
+            'project_id': project_id,
+            'graph_version': 1,
+            'updated_at': now,
+        }
+        atomic_write_text(meta_path, json_dumps(meta, pretty=True) + '\n')
+
+    _ensure_json_list_file(paths.graph_dir / 'nodes.json')
+    _ensure_json_list_file(paths.graph_dir / 'edges.json')
+    _ensure_json_list_file(paths.graph_dir / 'layout.json')
+
+
+def _ensure_project_json(paths: ProjectPaths, *, project_id: str, title: str | None, now: str) -> None:
+    if paths.project_json_path.exists():
+        project_json = load_project_json(paths)
+        validate_project_schema_version(project_json, source=str(paths.project_json_path))
+        _validate_project_identity(project_json, expected_project_id=project_id, source=str(paths.project_json_path))
+        return
 
     project_json = {
         'schema_version': PROJECT_SCHEMA_VERSION,
-        'project_id': resolved_project_id,
+        'project_id': project_id,
         'created_at': now,
     }
     if title is not None and title.strip():
         project_json['title'] = title.strip()
     atomic_write_text(paths.project_json_path, json_dumps(project_json, pretty=True) + '\n')
 
-    atomic_write_text(paths.pyproject_path, _default_project_pyproject(project_id=resolved_project_id))
-    _initialize_project_uv_lock(paths, project_id=resolved_project_id)
-    StateDB(paths.state_db_path)
-    return paths
+
+def _ensure_json_list_file(path: Path) -> None:
+    if not path.exists():
+        atomic_write_text(path, json_dumps([], pretty=True) + '\n')
+        return
+    payload = _load_json_file(path)
+    if not isinstance(payload, list):
+        raise ProjectValidationError(f'{path} must contain a JSON array.')
 
 
-def load_project_json(paths: ProjectPaths) -> dict[str, object]:
-    return json.loads(paths.project_json_path.read_text(encoding='utf-8'))
+def _validate_graph_meta(path: Path, *, project_id: str) -> None:
+    payload = _load_json_file(path)
+    if not isinstance(payload, dict):
+        raise ProjectValidationError(f'{path} must contain a JSON object.')
+    raw_version = payload.get('schema_version')
+    try:
+        version = int(raw_version)
+    except (TypeError, ValueError) as exc:
+        raise ProjectValidationError(f'{path} is missing a valid `schema_version`.') from exc
+    if version != GRAPH_SCHEMA_VERSION:
+        raise ProjectValidationError(
+            f'Unsupported BulletJournal graph schema version {version}; expected {GRAPH_SCHEMA_VERSION}.'
+        )
+    _validate_project_identity(payload, expected_project_id=project_id, source=str(path))
+
+
+def _validate_project_identity(payload: dict[str, object], *, expected_project_id: str, source: str) -> None:
+    actual_project_id = validate_project_id(str(payload.get('project_id') or ''))
+    if actual_project_id != expected_project_id:
+        raise ProjectValidationError(
+            f'{source} has project_id {actual_project_id!r}, expected {expected_project_id!r}.'
+        )
 
 
 def validate_project_schema_version(project_json: dict[str, object], *, source: str) -> None:

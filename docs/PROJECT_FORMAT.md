@@ -1,6 +1,6 @@
 # Project Format
 
-BulletJournal projects are portable directories with a canonical locked environment definition.
+BulletJournal projects are portable directories with a canonical project layout and schema metadata.
 
 ## Canonical layout
 
@@ -8,17 +8,50 @@ BulletJournal projects are portable directories with a canonical locked environm
 project_root/
 |- graph/
 |- notebooks/
-|- artifacts/
-|  `- objects/
+|- objects/
+|- dashboards/
 |- metadata/
 |  |- project.json
 |  `- state.db
 |- checkpoints/
-|- uploads/
-|  `- temp/
+`- temp/
+   |- uploads/
+   |- execution_logs/
+   `- worker/
 |- pyproject.toml
 `- uv.lock
 ```
+
+## Ownership
+
+BulletJournal-owned files and directories:
+
+- `graph/meta.json`
+- `graph/nodes.json`
+- `graph/edges.json`
+- `graph/layout.json`
+- `metadata/project.json`
+- `metadata/state.db`
+- `notebooks/`
+- `objects/`
+- `dashboards/`
+- `checkpoints/`
+- `temp/uploads/`
+- `temp/execution_logs/`
+- `temp/worker/`
+
+Environment files at the project root may be managed either by BulletJournal or by an external controller:
+
+- `pyproject.toml`
+- `uv.lock`
+
+For controller-managed environments, run:
+
+```bash
+bulletjournal init /project --project-id study-a --skip-environment
+```
+
+That command creates or repairs the BulletJournal-owned layout without creating or replacing `pyproject.toml` or `uv.lock`.
 
 ## Stable metadata
 
@@ -30,15 +63,28 @@ project_root/
 
 `project_id` is stable across export/import and must match `^[a-z0-9][a-z0-9_-]{1,62}$`.
 
+`schema_version` in `metadata/project.json` must equal `2`. Projects with any other project schema version are rejected.
+
 ## Environment definition
 
-- `pyproject.toml` and `uv.lock` at the project root are authoritative
+- `pyproject.toml` and `uv.lock` at the project root define the environment when BulletJournal manages it
+- external controllers may manage those files instead and use `bulletjournal init --skip-environment` for layout-only bootstrap
 - `metadata/environment.json` is no longer part of the canonical format
 - `metadata/environment_packages.txt` is no longer part of the canonical format
 
 ## SQLite state
 
 `metadata/state.db` stores mutable execution metadata such as notebook revisions, notices, artifacts, runs, checkpoints, and controller-facing activity timestamps.
+
+## Initialization semantics
+
+Initialization is idempotent by design:
+
+- existing valid layout files are left in place
+- missing required files and directories are created
+- missing transient runtime directories such as `dashboards/` or `temp/execution_logs/` are recreated
+- unsupported schema versions fail fast
+- `--skip-environment` never creates, overwrites, or repairs `pyproject.toml` and `uv.lock`
 
 ## Graph node kinds
 
