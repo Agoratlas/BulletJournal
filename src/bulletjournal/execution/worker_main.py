@@ -6,14 +6,12 @@ import json
 import sys
 import traceback
 import warnings
-from collections import deque
 from pathlib import Path
 
 from bulletjournal.domain.enums import ArtifactRole, LineageMode
 from bulletjournal.domain.models import AssetDeclaration, Port
 from bulletjournal.execution.manifests import RunManifest
 from bulletjournal.execution.marimo_adapter import execute_notebook
-from bulletjournal.parser.marimo_loader import iter_app_cells, load_module_ast
 from bulletjournal.runtime.context import Binding, RuntimeContext, activate_runtime_context
 
 
@@ -82,55 +80,63 @@ def _install_script_runner_progress_hooks(
 ) -> None:
     if progress_path is None:
         return
+    _ = notebook_path
     from marimo._runtime.app.script_runner import AppScriptRunner
 
-    module = load_module_ast(notebook_path)
-    cell_order = iter_app_cells(module)
-    cell_number_by_index = {index: index + 1 for index in range(len(cell_order))}
-    total_cells = len(cell_order)
+    original_run_synchronous = getattr(
+        AppScriptRunner,
+        '_bulletjournal_original_run_synchronous',
+        AppScriptRunner._run_synchronous,
+    )
+    original_run_asynchronous = getattr(
+        AppScriptRunner,
+        '_bulletjournal_original_run_asynchronous',
+        AppScriptRunner._run_asynchronous,
+    )
 
-    original_run_synchronous = AppScriptRunner._run_synchronous
-    original_run_asynchronous = AppScriptRunner._run_asynchronous
+    AppScriptRunner._bulletjournal_original_run_synchronous = original_run_synchronous
+    AppScriptRunner._bulletjournal_original_run_asynchronous = original_run_asynchronous
 
-    class ProgressDeque(deque):
-        def __init__(self, values: deque, runner: object) -> None:
-            super().__init__(values)
-            self._runner = runner
-            self._execution_index = 0
+    def _decorate_scheduler(runner: object) -> None:
+        scheduler = getattr(runner, '_scheduler', None)
+        if scheduler is None:
+            raise RuntimeError('Unsupported marimo AppScriptRunner internals: missing `_scheduler`.')
+        pop_cell = getattr(scheduler, 'pop_cell', None)
+        cells_to_run = getattr(scheduler, 'cells_to_run', None)
+        if not callable(pop_cell) or cells_to_run is None:
+            raise RuntimeError('Unsupported marimo scheduler internals: expected `pop_cell()` and `cells_to_run`.')
+        if getattr(scheduler, '_bulletjournal_progress_wrapped', False):
+            return
 
-        def popleft(self):  # type: ignore[override]
-            cell_id = super().popleft()
-            if total_cells > 0:
-                cell_number = cell_number_by_index.get(self._execution_index)
-                self._execution_index += 1
-                graph = self._runner.app.graph
-                cell_impl = graph.cells[cell_id]
-                _write_progress(
-                    progress_path,
-                    {
-                        'cell_id': str(cell_id),
-                        'cell_number': cell_number,
-                        'total_cells': total_cells,
-                        'cell_code': cell_impl.code,
-                    },
-                )
+        total_cells = len(cells_to_run)
+        execution_index = 0
+
+        def wrapped_pop_cell():
+            nonlocal execution_index
+            cell_id = pop_cell()
+            execution_index += 1
+            graph = runner.app.graph
+            cell_impl = graph.cells[cell_id]
+            _write_progress(
+                progress_path,
+                {
+                    'cell_id': str(cell_id),
+                    'cell_number': execution_index,
+                    'total_cells': total_cells,
+                    'cell_code': cell_impl.code,
+                },
+            )
             return cell_id
 
-    def _decorate_queue(runner: object) -> deque:
-        queue = runner.cells_to_run
-        if getattr(runner, '_bulletjournal_progress_wrapped', False):
-            return queue
-        wrapped_queue = ProgressDeque(queue, runner)
-        runner.cells_to_run = wrapped_queue
-        runner._bulletjournal_progress_wrapped = True
-        return wrapped_queue
+        scheduler.pop_cell = wrapped_pop_cell
+        scheduler._bulletjournal_progress_wrapped = True
 
     def patched_run_synchronous(self, post_execute_hooks):
-        _decorate_queue(self)
+        _decorate_scheduler(self)
         return original_run_synchronous(self, post_execute_hooks)
 
     async def patched_run_asynchronous(self, post_execute_hooks):
-        _decorate_queue(self)
+        _decorate_scheduler(self)
         return await original_run_asynchronous(self, post_execute_hooks)
 
     AppScriptRunner._run_synchronous = patched_run_synchronous

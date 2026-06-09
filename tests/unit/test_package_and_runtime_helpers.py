@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 import importlib
 import json
 import sys
+from collections import deque
 from pathlib import Path
 from types import SimpleNamespace
 from typing import cast
@@ -584,6 +586,102 @@ def test_execute_notebook_sets_progress_environment(monkeypatch: pytest.MonkeyPa
 
     assert result == {'result': {'ok': True}}
     assert 'BULLETJOURNAL_PROGRESS_PATH' not in marimo_adapter.os.environ
+
+
+def test_install_script_runner_progress_hooks_tracks_scheduler_progress(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from marimo._runtime.app import script_runner as marimo_script_runner
+
+    writes: list[dict[str, object]] = []
+
+    class FakeScheduler:
+        def __init__(self, cells: list[str]) -> None:
+            self._cells_to_run = deque(cells)
+
+        def pending(self) -> bool:
+            return bool(self._cells_to_run)
+
+        def pop_cell(self) -> str:
+            return self._cells_to_run.popleft()
+
+        @property
+        def cells_to_run(self) -> deque[str]:
+            return self._cells_to_run
+
+    class FakeRunner:
+        def __init__(self) -> None:
+            self.app = SimpleNamespace(
+                graph=SimpleNamespace(
+                    cells={
+                        'cell-1': SimpleNamespace(code='x = 1'),
+                        'cell-2': SimpleNamespace(code='y = 2'),
+                    }
+                )
+            )
+            self._scheduler = FakeScheduler(['cell-1', 'cell-2'])
+
+        def _run_synchronous(self, post_execute_hooks):
+            _ = post_execute_hooks
+            executed: list[str] = []
+            while self._scheduler.pending():
+                executed.append(self._scheduler.pop_cell())
+            return executed
+
+        async def _run_asynchronous(self, post_execute_hooks):
+            _ = post_execute_hooks
+            executed: list[str] = []
+            while self._scheduler.pending():
+                executed.append(self._scheduler.pop_cell())
+            return executed
+
+    monkeypatch.setattr(marimo_script_runner, 'AppScriptRunner', FakeRunner)
+    monkeypatch.setattr(worker_main, '_write_progress', lambda path, payload: writes.append(payload))
+
+    worker_main._install_script_runner_progress_hooks(
+        notebook_path=tmp_path / 'sample_notebook.py',
+        progress_path=tmp_path / 'progress.json',
+    )
+
+    sync_runner = FakeRunner()
+    assert sync_runner._run_synchronous([]) == ['cell-1', 'cell-2']
+    assert writes == [
+        {'cell_id': 'cell-1', 'cell_number': 1, 'total_cells': 2, 'cell_code': 'x = 1'},
+        {'cell_id': 'cell-2', 'cell_number': 2, 'total_cells': 2, 'cell_code': 'y = 2'},
+    ]
+
+    writes.clear()
+    async_runner = FakeRunner()
+    assert asyncio.run(async_runner._run_asynchronous([])) == ['cell-1', 'cell-2']
+    assert writes == [
+        {'cell_id': 'cell-1', 'cell_number': 1, 'total_cells': 2, 'cell_code': 'x = 1'},
+        {'cell_id': 'cell-2', 'cell_number': 2, 'total_cells': 2, 'cell_code': 'y = 2'},
+    ]
+
+
+def test_install_script_runner_progress_hooks_requires_supported_scheduler_shape(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from marimo._runtime.app import script_runner as marimo_script_runner
+
+    class FakeRunner:
+        def _run_synchronous(self, post_execute_hooks):
+            _ = post_execute_hooks
+            return None
+
+        async def _run_asynchronous(self, post_execute_hooks):
+            _ = post_execute_hooks
+            return None
+
+    monkeypatch.setattr(marimo_script_runner, 'AppScriptRunner', FakeRunner)
+
+    worker_main._install_script_runner_progress_hooks(
+        notebook_path=tmp_path / 'sample_notebook.py',
+        progress_path=tmp_path / 'progress.json',
+    )
+
+    with pytest.raises(RuntimeError, match='Unsupported marimo AppScriptRunner internals'):
+        FakeRunner()._run_synchronous([])
 
 
 def test_launch_editor_invokes_marimo_with_expected_command(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
