@@ -294,10 +294,10 @@ export async function uploadConstantFile(nodeId: string, file: File, csvSeparato
   return response.json() as Promise<Record<string, unknown>>
 }
 
-export async function setConstantValue(nodeId: string, value: unknown) {
+export async function setConstantValue(nodeId: string, payload: { value?: unknown; value_json?: string }) {
   return request<Record<string, unknown>>(`/api/v1/constants/${encodeURIComponent(nodeId)}/value`, {
     method: 'POST',
-    body: JSON.stringify({ value }),
+    body: JSON.stringify(payload),
   })
 }
 

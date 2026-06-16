@@ -75,7 +75,7 @@ class GraphService:
         pending_dashboard_ref_deletes: list[str] = []
         pending_editor_stops: list[str] = []
         pending_input_heads: list[tuple[str, str]] = []
-        pending_constant_values: list[tuple[str, Any]] = []
+        pending_constant_values: list[tuple[str, Any, str | None]] = []
         pending_artifact_state_resets: list[tuple[str, str]] = []
         pending_state_deletes: list[str] = []
         pending_state_renames: list[tuple[str, str]] = []
@@ -91,8 +91,8 @@ class GraphService:
             elif op_type == 'add_constant_node':
                 node_id, artifact_name = self._add_constant_node(graph, operation)
                 pending_input_heads.append((node_id, artifact_name))
-                if operation.get('value') is not None:
-                    pending_constant_values.append((node_id, operation.get('value')))
+                if operation.get('value') is not None or operation.get('value_json') is not None:
+                    pending_constant_values.append((node_id, operation.get('value'), _constant_value_json(operation)))
                 interruption_roots.add(node_id)
             elif op_type == 'add_file_input_node':
                 node_id = self._add_file_input_node(graph, operation)
@@ -213,12 +213,13 @@ class GraphService:
                 artifact_name,
                 ArtifactState.PENDING,
             )
-        for node_id, value in pending_constant_values:
+        for node_id, value, value_json in pending_constant_values:
             from bulletjournal.services.artifact_service import ArtifactService  # local import to avoid cycle
 
             ArtifactService(self.project_service).set_constant_value(
                 node_id,
                 value,
+                value_json=value_json,
                 propagate_downstream_stale=False,
                 interrupt_active_run=False,
             )
@@ -627,7 +628,7 @@ class GraphService:
 
         notebook_creates: list[tuple[str, str]] = []
         input_heads: list[tuple[str, str]] = []
-        constant_values: list[tuple[str, Any]] = []
+        constant_values: list[tuple[str, Any, str | None]] = []
         dashboard_creates: list[dict[str, Any]] = []
         node_id_map: dict[str, str] = {}
         dashboard_templates: list[tuple[str, str, dict[str, Any]]] = []
@@ -696,7 +697,7 @@ class GraphService:
                 )
                 input_heads.append((node_id, artifact_name))
                 if 'value' in raw_node:
-                    constant_values.append((node_id, raw_node.get('value')))
+                    constant_values.append((node_id, raw_node.get('value'), None))
             elif kind == NodeKind.FILE_INPUT.value:
                 artifact_name = str(raw_node.get('artifact_name') or '').strip()
                 if not artifact_name and isinstance(raw_node.get('ui'), dict):
@@ -1290,6 +1291,13 @@ def _pipeline_constant_artifact_name(raw_node: dict[str, Any]) -> str:
     if resolved is None:
         raise GraphValidationError(f'Constant node `{template_node_id}` must define `artifact_name`.')
     return resolved
+
+
+def _constant_value_json(operation: dict[str, Any]) -> str | None:
+    raw_value_json = operation.get('value_json')
+    if isinstance(raw_value_json, str):
+        return raw_value_json
+    return None
 
 
 def _next_available_node_id(graph: GraphData, base: str) -> str:

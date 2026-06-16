@@ -47,6 +47,7 @@ class AddConstantNodeOperation(StrictModel):
     h: int = 40
     data_type: str
     value: Any | None = None
+    value_json: str | None = None
     ui: dict[str, Any] | None = None
 
 
@@ -209,6 +210,7 @@ class FileUploadResponse(StrictModel):
 
 class ConstantValueUpdateRequest(StrictModel):
     value: Any | None = None
+    value_json: str | None = None
     clear: bool = False
 
 

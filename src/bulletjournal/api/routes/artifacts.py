@@ -88,7 +88,11 @@ def set_constant_value(node_id: str, payload: ConstantValueUpdateRequest, reques
     result = (
         container.artifact_service.clear_constant_value(node_id)
         if payload.clear
-        else container.artifact_service.set_constant_value(node_id, payload.value)
+        else container.artifact_service.set_constant_value(
+            node_id,
+            payload.value,
+            value_json=payload.value_json,
+        )
     )
     return {
         'node_id': node_id,

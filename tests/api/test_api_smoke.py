@@ -2183,6 +2183,306 @@ def test_uploaded_dataframe_constant_handles_large_mixed_type_columns(tmp_path) 
     assert preview['sample'][0]['year'] == '2000'
 
 
+def test_float_constant_value_accepts_round_number_payloads(tmp_path) -> None:
+    project_root = init_project_root(tmp_path / 'project').root
+    app = create_app(project_path=project_root)
+    client = TestClient(app)
+
+    opened = client.get('/api/v1/project/snapshot')
+    graph_version = opened.json()['graph']['meta']['graph_version']
+
+    created = client.patch(
+        '/api/v1/graph',
+        json={
+            'graph_version': graph_version,
+            'operations': [
+                {
+                    'type': 'add_constant_node',
+                    'node_id': 'float_source',
+                    'title': 'Float Source',
+                    'data_type': 'float',
+                }
+            ],
+        },
+    )
+    assert created.status_code == 200
+
+    updated = client.post('/api/v1/constants/float_source/value', json={'value': 3, 'value_json': '3.0'})
+    assert updated.status_code == 200
+    assert updated.json()['artifact_name'] == 'value'
+    assert updated.json()['state'] == 'ready'
+
+    artifact = client.get('/api/v1/artifacts/float_source/value')
+    assert artifact.status_code == 200
+    payload = artifact.json()
+    assert payload['state'] == 'ready'
+    assert payload['preview']['repr'] == '3.0'
+    assert payload['preview']['editor_text'] == '3.0'
+
+
+def test_add_float_constant_node_accepts_round_number_initial_value(tmp_path) -> None:
+    project_root = init_project_root(tmp_path / 'project').root
+    app = create_app(project_path=project_root)
+    client = TestClient(app)
+
+    opened = client.get('/api/v1/project/snapshot')
+    graph_version = opened.json()['graph']['meta']['graph_version']
+
+    created = client.patch(
+        '/api/v1/graph',
+        json={
+            'graph_version': graph_version,
+            'operations': [
+                {
+                    'type': 'add_constant_node',
+                    'node_id': 'float_source',
+                    'title': 'Float Source',
+                    'data_type': 'float',
+                    'value': 3,
+                    'value_json': '3.0',
+                }
+            ],
+        },
+    )
+    assert created.status_code == 200
+
+    artifact = client.get('/api/v1/artifacts/float_source/value')
+    assert artifact.status_code == 200
+    payload = artifact.json()
+    assert payload['state'] == 'ready'
+    assert payload['preview']['repr'] == '3.0'
+    assert payload['preview']['editor_text'] == '3.0'
+
+
+def test_constant_value_json_preserves_nested_round_floats(tmp_path) -> None:
+    project_root = init_project_root(tmp_path / 'project').root
+    app = create_app(project_path=project_root)
+    client = TestClient(app)
+
+    opened = client.get('/api/v1/project/snapshot')
+    graph_version = opened.json()['graph']['meta']['graph_version']
+
+    created = client.patch(
+        '/api/v1/graph',
+        json={
+            'graph_version': graph_version,
+            'operations': [
+                {
+                    'type': 'add_constant_node',
+                    'node_id': 'list_source',
+                    'title': 'List Source',
+                    'data_type': 'list',
+                    'value': [3],
+                    'value_json': '[3.0]',
+                }
+            ],
+        },
+    )
+    assert created.status_code == 200
+
+    artifact = client.get('/api/v1/artifacts/list_source/value')
+    assert artifact.status_code == 200
+    payload = artifact.json()
+    assert payload['state'] == 'ready'
+    assert payload['preview']['editor_text'] == '[\n  3.0\n]'
+    assert payload['preview']['compact_repr'] == '[3.0]'
+
+
+def test_constant_value_endpoint_rejects_invalid_value_json(tmp_path) -> None:
+    project_root = init_project_root(tmp_path / 'project').root
+    app = create_app(project_path=project_root)
+    client = TestClient(app)
+
+    opened = client.get('/api/v1/project/snapshot')
+    graph_version = opened.json()['graph']['meta']['graph_version']
+
+    created = client.patch(
+        '/api/v1/graph',
+        json={
+            'graph_version': graph_version,
+            'operations': [
+                {
+                    'type': 'add_constant_node',
+                    'node_id': 'float_source',
+                    'title': 'Float Source',
+                    'data_type': 'float',
+                }
+            ],
+        },
+    )
+    assert created.status_code == 200
+
+    updated = client.post('/api/v1/constants/float_source/value', json={'value': 3, 'value_json': '3.0]'})
+    assert updated.status_code == 400
+    assert updated.json()['detail'] == 'Constant value must be valid JSON: Extra data.'
+
+
+def test_constant_value_endpoint_falls_back_to_value_without_value_json(tmp_path) -> None:
+    project_root = init_project_root(tmp_path / 'project').root
+    app = create_app(project_path=project_root)
+    client = TestClient(app)
+
+    opened = client.get('/api/v1/project/snapshot')
+    graph_version = opened.json()['graph']['meta']['graph_version']
+
+    created = client.patch(
+        '/api/v1/graph',
+        json={
+            'graph_version': graph_version,
+            'operations': [
+                {
+                    'type': 'add_constant_node',
+                    'node_id': 'float_source',
+                    'title': 'Float Source',
+                    'data_type': 'float',
+                }
+            ],
+        },
+    )
+    assert created.status_code == 200
+
+    updated = client.post('/api/v1/constants/float_source/value', json={'value': 3})
+    assert updated.status_code == 200
+
+    artifact = client.get('/api/v1/artifacts/float_source/value')
+    assert artifact.status_code == 200
+    payload = artifact.json()
+    assert payload['state'] == 'ready'
+    assert payload['preview']['repr'] == '3.0'
+    assert payload['preview']['editor_text'] == '3.0'
+
+
+def test_constant_value_endpoint_prefers_value_json_over_mismatched_value(tmp_path) -> None:
+    project_root = init_project_root(tmp_path / 'project').root
+    app = create_app(project_path=project_root)
+    client = TestClient(app)
+
+    opened = client.get('/api/v1/project/snapshot')
+    graph_version = opened.json()['graph']['meta']['graph_version']
+
+    created = client.patch(
+        '/api/v1/graph',
+        json={
+            'graph_version': graph_version,
+            'operations': [
+                {
+                    'type': 'add_constant_node',
+                    'node_id': 'list_source',
+                    'title': 'List Source',
+                    'data_type': 'list',
+                }
+            ],
+        },
+    )
+    assert created.status_code == 200
+
+    updated = client.post(
+        '/api/v1/constants/list_source/value',
+        json={'value': [999], 'value_json': '[3.0]'},
+    )
+    assert updated.status_code == 200
+
+    artifact = client.get('/api/v1/artifacts/list_source/value')
+    assert artifact.status_code == 200
+    payload = artifact.json()
+    assert payload['preview']['compact_repr'] == '[3.0]'
+    assert payload['preview']['editor_text'] == '[\n  3.0\n]'
+
+
+def test_add_constant_node_falls_back_to_value_without_value_json(tmp_path) -> None:
+    project_root = init_project_root(tmp_path / 'project').root
+    app = create_app(project_path=project_root)
+    client = TestClient(app)
+
+    opened = client.get('/api/v1/project/snapshot')
+    graph_version = opened.json()['graph']['meta']['graph_version']
+
+    created = client.patch(
+        '/api/v1/graph',
+        json={
+            'graph_version': graph_version,
+            'operations': [
+                {
+                    'type': 'add_constant_node',
+                    'node_id': 'float_source',
+                    'title': 'Float Source',
+                    'data_type': 'float',
+                    'value': 3,
+                }
+            ],
+        },
+    )
+    assert created.status_code == 200
+
+    artifact = client.get('/api/v1/artifacts/float_source/value')
+    assert artifact.status_code == 200
+    payload = artifact.json()
+    assert payload['state'] == 'ready'
+    assert payload['preview']['repr'] == '3.0'
+    assert payload['preview']['editor_text'] == '3.0'
+
+
+def test_add_constant_node_prefers_value_json_over_mismatched_value(tmp_path) -> None:
+    project_root = init_project_root(tmp_path / 'project').root
+    app = create_app(project_path=project_root)
+    client = TestClient(app)
+
+    opened = client.get('/api/v1/project/snapshot')
+    graph_version = opened.json()['graph']['meta']['graph_version']
+
+    created = client.patch(
+        '/api/v1/graph',
+        json={
+            'graph_version': graph_version,
+            'operations': [
+                {
+                    'type': 'add_constant_node',
+                    'node_id': 'list_source',
+                    'title': 'List Source',
+                    'data_type': 'list',
+                    'value': [999],
+                    'value_json': '[3.0]',
+                }
+            ],
+        },
+    )
+    assert created.status_code == 200
+
+    artifact = client.get('/api/v1/artifacts/list_source/value')
+    assert artifact.status_code == 200
+    payload = artifact.json()
+    assert payload['preview']['compact_repr'] == '[3.0]'
+    assert payload['preview']['editor_text'] == '[\n  3.0\n]'
+
+
+def test_add_constant_node_rejects_invalid_value_json(tmp_path) -> None:
+    project_root = init_project_root(tmp_path / 'project').root
+    app = create_app(project_path=project_root)
+    client = TestClient(app)
+
+    opened = client.get('/api/v1/project/snapshot')
+    graph_version = opened.json()['graph']['meta']['graph_version']
+
+    created = client.patch(
+        '/api/v1/graph',
+        json={
+            'graph_version': graph_version,
+            'operations': [
+                {
+                    'type': 'add_constant_node',
+                    'node_id': 'float_source',
+                    'title': 'Float Source',
+                    'data_type': 'float',
+                    'value': 3,
+                    'value_json': '3.0]',
+                }
+            ],
+        },
+    )
+    assert created.status_code == 400
+    assert created.json()['detail'] == 'Constant value must be valid JSON: Extra data.'
+
+
 def test_file_input_node_can_use_custom_artifact_name(tmp_path) -> None:
     project_root = init_project_root(tmp_path / 'project').root
     app = create_app(project_path=project_root)

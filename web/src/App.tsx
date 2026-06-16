@@ -3079,6 +3079,17 @@ function App() {
     return parsed
   }
 
+  function buildConstantValuePayload(dataType: ConstantValueType, jsonText: string): { value: unknown; value_json: string } {
+    return {
+      value: parseConstantJsonValue(dataType, jsonText),
+      value_json: jsonText,
+    }
+  }
+
+  function isConstantValuePayload(value: unknown): value is { value?: unknown; value_json?: string } {
+    return typeof value === 'object' && value !== null && 'value_json' in value
+  }
+
   async function saveConstantBlockValue(
     nodeId: string,
     payload: { dataType: ConstantValueType; jsonText: string; uploadFile: File | null; jsonUploadFile: File | null; csvSeparator: CsvSeparator },
@@ -3097,10 +3108,15 @@ function App() {
       }
       return
     }
-    await setConstantValue(nodeId, resolvedValue)
+    await setConstantValue(
+      nodeId,
+      isConstantValuePayload(resolvedValue)
+        ? resolvedValue
+        : { value: resolvedValue },
+    )
   }
 
-  async function resolveConstantEditorValue(payload: { dataType: ConstantValueType; jsonText: string; uploadFile: File | null; jsonUploadFile: File | null; csvSeparator: CsvSeparator }): Promise<unknown | undefined> {
+  async function resolveConstantEditorValue(payload: { dataType: ConstantValueType; jsonText: string; uploadFile: File | null; jsonUploadFile: File | null; csvSeparator: CsvSeparator }): Promise<{ value: unknown; value_json: string } | unknown | undefined> {
     if (payload.dataType === 'file' || payload.dataType === 'pandas.DataFrame') {
       return undefined
     }
@@ -3109,7 +3125,7 @@ function App() {
     if (!resolvedJsonText) {
       return undefined
     }
-    return parseConstantJsonValue(payload.dataType, resolvedJsonText)
+    return buildConstantValuePayload(payload.dataType, resolvedJsonText)
   }
 
   async function attachConstantToInput(sourceNodeId: string, targetNodeId: string, targetPort: string) {
@@ -3144,7 +3160,11 @@ function App() {
       node_id: nodeId,
       title: 'Constant',
       data_type: payload.dataType ?? presetConstantType ?? 'int',
-      ...(initialValue === undefined ? {} : { value: initialValue }),
+      ...(initialValue === undefined
+        ? {}
+        : isConstantValuePayload(initialValue)
+          ? initialValue
+          : { value: initialValue }),
       x: layoutX,
       y: layoutY,
       w: CONSTANT_NODE_WIDTH,

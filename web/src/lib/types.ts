@@ -515,7 +515,7 @@ export type ProjectOpenResponse = ProjectSnapshot
 
 export type GraphPatchOperation =
   | { type: 'add_notebook_node'; node_id: string; title: string; x?: number; y?: number; w?: number; h?: number; template_ref?: string; source_text?: string; ui?: { frozen?: boolean } }
-  | { type: 'add_constant_node'; node_id: string; title?: string; data_type: string; value?: unknown; ui?: { artifact_name?: string; data_type?: string; frozen?: boolean }; x?: number; y?: number; w?: number; h?: number }
+  | { type: 'add_constant_node'; node_id: string; title?: string; data_type: string; value?: unknown; value_json?: string; ui?: { artifact_name?: string; data_type?: string; frozen?: boolean }; x?: number; y?: number; w?: number; h?: number }
   | { type: 'add_file_input_node'; node_id: string; title: string; artifact_name?: string; ui?: { frozen?: boolean }; x?: number; y?: number; w?: number; h?: number }
   | { type: 'add_organizer_node'; node_id: string; title?: string; ui?: { frozen?: boolean; organizer_ports?: Array<{ key: string; name: string; data_type: string }> }; x?: number; y?: number; w?: number; h?: number }
   | { type: 'add_area_node'; node_id: string; title?: string; ui?: { frozen?: boolean; title_position?: string; area_color?: string; area_filled?: boolean }; x?: number; y?: number; w?: number; h?: number }

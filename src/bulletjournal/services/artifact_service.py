@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import json
 import mimetypes
 from pathlib import Path
 from typing import Any
@@ -83,6 +84,7 @@ class ArtifactService:
         node_id: str,
         value: Any,
         *,
+        value_json: str | None = None,
         propagate_downstream_stale: bool = True,
         interrupt_active_run: bool = True,
     ) -> dict[str, Any]:
@@ -97,9 +99,13 @@ class ArtifactService:
             raise InvalidRequestError(
                 f'Constant block `{node_id}` expects `{data_type}` and must be populated from an uploaded file.'
             )
+        value = _resolve_constant_value(data_type=data_type, value=value, value_json=value_json)
         if data_type == 'pandas.Series' and isinstance(value, list):
             value = pd.Series(value)
-        persisted = self.project_service.require_project().object_store.persist_value(value, data_type)
+        try:
+            persisted = self.project_service.require_project().object_store.persist_value(value, data_type)
+        except TypeError as exc:
+            raise InvalidRequestError(str(exc)) from exc
         return self._save_managed_artifact(
             node_id=node_id,
             artifact_name=constant_artifact_name(node),
@@ -417,3 +423,14 @@ class ArtifactService:
             return mime_type
         guessed, _ = mimetypes.guess_type(filename)
         return guessed or 'application/octet-stream'
+
+
+def _resolve_constant_value(*, data_type: str, value: Any, value_json: str | None) -> Any:
+    if value_json is not None:
+        try:
+            value = json.loads(value_json)
+        except json.JSONDecodeError as exc:
+            raise InvalidRequestError(f'Constant value must be valid JSON: {exc.msg}.') from exc
+    if data_type == 'float' and isinstance(value, int) and not isinstance(value, bool):
+        return float(value)
+    return value

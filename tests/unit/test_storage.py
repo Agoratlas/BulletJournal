@@ -166,6 +166,18 @@ def test_object_store_rejects_wrong_import_type(tmp_path) -> None:
         store.load_value(persisted['artifact_hash'], 'int')
 
 
+def test_object_store_persists_round_float_values_from_ints(tmp_path) -> None:
+    paths = init_project_root(tmp_path / 'project')
+    store = ObjectStore(paths)
+
+    persisted = store.persist_value(3.0, 'float')
+    loaded = store.load_value(persisted['artifact_hash'], 'float')
+
+    assert loaded == 3.0
+    assert isinstance(loaded, float)
+    assert persisted['preview']['repr'] == '3.0'
+
+
 def test_graph_store_write_sorts_nodes_edges_and_layout(tmp_path) -> None:
     paths = init_project_root(tmp_path / 'project')
     store = GraphStore(paths)
