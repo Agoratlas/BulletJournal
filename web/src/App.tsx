@@ -1070,12 +1070,12 @@ function App() {
     return value as ConstantValueType
   }
 
-  function constantArtifactPreview(nodeId: string) {
-    return liveSnapshot?.artifacts.find((artifact) => artifact.node_id === nodeId && artifact.artifact_name === 'value')?.preview ?? null
+  function constantArtifactPreview(nodeId: string, artifactName = 'value') {
+    return liveSnapshot?.artifacts.find((artifact) => artifact.node_id === nodeId && artifact.artifact_name === artifactName)?.preview ?? null
   }
 
-  function constantInspectorText(nodeId: string): { text: string; truncated: boolean; editorText: string | null } {
-    const preview = constantArtifactPreview(nodeId) as { inspector_text?: unknown; inspector_truncated?: unknown; editor_text?: unknown } | null
+  function constantInspectorText(nodeId: string, artifactName = 'value'): { text: string; truncated: boolean; editorText: string | null } {
+    const preview = constantArtifactPreview(nodeId, artifactName) as { inspector_text?: unknown; inspector_truncated?: unknown; editor_text?: unknown } | null
     return {
       text: typeof preview?.inspector_text === 'string' ? preview.inspector_text : '',
       truncated: Boolean(preview?.inspector_truncated),
@@ -1308,6 +1308,17 @@ function App() {
 
   function requestDeleteSelection(nodeIds: string[], edgeIds: string[], options: { createCheckpoint?: boolean } = {}) {
     if (!projectId || !liveSnapshot || (!nodeIds.length && !edgeIds.length)) {
+      return
+    }
+    const dashboardEdgeIds = edgeIds.filter((edgeId) => dashboardPseudoEdgeNodes(edgeId) !== null)
+    if (dashboardEdgeIds.length) {
+      const dashboardIds = Array.from(new Set(
+        dashboardEdgeIds
+          .map((edgeId) => dashboardPseudoEdgeNodes(edgeId)?.dashboardId ?? null)
+          .filter((dashboardId): dashboardId is string => dashboardId !== null),
+      ))
+      applySelection(dashboardIds, [], { openInspector: false })
+      void handleDeleteSelection([], dashboardEdgeIds)
       return
     }
     if (!nodeIds.length) {
@@ -2460,6 +2471,31 @@ function App() {
     if (!projectId || !liveSnapshot || (!nodeIds.length && !edgeIds.length)) {
       return
     }
+    const dashboardPseudoEdgeRecords = edgeIds
+      .map((edgeId) => dashboardPseudoEdgeNodes(edgeId))
+      .filter((edge): edge is { dashboardId: string; notebookId: string } => edge !== null)
+    if (dashboardPseudoEdgeRecords.length && !nodeIds.length) {
+      const dashboardIds = Array.from(new Set(dashboardPseudoEdgeRecords.map((edge) => edge.dashboardId)))
+      for (const dashboardId of dashboardIds) {
+        const dashboard = await ensureDashboardRecord(dashboardId)
+        const removedNotebookIds = new Set(
+          dashboardPseudoEdgeRecords
+            .filter((edge) => edge.dashboardId === dashboardId)
+            .map((edge) => edge.notebookId),
+        )
+        const nextSourceNodeIds = dashboard.sources
+          .map((source) => source.node_id)
+          .filter((sourceNodeId) => !removedNotebookIds.has(sourceNodeId))
+        await updateDashboardSources(dashboardId, {
+          title: dashboard.title,
+          sourceNodeIds: nextSourceNodeIds,
+        })
+      }
+      applySelection(dashboardIds, [], { openInspector: false })
+      setNodeActionMenu(null)
+      setPortActionMenu(null)
+      return
+    }
     const history = await deleteSelectionHistoryEntry(nodeIds, edgeIds)
     const deletedNodeIdSet = new Set(nodeIds)
     const dashboardPseudoEdges = edgeIds
@@ -2491,6 +2527,7 @@ function App() {
         return
       }
     }
+    let preservedNodeIds: string[] = []
     if (dashboardPseudoEdges.length) {
       const dashboardRemovals = new Map<string, Set<string>>()
       for (const edge of dashboardPseudoEdges) {
@@ -2498,6 +2535,7 @@ function App() {
         notebookIds.add(edge.notebookId)
         dashboardRemovals.set(edge.dashboardId, notebookIds)
       }
+      preservedNodeIds = Array.from(dashboardRemovals.keys())
       for (const [dashboardId, notebookIds] of dashboardRemovals) {
         const dashboard = await ensureDashboardRecord(dashboardId)
         const nextSourceNodeIds = dashboard.sources
@@ -2509,7 +2547,7 @@ function App() {
         })
       }
     }
-    applySelection([], [], { openInspector: false })
+    applySelection(preservedNodeIds, [], { openInspector: false })
     setArtifactNodeId((current) => (current && deletedNodeIdSet.has(current) ? null : current))
     setNodeActionMenu(null)
     setPortActionMenu(null)
@@ -3274,7 +3312,7 @@ function App() {
           { nodeId, details: response },
         )
       }
-      await refreshSnapshot()
+      await refreshSnapshotNow()
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Run failed.'
       if (isEditorOpenConflict(message)) {
@@ -3337,7 +3375,7 @@ function App() {
       } else if (initialResponse.status === 'blocked') {
         reportClientWarning('run-selection-blocked', 'run_blocked', formatRunBlockedMessage(liveSnapshot, null, initialResponse), { details: initialResponse })
       }
-      await refreshSnapshot()
+      await refreshSnapshotNow()
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Run failed.'
       reportClientError('run-selection', 'run_failed', message)
@@ -3379,7 +3417,7 @@ function App() {
           { nodeId, details: response },
         )
       }
-      await refreshSnapshot()
+      await refreshSnapshotNow()
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Run failed.'
       reportClientError(`run:${nodeId}:${mode}`, 'run_failed', message, { nodeId })
@@ -3404,7 +3442,7 @@ function App() {
       } else if (response.status === 'blocked') {
         reportClientWarning('run-selection-blocked', 'run_blocked', formatRunBlockedMessage(liveSnapshot, null, response), { details: response })
       }
-      await refreshSnapshot()
+      await refreshSnapshotNow()
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Run failed.'
       reportClientError('run-selection', 'run_failed', message)
@@ -3426,7 +3464,7 @@ function App() {
           reportClientError('run-all', 'run_queue_failed', formatRunFailureMessage(liveSnapshot, response, 'Run queue failed.'), { details: response })
         }
       }
-      await refreshSnapshot()
+      await refreshSnapshotNow()
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Run queue failed.'
       reportClientError('run-all', 'run_queue_failed', message)
@@ -3450,10 +3488,20 @@ function App() {
     if (!removals.length) {
       return
     }
+    const removedDashboardIds = removals
+      .map((change) => dashboardPseudoEdgeNodes(change.id)?.dashboardId ?? null)
+      .filter((dashboardId): dashboardId is string => dashboardId !== null)
+    const preservedNodeIds = Array.from(new Set(removedDashboardIds))
+    if (preservedNodeIds.length) {
+      applySelection(preservedNodeIds, [], { openInspector: false })
+    }
     const redo = {
       operations: removals.map((change) => ({ type: 'remove_edge', edge_id: change.id } satisfies GraphPatchOperation)),
     }
     await mutateGraph(redo.operations, { history: liveSnapshot ? simpleHistoryEntryForPlan(liveSnapshot, redo) : null })
+    if (preservedNodeIds.length) {
+      applySelection(preservedNodeIds, [], { openInspector: false })
+    }
   }
 
   async function handleUpdateOrganizerPorts(
@@ -3783,7 +3831,7 @@ function App() {
       )
       return
     }
-    const inspector = constantInspectorText(nodeId)
+    const inspector = constantInspectorText(nodeId, node.ui?.artifact_name ?? 'value')
     selectSingleNode(nodeId)
     setConstantNodeEdit({
       nodeId,

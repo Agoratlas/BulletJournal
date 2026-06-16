@@ -15,6 +15,17 @@ from bulletjournal.domain.enums import RunStatus, ValidationSeverity
 from bulletjournal.storage.project_fs import init_project_root
 
 
+def wait_for_run_status(client: TestClient, run_id: str, expected: str, *, timeout: float = 10.0) -> dict:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        snapshot = client.get('/api/v1/project/snapshot').json()
+        run = next((entry for entry in snapshot['runs'] if entry['run_id'] == run_id), None)
+        if run is not None and run['status'] == expected:
+            return snapshot
+        time.sleep(0.05)
+    raise AssertionError(f'Run `{run_id}` did not reach status `{expected}` within {timeout} seconds.')
+
+
 def test_can_add_and_run_builtin_notebook(tmp_path) -> None:
     project_root = init_project_root(tmp_path / 'project').root
     app = create_app(project_path=project_root)
@@ -46,9 +57,10 @@ def test_can_add_and_run_builtin_notebook(tmp_path) -> None:
         json={'mode': 'run_stale', 'action': 'use_stale'},
     )
     assert run.status_code == 200
-    if run.json()['status'] != 'succeeded':
+    if run.json()['status'] != 'running':
         raise AssertionError(run.json())
-    assert run.json()['status'] == 'succeeded'
+    assert run.json()['status'] == 'running'
+    wait_for_run_status(client, run.json()['run_id'], 'succeeded')
 
     artifact = client.get('/api/v1/artifacts/sample_node/sample_df')
     assert artifact.status_code == 200
@@ -156,9 +168,10 @@ if __name__ == '__main__':
         json={'mode': 'run_stale', 'action': 'run_upstream'},
     )
     assert run.status_code == 200
-    if run.json()['status'] != 'succeeded':
+    if run.json()['status'] != 'running':
         raise AssertionError(run.json())
-    assert run.json()['status'] == 'succeeded'
+    assert run.json()['status'] == 'running'
+    wait_for_run_status(client, run.json()['run_id'], 'succeeded')
 
     artifact = client.get('/api/v1/artifacts/consumer/doubled')
     assert artifact.status_code == 200
@@ -275,7 +288,8 @@ if __name__ == '__main__':
         json={'mode': 'run_all', 'scope': 'descendants'},
     )
     assert run.status_code == 200
-    assert run.json()['status'] == 'succeeded'
+    assert run.json()['status'] == 'running'
+    wait_for_run_status(client, run.json()['run_id'], 'succeeded')
 
     artifact = client.get('/api/v1/artifacts/consumer/doubled')
     assert artifact.status_code == 200
@@ -291,7 +305,8 @@ if __name__ == '__main__':
         json={'mode': 'run_all', 'scope': 'descendants'},
     )
     assert rerun.status_code == 200
-    assert rerun.json()['status'] == 'succeeded'
+    assert rerun.json()['status'] == 'running'
+    wait_for_run_status(client, rerun.json()['run_id'], 'succeeded')
 
     refreshed = client.get('/api/v1/artifacts/consumer/doubled')
     assert refreshed.status_code == 200
@@ -436,7 +451,8 @@ if __name__ == '__main__':
         json={'mode': 'run_stale', 'action': 'use_stale'},
     )
     assert prime_right.status_code == 200
-    assert prime_right.json()['status'] == 'succeeded'
+    assert prime_right.json()['status'] == 'running'
+    wait_for_run_status(client, prime_right.json()['run_id'], 'succeeded')
 
     right_path.write_text(right_source.replace('5', '9', 1), encoding='utf-8')
     container.project_service.reparse_notebook_by_path(right_path)
@@ -454,7 +470,8 @@ if __name__ == '__main__':
         json={'mode': 'run_all', 'action': 'run_upstream', 'scope': 'descendants'},
     )
     assert run.status_code == 200
-    assert run.json()['status'] == 'succeeded'
+    assert run.json()['status'] == 'running'
+    wait_for_run_status(client, run.json()['run_id'], 'succeeded')
 
     artifact = client.get('/api/v1/artifacts/consumer/total')
     assert artifact.status_code == 200
@@ -559,7 +576,8 @@ if __name__ == '__main__':
         json={'mode': 'run_stale', 'node_ids': ['producer', 'consumer']},
     )
     assert run.status_code == 200
-    assert run.json()['status'] == 'succeeded'
+    assert run.json()['status'] == 'running'
+    wait_for_run_status(client, run.json()['run_id'], 'succeeded')
 
     artifact = client.get('/api/v1/artifacts/consumer/tripled')
     assert artifact.status_code == 200
@@ -639,7 +657,8 @@ def test_run_upstream_executes_through_organizer(tmp_path) -> None:
         json={'mode': 'run_stale', 'action': 'run_upstream'},
     )
     assert run.status_code == 200
-    assert run.json()['status'] == 'succeeded'
+    assert run.json()['status'] == 'running'
+    wait_for_run_status(client, run.json()['run_id'], 'succeeded')
 
     artifact = client.get('/api/v1/artifacts/table_sink/sample_df')
     assert artifact.status_code == 200
@@ -703,7 +722,8 @@ def test_disconnecting_edge_marks_downstream_artifact_stale_until_rerun(tmp_path
         json={'mode': 'run_stale', 'action': 'run_upstream'},
     )
     assert run.status_code == 200
-    assert run.json()['status'] == 'succeeded'
+    assert run.json()['status'] == 'running'
+    wait_for_run_status(client, run.json()['run_id'], 'succeeded')
 
     artifact = client.get('/api/v1/artifacts/table_sink/sample_df')
     assert artifact.status_code == 200
@@ -735,7 +755,8 @@ def test_disconnecting_edge_marks_downstream_artifact_stale_until_rerun(tmp_path
         json={'mode': 'run_stale', 'action': 'use_stale'},
     )
     assert rerun.status_code == 200
-    assert rerun.json()['status'] == 'succeeded'
+    assert rerun.json()['status'] == 'running'
+    wait_for_run_status(client, rerun.json()['run_id'], 'succeeded')
 
     refreshed = client.get('/api/v1/artifacts/table_sink/sample_df')
     assert refreshed.status_code == 200
@@ -885,7 +906,8 @@ def test_deleting_node_removes_artifacts_and_stales_downstream(tmp_path) -> None
         json={'mode': 'run_stale', 'action': 'run_upstream'},
     )
     assert run.status_code == 200
-    assert run.json()['status'] == 'succeeded'
+    assert run.json()['status'] == 'running'
+    wait_for_run_status(client, run.json()['run_id'], 'succeeded')
 
     delete = client.patch(
         '/api/v1/graph',
@@ -973,7 +995,8 @@ def test_reparse_input_port_removal_disconnects_edges_and_stales_node_outputs(tm
         json={'mode': 'run_stale', 'action': 'run_upstream'},
     )
     assert run.status_code == 200
-    assert run.json()['status'] == 'succeeded'
+    assert run.json()['status'] == 'running'
+    wait_for_run_status(client, run.json()['run_id'], 'succeeded')
 
     sink_path = project_root / 'notebooks' / 'table_sink.py'
     sink_source = sink_path.read_text(encoding='utf-8')
@@ -1063,7 +1086,8 @@ def test_recreating_same_edge_restores_matching_stale_outputs_to_ready(tmp_path)
         json={'mode': 'run_stale', 'action': 'run_upstream'},
     )
     assert run.status_code == 200
-    assert run.json()['status'] == 'succeeded'
+    assert run.json()['status'] == 'running'
+    wait_for_run_status(client, run.json()['run_id'], 'succeeded')
 
     ready_before_disconnect = client.get('/api/v1/artifacts/table_sink/sample_df')
     assert ready_before_disconnect.status_code == 200
@@ -1202,9 +1226,11 @@ if __name__ == '__main__':
 
     assert run_response['status_code'] == 200
     assert isinstance(run_response['body'], dict)
-    assert run_response['body']['status'] == 'cancelled'
+    assert run_response['body']['status'] == 'running'
 
-    snapshot = client.get('/api/v1/project/snapshot').json()
+    cancelled_snapshot = wait_for_run_status(client, run_response['body']['run_id'], 'cancelled')
+
+    snapshot = cancelled_snapshot
     warning = next(notice for notice in snapshot['notices'] if notice['code'] == 'run_interrupted_by_graph_edit')
     assert warning['severity'] == 'warning'
 
@@ -1308,9 +1334,10 @@ if __name__ == '__main__':
 
         thread.join(timeout=10)
 
-    assert run_response['status_code'] == 200
-    assert isinstance(run_response['body'], dict)
-    assert run_response['body']['status'] == 'succeeded'
+        assert run_response['status_code'] == 200
+        assert isinstance(run_response['body'], dict)
+        assert run_response['body']['status'] == 'running'
+        wait_for_run_status(threaded_client, run_response['body']['run_id'], 'succeeded')
 
     snapshot = client.get('/api/v1/project/snapshot').json()
     assert all(notice['code'] != 'run_interrupted_by_graph_edit' for notice in snapshot['notices'])
@@ -1370,7 +1397,8 @@ if __name__ == '__main__':
         json={'mode': 'run_stale', 'action': 'use_stale'},
     )
     assert first_run.status_code == 200
-    assert first_run.json()['status'] == 'succeeded'
+    assert first_run.json()['status'] == 'running'
+    wait_for_run_status(client, first_run.json()['run_id'], 'succeeded')
 
     second_run = client.post(
         '/api/v1/nodes/sample_node/run',
@@ -1441,7 +1469,8 @@ if __name__ == '__main__':
             json={'mode': 'run_stale', 'action': 'use_stale'},
         )
         assert managed_run.status_code == 200
-        assert managed_run.json()['status'] == 'succeeded'
+        assert managed_run.json()['status'] == 'running'
+        wait_for_run_status(client, managed_run.json()['run_id'], 'succeeded')
 
         snapshot = client.get('/api/v1/project/snapshot').json()
         assert all(notice['code'] != 'editor_already_open' for notice in snapshot['notices'])
@@ -1502,7 +1531,8 @@ if __name__ == '__main__':
         json={'mode': 'run_stale', 'action': 'use_stale'},
     )
     assert run.status_code == 200
-    assert run.json()['status'] == 'failed'
+    assert run.json()['status'] == 'running'
+    wait_for_run_status(client, run.json()['run_id'], 'failed')
 
     snapshot = client.get('/api/v1/project/snapshot').json()
     notice = next(notice for notice in snapshot['notices'] if notice['code'] == 'run_failed')
@@ -1590,7 +1620,8 @@ if __name__ == '__main__':
         json={'mode': 'run_stale', 'action': 'run_upstream'},
     )
     assert run.status_code == 200
-    assert run.json()['status'] == 'failed'
+    assert run.json()['status'] == 'running'
+    wait_for_run_status(client, run.json()['run_id'], 'failed')
 
     snapshot = client.get('/api/v1/project/snapshot').json()
     producer = next(node for node in snapshot['graph']['nodes'] if node['id'] == 'value_source')
@@ -1654,7 +1685,8 @@ if __name__ == '__main__':
         json={'mode': 'run_stale', 'action': 'use_stale'},
     )
     assert run.status_code == 200
-    assert run.json()['status'] == 'failed'
+    assert run.json()['status'] == 'running'
+    wait_for_run_status(client, run.json()['run_id'], 'failed')
 
     snapshot = client.get('/api/v1/project/snapshot').json()
     notice = next(notice for notice in snapshot['notices'] if notice['code'] == 'run_failed')
@@ -1766,6 +1798,132 @@ if __name__ == '__main__':
     assert all(run['status'] not in {'queued', 'running', 'failed'} for run in snapshot['runs'])
 
 
+def test_zero_output_notebook_tracks_execution_freshness_and_run_all(tmp_path) -> None:
+    project_root = init_project_root(tmp_path / 'project').root
+    app = create_app(project_path=project_root)
+    client = TestClient(app)
+    container = app.state.container
+
+    opened = client.get('/api/v1/project/snapshot')
+    graph_version = opened.json()['graph']['meta']['graph_version']
+
+    patch = client.patch(
+        '/api/v1/graph',
+        json={
+            'graph_version': graph_version,
+            'operations': [
+                {'type': 'add_notebook_node', 'node_id': 'producer', 'title': 'Producer'},
+                {'type': 'add_notebook_node', 'node_id': 'notifier', 'title': 'Notifier'},
+            ],
+        },
+    )
+    assert patch.status_code == 200
+
+    producer_path = project_root / 'notebooks' / 'producer.py'
+    notifier_path = project_root / 'notebooks' / 'notifier.py'
+    producer_path.write_text(
+        (
+            """
+import marimo
+
+app = marimo.App()
+
+with app.setup:
+    from bulletjournal.runtime import artifacts
+
+@app.cell
+def _():
+    artifacts.push(4, name='value', data_type=int)
+    return
+
+if __name__ == '__main__':
+    from bulletjournal.runtime.standalone import run_notebook_app
+
+    run_notebook_app(app, __file__)
+""".strip()
+            + '\n'
+        ),
+        encoding='utf-8',
+    )
+    notifier_path.write_text(
+        (
+            """
+import marimo
+
+app = marimo.App()
+
+with app.setup:
+    from bulletjournal.runtime import artifacts
+
+@app.cell
+def _():
+    value = artifacts.pull(name='value', data_type=int)
+    return value
+
+@app.cell
+def _(value):
+    _ = value + 1
+    return
+
+if __name__ == '__main__':
+    from bulletjournal.runtime.standalone import run_notebook_app
+
+    run_notebook_app(app, __file__)
+""".strip()
+            + '\n'
+        ),
+        encoding='utf-8',
+    )
+    container.project_service.reparse_notebook_by_path(producer_path)
+    container.project_service.reparse_notebook_by_path(notifier_path)
+
+    snapshot = client.get('/api/v1/project/snapshot').json()
+    notifier = next(node for node in snapshot['graph']['nodes'] if node['id'] == 'notifier')
+    assert notifier['state'] == 'pending'
+
+    connect = client.patch(
+        '/api/v1/graph',
+        json={
+            'graph_version': snapshot['graph']['meta']['graph_version'],
+            'operations': [
+                {
+                    'type': 'add_edge',
+                    'source_node': 'producer',
+                    'source_port': 'value',
+                    'target_node': 'notifier',
+                    'target_port': 'value',
+                }
+            ],
+        },
+    )
+    assert connect.status_code == 200
+
+    run = client.post('/api/v1/nodes/notifier/run', json={'mode': 'run_stale', 'action': 'run_upstream'})
+    assert run.status_code == 200
+    assert run.json()['status'] == 'running'
+    wait_for_run_status(client, run.json()['run_id'], 'succeeded')
+
+    snapshot = client.get('/api/v1/project/snapshot').json()
+    notifier = next(node for node in snapshot['graph']['nodes'] if node['id'] == 'notifier')
+    assert notifier['state'] == 'ready'
+
+    producer_path.write_text(producer_path.read_text(encoding='utf-8').replace('4', '5', 1), encoding='utf-8')
+    container.project_service.reparse_notebook_by_path(producer_path)
+
+    snapshot = client.get('/api/v1/project/snapshot').json()
+    notifier = next(node for node in snapshot['graph']['nodes'] if node['id'] == 'notifier')
+    assert notifier['state'] == 'stale'
+
+    run_all = client.post('/api/v1/runs/run-all', json={'mode': 'run_stale'})
+    assert run_all.status_code == 200
+    assert run_all.json()['status'] == 'running'
+    wait_for_run_status(client, run_all.json()['run_id'], 'succeeded')
+
+    snapshot = client.get('/api/v1/project/snapshot').json()
+    notifier = next(node for node in snapshot['graph']['nodes'] if node['id'] == 'notifier')
+    assert notifier['state'] == 'ready'
+
+
 def test_inline_constant_value_notebook_can_run_immediately(tmp_path) -> None:
     project_root = init_project_root(tmp_path / 'project').root
     app = create_app(project_path=project_root)
@@ -1823,7 +1981,8 @@ if __name__ == '__main__':
         json={'mode': 'run_stale', 'action': 'use_stale'},
     )
     assert run.status_code == 200
-    assert run.json()['status'] == 'succeeded'
+    assert run.json()['status'] == 'running'
+    wait_for_run_status(client, run.json()['run_id'], 'succeeded')
 
     artifact = client.get('/api/v1/artifacts/constant_block/threshold')
     assert artifact.status_code == 200
@@ -1970,7 +2129,8 @@ if __name__ == '__main__':
         json={'mode': 'run_stale', 'action': 'use_stale'},
     )
     assert run.status_code == 200
-    assert run.json()['status'] == 'succeeded'
+    assert run.json()['status'] == 'running'
+    wait_for_run_status(client, run.json()['run_id'], 'succeeded')
 
     artifact = client.get('/api/v1/artifacts/consumer/path_length')
     assert artifact.status_code == 200
@@ -2250,7 +2410,8 @@ def test_standalone_notebook_script_run_persists_artifacts(tmp_path) -> None:
             json={'mode': 'run_stale', 'action': 'use_stale'},
         )
         assert run.status_code == 200
-        assert run.json()['status'] == 'succeeded'
+        assert run.json()['status'] == 'running'
+        wait_for_run_status(client, run.json()['run_id'], 'succeeded')
 
         notebook_path = project_root / 'notebooks' / 'sample_node.py'
         command = [

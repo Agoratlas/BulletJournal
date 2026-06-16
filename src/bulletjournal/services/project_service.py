@@ -21,6 +21,8 @@ from bulletjournal.domain.models import (
 from bulletjournal.domain.state_machine import derive_node_state
 from bulletjournal.execution.planner import downstream_closure, upstream_closure
 from bulletjournal.execution.watcher import NotebookWatcher
+from bulletjournal.parser.source_hash import normalized_source_hash_text
+from bulletjournal.services.notebook_freshness import notebook_uses_execution_head
 from bulletjournal.storage.graph_store import GraphStore
 from bulletjournal.storage.object_store import ObjectStore
 from bulletjournal.storage.project_fs import ProjectPaths, init_project_root, load_project_json, require_project_root
@@ -375,9 +377,15 @@ class ProjectService:
                 continue
             runtime_error_notice_by_node[node_id] = True
         artifacts = project.state_db.list_artifact_heads()
+        notebook_execution_heads = {
+            str(head['node_id']): head for head in project.state_db.list_notebook_execution_heads()
+        }
         artifact_states_by_node: dict[str, list[str]] = {}
         for artifact in artifacts:
             artifact_states_by_node.setdefault(str(artifact['node_id']), []).append(str(artifact['state']))
+        asset_states_by_node: dict[str, list[str]] = {}
+        for asset in project.state_db.list_asset_heads():
+            asset_states_by_node.setdefault(str(asset['node_id']), []).append(str(asset['state']))
         runs = project.state_db.list_run_records()
         execution_meta_by_node = project.state_db.list_orchestrator_execution_meta()
         orchestrator_state_by_node = self.run_service.orchestrator_state() if self.run_service is not None else {}
@@ -391,15 +399,30 @@ class ProjectService:
                     resolved_template = self.template_service.template_ref(node.template.ref)
                 except FileNotFoundError:
                     resolved_template = node.template
+            if resolved_template is not None and resolved_template.ref == 'builtin/empty_notebook':
+                resolved_template = None
             if resolved_template and interface is not None and node.kind == NodeKind.NOTEBOOK:
                 template_source = self.template_service.resolve_template_source(resolved_template.ref)
-                template_status = (
-                    'template' if interface.get('source_hash') == template_source.source_hash else 'modified'
+                rendered_template_source = self.template_service.render_notebook_template_source(
+                    template_source.source_text,
+                    node_id=node.id,
                 )
+                expected_source_hash = normalized_source_hash_text(rendered_template_source)
+                template_status = 'template' if interface.get('source_hash') == expected_source_hash else 'modified'
             node_ui = dict(node.ui)
             if node.kind == NodeKind.DASHBOARD and self.dashboard_service is not None:
                 node_ui = self._dashboard_ui_payload(node.id, base_ui=node_ui)
             orchestrator_state = orchestrator_state_by_node.get(node.id)
+            output_states = [
+                *artifact_states_by_node.get(node.id, []),
+                *asset_states_by_node.get(node.id, []),
+            ]
+            if node.kind == NodeKind.NOTEBOOK and notebook_uses_execution_head(self, node.id, interface):
+                execution_head = notebook_execution_heads.get(node.id)
+                if execution_head is None:
+                    output_states = [ArtifactState.PENDING.value]
+                else:
+                    output_states = [str(execution_head['state'])]
             node_payload.append(
                 {
                     **{**node.to_dict(), 'ui': node_ui},
@@ -409,10 +432,8 @@ class ProjectService:
                     'execution_meta': execution_meta_by_node.get(node.id),
                     'orchestrator_state': orchestrator_state,
                     'state': derive_node_state(
-                        artifact_states_by_node.get(node.id, []),
+                        output_states,
                         run_failed=runtime_error_notice_by_node.get(node.id, False),
-                        running=orchestrator_state is not None and orchestrator_state.get('status') == 'running',
-                        queued=orchestrator_state is not None and orchestrator_state.get('status') == 'queued',
                         validation_failed=validation_errors_by_node.get(node.id, False),
                     ),
                 }

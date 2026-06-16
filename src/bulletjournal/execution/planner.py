@@ -66,10 +66,16 @@ def run_plan_for_node(graph: GraphData, node_id: str, upstream_node_ids: list[st
 
 
 def stale_or_pending_nodes(
-    graph: GraphData, artifact_heads: list[dict[str, object]], *, include_file_inputs: bool = False
+    graph: GraphData,
+    artifact_heads: list[dict[str, object]],
+    *,
+    include_file_inputs: bool = False,
+    notebook_execution_heads: list[dict[str, object]] | None = None,
 ) -> list[str]:
     states_by_node: dict[str, set[str]] = defaultdict(set)
     for head in artifact_heads:
+        states_by_node[str(head['node_id'])].add(str(head['state']))
+    for head in notebook_execution_heads or []:
         states_by_node[str(head['node_id'])].add(str(head['state']))
     node_map = {node.id: node for node in graph.nodes}
     ordered = topological_nodes(graph)

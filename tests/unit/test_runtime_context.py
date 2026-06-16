@@ -2,6 +2,7 @@ import pandas as pd
 import pytest
 
 import bulletjournal.runtime.assets as runtime_assets
+from bulletjournal.assets.types.scatter_plot import MAX_SCATTER_PLOT_POINTS
 from bulletjournal.domain.enums import ArtifactRole, ArtifactState, LineageMode
 from bulletjournal.domain.hashing import combine_hashes, hash_json
 from bulletjournal.domain.models import AssetDeclaration, Port
@@ -788,6 +789,7 @@ def test_runtime_context_finalize_asset_push_persists_scatter_plot_asset(tmp_pat
     assert head['default_modifiers']['x_axis']['label'] == 'Custom x'
     assert head['default_modifiers']['y_axis']['scale'] == 'log'
     assert head['default_modifiers']['title']['position'] == 'bottom'
+    assert head['objects'][0]['object_role'] == 'backing_dataset'
     assert {entry['id'] for entry in head['modifier_schema']} >= {
         'min_point_size',
         'max_point_size',
@@ -798,7 +800,21 @@ def test_runtime_context_finalize_asset_push_persists_scatter_plot_asset(tmp_pat
         'y_axis',
         'title',
     }
-    assert head['objects'][0]['object_role'] == 'backing_dataset'
+
+
+def test_scatter_plot_rejects_dataframes_above_max_point_limit() -> None:
+    frame = pd.DataFrame(
+        {
+            'x': list(range(MAX_SCATTER_PLOT_POINTS + 1)),
+            'y': list(range(MAX_SCATTER_PLOT_POINTS + 1)),
+        }
+    )
+
+    with pytest.raises(
+        ValueError,
+        match=rf'Scatter plot assets support at most {MAX_SCATTER_PLOT_POINTS:,} rows; received {MAX_SCATTER_PLOT_POINTS + 1:,}\.',
+    ):
+        runtime_assets.ScatterPlot(frame, x='x', y='y')
 
 
 def test_runtime_context_finalize_asset_push_persists_pie_chart_asset(tmp_path) -> None:
@@ -1068,6 +1084,7 @@ def test_runtime_context_finalize_asset_push_remaps_collection_child_object_inde
     head = context.db.get_asset_head('producer', 'table_collection')
 
     assert head is not None
+    assert head['definition']['display_mode_default'] == 'single'
     assert [item['object_index'] for item in head['objects']] == [0, 1]
     assert [child['objects'][0]['object_index'] for child in head['definition']['children']] == [0, 1]
     assert [child['objects'][0]['object_role'] for child in head['definition']['children']] == [

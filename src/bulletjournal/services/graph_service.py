@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import re
+import shutil
+from contextlib import suppress
 from dataclasses import dataclass
 from typing import Any
 
@@ -31,6 +33,7 @@ from bulletjournal.domain.models import (
 from bulletjournal.domain.type_system import types_compatible
 from bulletjournal.execution.planner import downstream_closure, topological_nodes, visible_edge_id
 from bulletjournal.parser.interface_parser import parse_notebook_interface
+from bulletjournal.services.notebook_freshness import lineage_metadata_for_notebook, notebook_uses_execution_head
 
 
 @dataclass(slots=True)
@@ -227,6 +230,7 @@ class GraphService:
             path = self.project_service.require_project().paths.notebook_path(node_id)
             if path.exists():
                 path.unlink()
+            self._delete_notebook_output_cache(node_id)
         for old_node_id, new_node_id, rewritten_source in pending_notebook_renames:
             old_path = self.project_service.require_project().paths.notebook_path(old_node_id)
             new_path = self.project_service.require_project().paths.notebook_path(new_node_id)
@@ -235,9 +239,11 @@ class GraphService:
             if old_path.exists():
                 if rewritten_source is None:
                     old_path.rename(new_path)
-                    continue
-                new_path.write_text(rewritten_source, encoding='utf-8')
-                old_path.unlink()
+                else:
+                    new_path.write_text(rewritten_source, encoding='utf-8')
+                    old_path.unlink()
+            self._delete_notebook_output_cache(old_node_id)
+            self._delete_notebook_output_cache(new_node_id)
         if self.project_service.dashboard_service is not None:
             for old_node_id, new_node_id, title in pending_dashboard_renames:
                 self.project_service.dashboard_service.rename_dashboard(old_node_id, new_node_id, title=title)
@@ -334,6 +340,15 @@ class GraphService:
                 continue
             if interface is None:
                 continue
+            if notebook_uses_execution_head(self.project_service, downstream_node, interface):
+                execution_head = project.state_db.get_notebook_execution_head(downstream_node)
+                if execution_head is None:
+                    project.state_db.ensure_notebook_execution_head(downstream_node, ArtifactState.PENDING)
+                elif execution_head.get('last_run_finished_at') is None:
+                    if execution_head['state'] != ArtifactState.PENDING.value:
+                        project.state_db.set_notebook_execution_head_state(downstream_node, ArtifactState.PENDING)
+                elif execution_head['state'] != ArtifactState.STALE.value:
+                    project.state_db.set_notebook_execution_head_state(downstream_node, ArtifactState.STALE)
             for port in interface.get('outputs', []):
                 head = project.state_db.get_artifact_head(downstream_node, port['name'])
                 if head and head['current_version_id'] is not None:
@@ -381,6 +396,19 @@ class GraphService:
         source_hash = interface.get('source_hash')
         if not isinstance(source_hash, str) or not source_hash:
             return
+
+        if notebook_uses_execution_head(self.project_service, node_id, interface):
+            execution_head = project.state_db.get_notebook_execution_head(node_id)
+            if execution_head is not None and execution_head.get('last_run_finished_at') is not None:
+                lineage = lineage_metadata_for_notebook(self.project_service, node_id, graph)
+                if (
+                    execution_head.get('state') == ArtifactState.STALE.value
+                    and lineage is not None
+                    and execution_head.get('source_hash') == lineage['source_hash']
+                    and execution_head.get('upstream_data_hash') == lineage['upstream_data_hash']
+                    and execution_head.get('upstream_code_hash') == lineage['upstream_code_hash']
+                ):
+                    project.state_db.set_notebook_execution_head_state(node_id, ArtifactState.READY)
 
         input_hashes: list[str] = []
         input_code_hashes: list[str] = []
@@ -477,7 +505,7 @@ class GraphService:
             title=title,
             path=self.project_service.require_project().paths.notebook_relpath(node_id),
             template=None
-            if template_ref is None or source_text is not None
+            if template_ref is None or source_text is not None or str(template_ref) == 'builtin/empty_notebook'
             else self.project_service.template_service.template_ref(str(template_ref)),
             ui=dict(ui) if isinstance(ui, dict) else {},
         )
@@ -1240,6 +1268,14 @@ class GraphService:
                 path.unlink()
             except FileNotFoundError:
                 continue
+
+    def _delete_notebook_output_cache(self, node_id: str) -> None:
+        paths = self.project_service.require_project().paths
+        marimo_dir = paths.notebooks_dir / '__marimo__'
+        session_cache_path = marimo_dir / 'session' / f'{node_id}.py.json'
+        with suppress(FileNotFoundError):
+            session_cache_path.unlink()
+        shutil.rmtree(marimo_dir / 'assets' / node_id, ignore_errors=True)
 
     def _validate_graph(self, graph: GraphData) -> None:
         validate_unique_node_ids(graph.nodes)

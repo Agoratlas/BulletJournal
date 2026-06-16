@@ -12,14 +12,12 @@ with app.setup:
 
 @app.cell
 def _():
-    mo.md(
-        """
+    mo.md("""
     # Movie recommendation
 
     This notebook combines the processed movie and ratings datasets to surface
     high-signal recommendations, genre patterns, and top titles.
-    """
-    )
+    """)
     return
 
 
@@ -119,6 +117,4 @@ def _(movies_df):
 
 
 if __name__ == '__main__':
-    from bulletjournal.runtime.standalone import run_notebook_app
-
-    run_notebook_app(app, __file__)
+    app.run()

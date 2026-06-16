@@ -81,6 +81,7 @@ const GRAPH_MIN_ZOOM = 0.18
 const GRAPH_MAX_ZOOM = 1.35
 const GRAPH_DEFAULT_ZOOM = 0.78
 const GRAPH_FIT_PADDING = 0.12
+const CONNECTION_DRAG_ACTIVATION_DISTANCE = 4
 
 function validationIssuesForNode(snapshot: ProjectSnapshot, nodeId: string) {
   return snapshot.validation_issues.filter((issue) => issue.node_id === nodeId)
@@ -113,6 +114,7 @@ type BulletJournalNodeData = {
   selectedDashboardEdgeDashboardIds: string[]
   onToggleDashboardSource: (nodeId: string) => void
   organizerGhostInsertIndex: number | null
+  connectionIntent: ConnectionIntent
   onNodeResizePreview: (nodeId: string, x: number, y: number, w: number, h: number) => void
   onNodeResize: (nodeId: string, x: number, y: number, w: number, h: number) => void
   activeNoticeSeverity: 'error' | 'warning' | null
@@ -173,6 +175,18 @@ function handleBorderColor(fillColor: string): string {
 
 function pointInRect(x: number, y: number, rect: { left: number; top: number; right: number; bottom: number }) {
   return x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom
+}
+
+function clientPointFromConnectEvent(
+  event:
+    | { clientX: number; clientY: number }
+    | { touches: ArrayLike<{ clientX: number; clientY: number }>; changedTouches: ArrayLike<{ clientX: number; clientY: number }> },
+): { x: number; y: number } | null {
+  if ('clientX' in event && 'clientY' in event) {
+    return { x: event.clientX, y: event.clientY }
+  }
+  const touch = event.touches[0] ?? event.changedTouches[0]
+  return touch ? { x: touch.clientX, y: touch.clientY } : null
 }
 
 function toggleIds(baseIds: string[], toggledIds: string[]): string[] {
@@ -568,7 +582,7 @@ const BulletJournalNodeCard = memo(({ data, selected }: NodeProps<BulletJournalN
   const [editorMenuOpen, setEditorMenuOpen] = useState(false)
   const [runMenuOpen, setRunMenuOpen] = useState(false)
   const menuRef = useRef<HTMLDivElement | null>(null)
-  const connectionIntent = useConnectionIntent()
+  const connectionIntent = data.connectionIntent
   const noticeClassName = data.activeNoticeSeverity ? `has-active-notice-${data.activeNoticeSeverity}` : ''
   const hoveredNoticeClassName = data.hoveredNotice ? 'notice-hovered' : ''
   const dashboardSourceSelected = data.selectedDashboardSourceNodeIds.includes(node.id)
@@ -599,7 +613,14 @@ const BulletJournalNodeCard = memo(({ data, selected }: NodeProps<BulletJournalN
 
   const shouldShowExecutionTimer = Boolean(executionMeta) && (isExecutionActive || executionMeta?.status === 'succeeded')
   const shouldShowExecutionProgress = !hasActiveEditor && Boolean(executionMeta)
-  const playButtonNeedsAttention = node.kind === 'notebook' && (counts.stale > 0 || counts.pending > 0)
+  const usesExecutionFreshnessHead = node.kind === 'notebook' && outputs.length === 0
+  const playButtonNeedsAttention = node.kind === 'notebook' && (
+    counts.stale > 0
+    || counts.pending > 0
+    || node.state === 'stale'
+    || node.state === 'pending'
+    || (usesExecutionFreshnessHead && (isExecutionQueued || isExecutionActive))
+  )
   const approxServerNowMs = serverNowMs + (now - data.serverNowClientAnchorMs)
   const totalCells = executionMeta?.total_cells ?? null
   const runningCellNumber = executionMeta?.current_cell?.cell_number ?? null
@@ -1013,6 +1034,16 @@ function isGhostHandle(handleId: string | null | undefined): boolean {
   return Boolean(handleId && (handleId.startsWith('ghost-in:') || handleId.startsWith('ghost-out:')))
 }
 
+function fixedNodeHeight(node: NodeRecord, layoutHeight: number | undefined): number | undefined {
+  if (node.kind === 'area') {
+    return layoutHeight ?? 220
+  }
+  if (node.kind === 'constant') {
+    return 40
+  }
+  return undefined
+}
+
 export function GraphCanvas({ snapshot, serverNowMs = Date.now(), serverNowClientAnchorMs = Date.now(), selectedNodeIds, selectedEdgeIds, activeRunNodeId = null, queuedRunNodeIds = [], completedRunNodeIds = [], activeEditorNodeIds = [], onConnect, onEdgesChange, onSelectionChange, onNodeSelect, onEdgeSelect, onNodeContextMenu, onSelectionContextMenu, onPortContextMenu, onEditConstantNode, onEditFileNode, onEditOrganizerNode, onEditAreaNode, onOpenEditor, onOpenDashboard, onKillEditor, onRunNode, onOpenArtifacts, onCanvasInteract, onCanvasClear, onNodeMove, onNodeResize, onNodesDelete, draggedBlock, onBlockDrop, onViewportChange, dashboardPseudoLinks = [], selectedDashboardId = null, selectedDashboardSourceNodeIds = [], onToggleDashboardSource = () => undefined, nodeNoticeSeverityById = {}, hoveredNoticeNodeId = null, focusedNotice = null }: GraphCanvasProps) {
   const { screenToFlowPosition, setCenter, setViewport } = useReactFlow()
   const store = useStoreApi()
@@ -1022,14 +1053,26 @@ export function GraphCanvas({ snapshot, serverNowMs = Date.now(), serverNowClien
   const selectionStateRef = useRef<{ additive: boolean; baseNodeIds: string[]; baseEdgeIds: string[] } | null>(null)
   const suppressNativeSelectionRef = useRef(false)
   const initializedViewportProjectIdRef = useRef<string | null>(null)
+  const connectionStartPointRef = useRef<{ x: number; y: number } | null>(null)
   const [pointerFlowPosition, setPointerFlowPosition] = useState<{ x: number; y: number } | null>(null)
   const userSelectionRect = useStore((state: FlowSelectionState) => state.userSelectionRect)
   const transform = useStore((state: FlowSelectionState) => state.transform)
-  const connectionIntent = useConnectionIntent()
+  const rawConnectionIntent = useConnectionIntent()
+  const [connectionDragActive, setConnectionDragActive] = useState(false)
   const [pendingLayoutVersion, setPendingLayoutVersion] = useState(0)
   const [nodeDimensions, setNodeDimensions] = useState<Record<string, { width: number; height: number }>>({})
   const lastHandleSignatureRef = useRef<Record<string, string>>({})
   const lastFocusedNoticeTokenRef = useRef<number | null>(null)
+  const connectionIntent = connectionDragActive ? rawConnectionIntent : null
+
+  useEffect(() => {
+    if (rawConnectionIntent) {
+      return
+    }
+    connectionStartPointRef.current = null
+    setPointerFlowPosition(null)
+    setConnectionDragActive(false)
+  }, [rawConnectionIntent])
 
   const organizerGhostByNodeId = useMemo(() => {
     const previews: Record<string, number | null> = {}
@@ -1089,6 +1132,7 @@ export function GraphCanvas({ snapshot, serverNowMs = Date.now(), serverNowClien
     const layoutByNode = Object.fromEntries(snapshot.graph.layout.map((entry) => [entry.node_id, entry]))
     return snapshot.graph.nodes.map((node) => {
       const layout = layoutByNode[node.id]
+      const height = fixedNodeHeight(node, layout?.h)
       return {
         id: node.id,
         type: 'bulletJournalNode',
@@ -1119,6 +1163,7 @@ export function GraphCanvas({ snapshot, serverNowMs = Date.now(), serverNowClien
           selectedDashboardEdgeDashboardIds: selectedDashboardPseudoEdgeDashboardIds,
           onToggleDashboardSource,
           organizerGhostInsertIndex: organizerGhostByNodeId[node.id] ?? null,
+          connectionIntent,
           onNodeResizePreview: previewNodeResize,
           onNodeResize,
           activeNoticeSeverity: nodeNoticeSeverityById[node.id] ?? null,
@@ -1127,7 +1172,7 @@ export function GraphCanvas({ snapshot, serverNowMs = Date.now(), serverNowClien
         position: { x: layout?.x ?? 80, y: layout?.y ?? 80 },
         style: {
           width: layout?.w ?? 360,
-          height: layout?.h ?? (node.kind === 'constant' ? 40 : node.kind === 'organizer' ? 140 : node.kind === 'area' ? 220 : 220),
+          ...(height === undefined ? {} : { height }),
         },
         width: nodeDimensions[node.id]?.width,
         height: nodeDimensions[node.id]?.height,
@@ -1137,7 +1182,7 @@ export function GraphCanvas({ snapshot, serverNowMs = Date.now(), serverNowClien
         zIndex: node.kind === 'area' ? -1 : 0,
       }
     })
-  }, [snapshot, serverNowMs, serverNowClientAnchorMs, selectedNodeIds, activeRunNodeId, queuedRunNodeIds, completedRunNodeIds, activeEditorNodeIds, onNodeContextMenu, onPortContextMenu, onEditConstantNode, onEditFileNode, onEditOrganizerNode, onEditAreaNode, onKillEditor, onNodeResize, onNodeSelect, onOpenArtifacts, onOpenDashboard, onOpenEditor, onRunNode, onToggleDashboardSource, selectedDashboardId, selectedDashboardSourceNodeIds, selectedDashboardPseudoEdgeNotebookIds, selectedDashboardPseudoEdgeDashboardIds, nodeDimensions, organizerGhostByNodeId, pendingLayoutVersion, nodeNoticeSeverityById, hoveredNoticeNodeId])
+  }, [snapshot, serverNowMs, serverNowClientAnchorMs, selectedNodeIds, activeRunNodeId, queuedRunNodeIds, completedRunNodeIds, activeEditorNodeIds, onNodeContextMenu, onPortContextMenu, onEditConstantNode, onEditFileNode, onEditOrganizerNode, onEditAreaNode, onKillEditor, onNodeResize, onNodeSelect, onOpenArtifacts, onOpenDashboard, onOpenEditor, onRunNode, onToggleDashboardSource, selectedDashboardId, selectedDashboardSourceNodeIds, selectedDashboardPseudoEdgeNotebookIds, selectedDashboardPseudoEdgeDashboardIds, nodeDimensions, organizerGhostByNodeId, connectionIntent, pendingLayoutVersion, nodeNoticeSeverityById, hoveredNoticeNodeId])
 
   useEffect(() => {
     const currentNodeIds = new Set(snapshot.graph.nodes.map((node) => node.id))
@@ -1425,8 +1470,20 @@ export function GraphCanvas({ snapshot, serverNowMs = Date.now(), serverNowClien
       className="graph-canvas-shell"
       ref={shellRef}
       onPointerMove={(event) => {
-        if (!connectionIntent) {
+        if (!rawConnectionIntent) {
           return
+        }
+        if (!connectionDragActive) {
+          const startPoint = connectionStartPointRef.current
+          if (!startPoint) {
+            setConnectionDragActive(true)
+          } else {
+            const distance = Math.hypot(event.clientX - startPoint.x, event.clientY - startPoint.y)
+            if (distance < CONNECTION_DRAG_ACTIVATION_DISTANCE) {
+              return
+            }
+            setConnectionDragActive(true)
+          }
         }
         setPointerFlowPosition(screenToFlowPosition({ x: event.clientX, y: event.clientY }))
       }}
@@ -1610,11 +1667,15 @@ export function GraphCanvas({ snapshot, serverNowMs = Date.now(), serverNowClien
         }}
         onMoveStart={onCanvasInteract}
         onNodeDragStart={onCanvasInteract}
-        onConnectStart={(_event, _params: OnConnectStartParams) => {
+        onConnectStart={(event, _params: OnConnectStartParams) => {
           onCanvasInteract()
+          connectionStartPointRef.current = clientPointFromConnectEvent(event)
+          setConnectionDragActive(false)
           setPointerFlowPosition(null)
         }}
         onConnectEnd={() => {
+          connectionStartPointRef.current = null
+          setConnectionDragActive(false)
           setPointerFlowPosition(null)
         }}
         defaultEdgeOptions={{ markerEnd: { type: MarkerType.ArrowClosed } }}

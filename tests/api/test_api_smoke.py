@@ -1,5 +1,6 @@
 import io
 import json
+import time
 from pathlib import Path
 
 import pandas as pd
@@ -7,6 +8,17 @@ from fastapi.testclient import TestClient
 
 from bulletjournal.api.app import create_app
 from bulletjournal.storage.project_fs import init_project_root
+
+
+def wait_for_run_status(client: TestClient, run_id: str, expected: str, *, timeout: float = 10.0) -> dict:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        snapshot = client.get('/api/v1/project/snapshot').json()
+        run = next((entry for entry in snapshot['runs'] if entry['run_id'] == run_id), None)
+        if run is not None and run['status'] == expected:
+            return snapshot
+        time.sleep(0.05)
+    raise AssertionError(f'Run `{run_id}` did not reach status `{expected}` within {timeout} seconds.')
 
 
 def test_open_and_snapshot(tmp_path) -> None:
@@ -143,7 +155,8 @@ def _():
 
     run = client.post('/api/v1/nodes/asset_node/run', json={'mode': 'run_stale', 'action': 'use_stale'})
     assert run.status_code == 200
-    assert run.json()['status'] == 'succeeded'
+    assert run.json()['status'] == 'running'
+    wait_for_run_status(client, run.json()['run_id'], 'succeeded')
 
     listed = client.get('/api/v1/nodes/asset_node/assets')
     assert listed.status_code == 200
@@ -155,6 +168,70 @@ def _():
     table_asset = client.get('/api/v1/nodes/asset_node/assets/table')
     assert table_asset.status_code == 200
     assert table_asset.json()['objects'][0]['object_role'] == 'backing_dataset'
+
+
+def test_zero_output_notebook_starts_pending_and_turns_ready_after_run(tmp_path) -> None:
+    project_root = init_project_root(tmp_path / 'project').root
+    app = create_app(project_path=project_root)
+    client = TestClient(app)
+    container = app.state.container
+
+    opened = client.get('/api/v1/project/snapshot')
+    graph_version = opened.json()['graph']['meta']['graph_version']
+
+    patched = client.patch(
+        '/api/v1/graph',
+        json={
+            'graph_version': graph_version,
+            'operations': [
+                {
+                    'type': 'add_notebook_node',
+                    'node_id': 'notify_node',
+                    'title': 'Notify Node',
+                }
+            ],
+        },
+    )
+    assert patched.status_code == 200
+
+    notebook_path = project_root / 'notebooks' / 'notify_node.py'
+    notebook_path.write_text(
+        (
+            """
+import marimo
+
+app = marimo.App()
+
+with app.setup:
+    import marimo as mo
+    from bulletjournal.runtime import artifacts
+
+@app.cell
+def _(mo):
+    mo.md('notify')
+    return
+
+if __name__ == '__main__':
+    app.run()
+""".strip()
+            + '\n'
+        ),
+        encoding='utf-8',
+    )
+    container.project_service.reparse_notebook_by_path(notebook_path)
+
+    snapshot = client.get('/api/v1/project/snapshot').json()
+    node = next(item for item in snapshot['graph']['nodes'] if item['id'] == 'notify_node')
+    assert node['state'] == 'pending'
+
+    run = client.post('/api/v1/nodes/notify_node/run', json={'mode': 'run_stale', 'action': 'use_stale'})
+    assert run.status_code == 200
+    assert run.json()['status'] == 'running'
+    wait_for_run_status(client, run.json()['run_id'], 'succeeded')
+
+    snapshot = client.get('/api/v1/project/snapshot').json()
+    node = next(item for item in snapshot['graph']['nodes'] if item['id'] == 'notify_node')
+    assert node['state'] == 'ready'
 
 
 def test_dataframe_asset_prepare_returns_paginated_sorted_table(tmp_path) -> None:
@@ -209,7 +286,8 @@ def _():
 
     run = client.post('/api/v1/nodes/asset_node/run', json={'mode': 'run_stale', 'action': 'use_stale'})
     assert run.status_code == 200
-    assert run.json()['status'] == 'succeeded'
+    assert run.json()['status'] == 'running'
+    wait_for_run_status(client, run.json()['run_id'], 'succeeded')
 
     prepared = client.post(
         '/api/v1/assets/asset_node/table/prepare',
@@ -362,7 +440,8 @@ def _():
 
     run = client.post('/api/v1/nodes/asset_node/run', json={'mode': 'run_stale', 'action': 'use_stale'})
     assert run.status_code == 200
-    assert run.json()['status'] == 'succeeded'
+    assert run.json()['status'] == 'running'
+    wait_for_run_status(client, run.json()['run_id'], 'succeeded')
 
     prepared = client.post(
         '/api/v1/assets/asset_node/value_hist/prepare',
@@ -454,7 +533,8 @@ def _():
 
     run = client.post('/api/v1/nodes/asset_node/run', json={'mode': 'run_stale', 'action': 'use_stale'})
     assert run.status_code == 200
-    assert run.json()['status'] == 'succeeded'
+    assert run.json()['status'] == 'running'
+    wait_for_run_status(client, run.json()['run_id'], 'succeeded')
 
     prepared = client.post(
         '/api/v1/assets/asset_node/created_hist/prepare',
@@ -556,7 +636,8 @@ def _():
 
     run = client.post('/api/v1/nodes/asset_node/run', json={'mode': 'run_stale', 'action': 'use_stale'})
     assert run.status_code == 200
-    assert run.json()['status'] == 'succeeded'
+    assert run.json()['status'] == 'running'
+    wait_for_run_status(client, run.json()['run_id'], 'succeeded')
 
     prepared = client.post(
         '/api/v1/assets/asset_node/xy_plot/prepare',
@@ -709,7 +790,8 @@ def _():
 
     run = client.post('/api/v1/nodes/asset_node/run', json={'mode': 'run_stale', 'action': 'use_stale'})
     assert run.status_code == 200
-    assert run.json()['status'] == 'succeeded'
+    assert run.json()['status'] == 'running'
+    wait_for_run_status(client, run.json()['run_id'], 'succeeded')
 
     prepared = client.post(
         '/api/v1/assets/asset_node/segment_share/prepare',
@@ -803,7 +885,8 @@ def _():
 
     run = client.post('/api/v1/nodes/asset_node/run', json={'mode': 'run_stale', 'action': 'use_stale'})
     assert run.status_code == 200
-    assert run.json()['status'] == 'succeeded'
+    assert run.json()['status'] == 'running'
+    wait_for_run_status(client, run.json()['run_id'], 'succeeded')
 
     prepared = client.post(
         '/api/v1/assets/asset_node/segment_totals/prepare',
@@ -904,7 +987,8 @@ def _():
 
     run = client.post('/api/v1/nodes/asset_node/run', json={'mode': 'run_stale', 'action': 'use_stale'})
     assert run.status_code == 200
-    assert run.json()['status'] == 'succeeded'
+    assert run.json()['status'] == 'running'
+    wait_for_run_status(client, run.json()['run_id'], 'succeeded')
 
     pie_prepared = client.post(
         '/api/v1/assets/asset_node/segment_share/prepare',
@@ -2040,7 +2124,8 @@ def test_pipeline_template_constant_value_is_ready_immediately(tmp_path, monkeyp
 
     run = client.post('/api/v1/nodes/consumer/run', json={'mode': 'run_stale'})
     assert run.status_code == 200
-    assert run.json()['status'] == 'succeeded'
+    assert run.json()['status'] == 'running'
+    wait_for_run_status(client, run.json()['run_id'], 'succeeded')
 
     output = client.get('/api/v1/artifacts/consumer/sample_df')
     assert output.status_code == 200
@@ -2092,7 +2177,8 @@ def test_example_movie_pipeline_constants_are_ready_and_local_dataset_run_succee
 
     run = client.post('/api/v1/nodes/movie_dataset_download/run', json={'mode': 'run_stale'})
     assert run.status_code == 200
-    assert run.json()['status'] == 'succeeded'
+    assert run.json()['status'] == 'running'
+    wait_for_run_status(client, run.json()['run_id'], 'succeeded')
 
     dataframe = client.get('/api/v1/artifacts/movie_dataset_download/movies')
     assert dataframe.status_code == 200
@@ -2566,7 +2652,8 @@ def test_constant_node_can_populate_downstream_notebook(tmp_path) -> None:
         json={'mode': 'run_stale', 'action': 'use_stale'},
     )
     assert run.status_code == 200
-    assert run.json()['status'] == 'succeeded'
+    assert run.json()['status'] == 'running'
+    wait_for_run_status(client, run.json()['run_id'], 'succeeded')
 
     artifact = client.get('/api/v1/artifacts/table_sink/sample_df')
     assert artifact.status_code == 200
@@ -2696,7 +2783,8 @@ def test_artifact_download_uses_artifact_name_and_extension(tmp_path) -> None:
         json={'mode': 'run_stale', 'action': 'use_stale'},
     )
     assert run.status_code == 200
-    assert run.json()['status'] == 'succeeded'
+    assert run.json()['status'] == 'running'
+    wait_for_run_status(client, run.json()['run_id'], 'succeeded')
 
     response = client.get('/api/v1/artifacts/sample_node/sample_df/download')
 
@@ -2735,7 +2823,8 @@ def test_dataframe_csv_download_returns_attachment(tmp_path) -> None:
         json={'mode': 'run_stale', 'action': 'use_stale'},
     )
     assert run.status_code == 200
-    assert run.json()['status'] == 'succeeded'
+    assert run.json()['status'] == 'running'
+    wait_for_run_status(client, run.json()['run_id'], 'succeeded')
 
     response = client.get('/api/v1/artifacts/sample_node/sample_df/download?format=csv')
 
@@ -2777,7 +2866,8 @@ def test_dataframe_csv_download_rejects_large_artifacts(tmp_path, monkeypatch) -
         json={'mode': 'run_stale', 'action': 'use_stale'},
     )
     assert run.status_code == 200
-    assert run.json()['status'] == 'succeeded'
+    assert run.json()['status'] == 'running'
+    wait_for_run_status(client, run.json()['run_id'], 'succeeded')
 
     response = client.get('/api/v1/artifacts/sample_node/sample_df/download?format=csv')
 
@@ -2825,7 +2915,8 @@ def test_dataframe_xlsx_download_preserves_unicode(tmp_path) -> None:
 
     run = client.post('/api/v1/nodes/emoji_frame/run', json={'mode': 'run_stale', 'action': 'use_stale'})
     assert run.status_code == 200
-    assert run.json()['status'] == 'succeeded'
+    assert run.json()['status'] == 'running'
+    wait_for_run_status(client, run.json()['run_id'], 'succeeded')
 
     response = client.get('/api/v1/artifacts/emoji_frame/emoji_frame/download?format=xlsx')
 
@@ -3019,7 +3110,8 @@ def test_artifact_state_endpoints_can_mark_outputs_stale_and_ready(tmp_path) -> 
         json={'mode': 'run_stale', 'action': 'use_stale'},
     )
     assert run.status_code == 200
-    assert run.json()['status'] == 'succeeded'
+    assert run.json()['status'] == 'running'
+    wait_for_run_status(client, run.json()['run_id'], 'succeeded')
 
     stale = client.post(
         '/api/v1/artifacts/sample_node/sample_df/state',
@@ -3106,7 +3198,8 @@ def test_marking_node_outputs_stale_also_stales_downstream_nodes(tmp_path) -> No
         json={'mode': 'run_stale', 'action': 'run_upstream'},
     )
     assert run.status_code == 200
-    assert run.json()['status'] == 'succeeded'
+    assert run.json()['status'] == 'running'
+    wait_for_run_status(client, run.json()['run_id'], 'succeeded')
 
     bulk_stale = client.post(
         '/api/v1/nodes/value_source/outputs/state',

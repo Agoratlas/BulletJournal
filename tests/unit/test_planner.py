@@ -87,3 +87,22 @@ def test_stale_or_pending_nodes_excludes_constants_by_default() -> None:
 
     assert selected == ['middle', 'leaf']
     assert selected_with_files == ['input_file', 'middle', 'leaf']
+
+
+def test_stale_or_pending_nodes_include_notebook_execution_heads() -> None:
+    graph = _graph()
+    artifact_heads = [
+        {'node_id': 'source', 'state': 'ready'},
+    ]
+    notebook_execution_heads = [
+        {'node_id': 'middle', 'state': 'stale'},
+        {'node_id': 'leaf', 'state': 'pending'},
+    ]
+
+    selected = stale_or_pending_nodes(
+        graph,
+        artifact_heads,
+        notebook_execution_heads=notebook_execution_heads,
+    )
+
+    assert selected == ['middle', 'leaf']

@@ -9,6 +9,13 @@ import pandas as pd
 import polars as pl
 
 from bulletjournal.assets.base import BaseAsset
+from bulletjournal.assets.category_ordering import (
+    category_order_value_key,
+    normalize_category_order_modifier_value,
+    resolve_category_order,
+    sort_category_rows,
+    validate_category_order_value,
+)
 from bulletjournal.assets.prepare_utils import (
     coerce_filter_value,
     frame_with_filters,
@@ -28,13 +35,6 @@ from bulletjournal.assets.serialization import (
     dataset_modifier_schema,
     json_safe_modifier_value,
     title_modifier_defaults,
-)
-from bulletjournal.assets.types.category_order import (
-    category_order_value_key,
-    normalize_category_order_modifier_value,
-    resolve_category_order,
-    sort_category_rows,
-    validate_category_order_value,
 )
 from bulletjournal.assets.types.pie_chart import (
     DEFAULT_PIE_CHART_COLOR,

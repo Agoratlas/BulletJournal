@@ -317,6 +317,7 @@ class StateDB:
                 'UNION SELECT node_id FROM (SELECT node_id FROM persistent_notices WHERE node_id IS NOT NULL) '
                 'UNION SELECT node_id FROM artifact_versions '
                 'UNION SELECT node_id FROM artifact_heads '
+                'UNION SELECT node_id FROM notebook_execution_heads '
                 'UNION SELECT node_id FROM asset_declarations '
                 'UNION SELECT node_id FROM asset_versions '
                 'UNION SELECT node_id FROM asset_heads '
@@ -553,6 +554,88 @@ class StateDB:
             )
             connection.commit()
 
+    def ensure_notebook_execution_head(
+        self,
+        node_id: str,
+        state: ArtifactState = ArtifactState.PENDING,
+    ) -> None:
+        with self._connection() as connection:
+            connection.execute(
+                'INSERT OR IGNORE INTO notebook_execution_heads '
+                '(node_id, state, source_hash, upstream_code_hash, upstream_data_hash, run_id, '
+                'last_run_started_at, last_run_finished_at, updated_at) '
+                'VALUES (?, ?, NULL, NULL, NULL, NULL, NULL, NULL, ?)',
+                (node_id, state.value, utc_now_iso()),
+            )
+            connection.commit()
+
+    def get_notebook_execution_head(self, node_id: str) -> dict[str, Any] | None:
+        with self._connection() as connection:
+            row = connection.execute(
+                'SELECT * FROM notebook_execution_heads WHERE node_id = ?',
+                (node_id,),
+            ).fetchone()
+        return None if row is None else self._row_to_notebook_execution_head(row)
+
+    def list_notebook_execution_heads(self) -> list[dict[str, Any]]:
+        with self._connection() as connection:
+            rows = connection.execute('SELECT * FROM notebook_execution_heads ORDER BY node_id').fetchall()
+        return [self._row_to_notebook_execution_head(row) for row in rows]
+
+    def upsert_notebook_execution_head(
+        self,
+        *,
+        node_id: str,
+        state: ArtifactState,
+        source_hash: str | None = None,
+        upstream_code_hash: str | None = None,
+        upstream_data_hash: str | None = None,
+        run_id: str | None = None,
+        last_run_started_at: str | None = None,
+        last_run_finished_at: str | None = None,
+    ) -> None:
+        with self._connection() as connection:
+            connection.execute(
+                'INSERT INTO notebook_execution_heads '
+                '(node_id, state, source_hash, upstream_code_hash, upstream_data_hash, run_id, '
+                'last_run_started_at, last_run_finished_at, updated_at) '
+                'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) '
+                'ON CONFLICT(node_id) DO UPDATE SET '
+                'state = excluded.state, '
+                'source_hash = excluded.source_hash, '
+                'upstream_code_hash = excluded.upstream_code_hash, '
+                'upstream_data_hash = excluded.upstream_data_hash, '
+                'run_id = excluded.run_id, '
+                'last_run_started_at = excluded.last_run_started_at, '
+                'last_run_finished_at = excluded.last_run_finished_at, '
+                'updated_at = excluded.updated_at',
+                (
+                    node_id,
+                    state.value,
+                    source_hash,
+                    upstream_code_hash,
+                    upstream_data_hash,
+                    run_id,
+                    last_run_started_at,
+                    last_run_finished_at,
+                    utc_now_iso(),
+                ),
+            )
+            connection.commit()
+
+    def set_notebook_execution_head_state(self, node_id: str, state: ArtifactState) -> None:
+        with self._connection() as connection:
+            connection.execute(
+                'UPDATE notebook_execution_heads SET state = ?, updated_at = ? WHERE node_id = ?',
+                (state.value, utc_now_iso(), node_id),
+            )
+            connection.commit()
+
+    def delete_notebook_execution_head(self, node_id: str) -> None:
+        with self._connection() as connection:
+            connection.execute('DELETE FROM notebook_execution_heads WHERE node_id = ?', (node_id,))
+            connection.commit()
+
     def delete_artifact_head(self, node_id: str, artifact_name: str) -> None:
         with self._connection() as connection:
             connection.execute(
@@ -567,6 +650,7 @@ class StateDB:
             connection.execute('DELETE FROM run_inputs WHERE logical_artifact_id LIKE ?', (f'{node_id}/%',))
             connection.execute('DELETE FROM run_outputs WHERE node_id = ?', (node_id,))
             connection.execute('DELETE FROM cache_index WHERE node_id = ?', (node_id,))
+            connection.execute('DELETE FROM notebook_execution_heads WHERE node_id = ?', (node_id,))
             connection.execute(
                 'DELETE FROM asset_version_objects WHERE asset_version_id IN '
                 '(SELECT asset_version_id FROM asset_versions WHERE node_id = ?)',
@@ -590,6 +674,9 @@ class StateDB:
         with self._connection() as connection:
             connection.execute(
                 'UPDATE notebook_revisions SET node_id = ? WHERE node_id = ?', (new_node_id, old_node_id)
+            )
+            connection.execute(
+                'UPDATE notebook_execution_heads SET node_id = ? WHERE node_id = ?', (new_node_id, old_node_id)
             )
             connection.execute('UPDATE validation_issues SET node_id = ? WHERE node_id = ?', (new_node_id, old_node_id))
             connection.execute(
@@ -1264,6 +1351,20 @@ class StateDB:
             'extension': row['extension'],
             'mime_type': row['mime_type'],
             'preview': None if row['preview_json'] is None else json.loads(str(row['preview_json'])),
+        }
+
+    @staticmethod
+    def _row_to_notebook_execution_head(row: sqlite3.Row) -> dict[str, Any]:
+        return {
+            'node_id': row['node_id'],
+            'state': row['state'],
+            'source_hash': row['source_hash'],
+            'upstream_code_hash': row['upstream_code_hash'],
+            'upstream_data_hash': row['upstream_data_hash'],
+            'run_id': row['run_id'],
+            'last_run_started_at': row['last_run_started_at'],
+            'last_run_finished_at': row['last_run_finished_at'],
+            'updated_at': row['updated_at'],
         }
 
 

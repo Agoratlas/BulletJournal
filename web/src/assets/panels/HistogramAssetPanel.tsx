@@ -473,6 +473,9 @@ export function HistogramAssetPanel({
         </ResizableDatavizContent>
         {table ? (
           <PreparedAssetTableSection
+            title="DataFrame"
+            collapsible
+            defaultExpanded={false}
             table={table}
             columns={availableColumns}
             activeSort={resolvedSort}

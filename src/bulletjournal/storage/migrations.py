@@ -222,4 +222,20 @@ MIGRATIONS: list[tuple[str, str]] = [
         );
         """,
     ),
+    (
+        '006_notebook_execution_heads',
+        """
+        CREATE TABLE IF NOT EXISTS notebook_execution_heads (
+            node_id TEXT PRIMARY KEY,
+            state TEXT NOT NULL,
+            source_hash TEXT NULL,
+            upstream_code_hash TEXT NULL,
+            upstream_data_hash TEXT NULL,
+            run_id TEXT NULL,
+            last_run_started_at TEXT NULL,
+            last_run_finished_at TEXT NULL,
+            updated_at TEXT NOT NULL
+        );
+        """,
+    ),
 ]

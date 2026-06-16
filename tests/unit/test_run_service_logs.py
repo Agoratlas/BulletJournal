@@ -35,6 +35,27 @@ class _FlushTrackingTarget:
         self.flush_count += 1
 
 
+def _wait_for_run_status(
+    project_service: ProjectService, run_id: str, expected: str, *, timeout: float = 5.0
+) -> dict[str, object]:
+    import time
+
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        run = next(
+            (
+                entry
+                for entry in project_service.require_project().state_db.list_run_records()
+                if entry['run_id'] == run_id
+            ),
+            None,
+        )
+        if run is not None and run['status'] == expected:
+            return run
+        time.sleep(0.01)
+    raise AssertionError(f'Run `{run_id}` did not reach status `{expected}` within {timeout} seconds.')
+
+
 def _append_sample_node(project_service: ProjectService) -> None:
     graph = project_service.graph()
     graph.nodes.append(
@@ -133,7 +154,8 @@ def test_running_execution_metadata_retains_log_paths_for_live_snapshot(tmp_path
 
     result = run_service.start_node_run('sample_node', mode='run_all', action='use_stale')
 
-    assert result['status'] == 'succeeded'
+    assert result['status'] == 'running'
+    _wait_for_run_status(project_service, str(result['run_id']), 'succeeded')
     assert captured_meta is not None
     assert captured_meta['status'] == 'running'
     assert captured_meta['stdout'] == {'text': 'live stdout\n', 'truncated': False, 'size_bytes': 12}
@@ -154,7 +176,8 @@ def test_run_service_publishes_asset_version_events(tmp_path) -> None:
 
     result = run_service.start_node_run('sample_node', mode='run_all', action='use_stale')
 
-    assert result['status'] == 'succeeded'
+    assert result['status'] == 'running'
+    _wait_for_run_status(project_service, str(result['run_id']), 'succeeded')
     assert any(
         args[0] == 'asset.version_created'
         and kwargs['payload']['asset_name'] == 'table'
@@ -179,7 +202,8 @@ def test_run_service_syncs_editor_session_asset_updates(tmp_path) -> None:
 
     result = run_service.start_node_run('sample_node', mode='run_all', action='use_stale')
 
-    assert result['status'] == 'succeeded'
+    assert result['status'] == 'running'
+    _wait_for_run_status(project_service, str(result['run_id']), 'succeeded')
     event_service.events.clear()
 
     run_service.sync_editor_session_outputs('sample_node')
@@ -217,7 +241,8 @@ def test_running_execution_metadata_exposes_empty_live_logs_when_worker_has_not_
 
     result = run_service.start_node_run('sample_node', mode='run_all', action='use_stale')
 
-    assert result['status'] == 'succeeded'
+    assert result['status'] == 'running'
+    _wait_for_run_status(project_service, str(result['run_id']), 'succeeded')
     assert captured_meta is not None
     assert captured_meta['status'] == 'running'
     assert captured_meta['stdout'] == {'text': '', 'truncated': False, 'size_bytes': 0}
@@ -246,8 +271,9 @@ def test_managed_run_fails_if_execution_log_file_goes_missing(tmp_path) -> None:
 
     result = run_service.start_node_run('sample_node', mode='run_all', action='use_stale')
 
-    assert result['status'] == 'failed'
-    assert result['node_results']['error'] == 'Managed run log file(s) missing for node `sample_node`: stdout.'
+    assert result['status'] == 'running'
+    run = _wait_for_run_status(project_service, str(result['run_id']), 'failed')
+    assert run['failure_json']['error'] == 'Managed run log file(s) missing for node `sample_node`: stdout.'
 
 
 def test_record_notice_wraps_markdown_sensitive_values(tmp_path) -> None:

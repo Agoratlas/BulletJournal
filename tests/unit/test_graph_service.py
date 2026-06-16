@@ -7,6 +7,7 @@ import pytest
 from bulletjournal.domain.errors import GraphValidationError
 from bulletjournal.services.dashboard_service import DashboardService
 from bulletjournal.services.graph_service import GraphService
+from bulletjournal.services.notebook_service import NotebookService
 from bulletjournal.services.project_service import ProjectService
 from bulletjournal.services.template_service import TemplateService
 from bulletjournal.storage.project_fs import init_project_root
@@ -164,6 +165,138 @@ def test_graph_service_renames_notebook_app_title_with_new_node_id(tmp_path) -> 
     assert "app_title='renamed_node'" in source
     assert not (project_root / 'notebooks' / 'sample_node.py').exists()
     assert any(node['id'] == 'renamed_node' for node in renamed['nodes'])
+
+
+def test_graph_service_deletes_marimo_session_cache_for_deleted_notebook(tmp_path) -> None:
+    project_root = init_project_root(tmp_path / 'project').root
+    project_service = ProjectService(_FakeEventService(), TemplateService())
+    project_service.open_project(project_root)
+    graph_service = GraphService(project_service)
+
+    created = graph_service.apply_operations(
+        int(project_service.graph().meta['graph_version']),
+        [
+            {
+                'type': 'add_notebook_node',
+                'node_id': 'sample_node',
+                'title': 'Sample Node',
+            }
+        ],
+    )
+
+    session_cache = project_root / 'notebooks' / '__marimo__' / 'session' / 'sample_node.py.json'
+    session_cache.parent.mkdir(parents=True, exist_ok=True)
+    session_cache.write_text('{"cells": []}', encoding='utf-8')
+
+    graph_service.apply_operations(
+        int(created['meta']['graph_version']),
+        [
+            {
+                'type': 'delete_node',
+                'node_id': 'sample_node',
+            }
+        ],
+    )
+
+    assert not session_cache.exists()
+
+
+def test_graph_service_deletes_marimo_session_cache_for_renamed_notebook(tmp_path) -> None:
+    project_root = init_project_root(tmp_path / 'project').root
+    project_service = ProjectService(_FakeEventService(), TemplateService())
+    project_service.open_project(project_root)
+    graph_service = GraphService(project_service)
+
+    created = graph_service.apply_operations(
+        int(project_service.graph().meta['graph_version']),
+        [
+            {
+                'type': 'add_notebook_node',
+                'node_id': 'sample_node',
+                'title': 'Sample Node',
+            }
+        ],
+    )
+
+    marimo_session_dir = project_root / 'notebooks' / '__marimo__' / 'session'
+    marimo_session_dir.mkdir(parents=True, exist_ok=True)
+    old_session_cache = marimo_session_dir / 'sample_node.py.json'
+    new_session_cache = marimo_session_dir / 'renamed_node.py.json'
+    old_session_cache.write_text('{"cells": ["old"]}', encoding='utf-8')
+    new_session_cache.write_text('{"cells": ["stale"]}', encoding='utf-8')
+
+    graph_service.apply_operations(
+        int(created['meta']['graph_version']),
+        [
+            {
+                'type': 'rename_node',
+                'node_id': 'sample_node',
+                'new_node_id': 'renamed_node',
+                'title': 'Sample Node',
+            }
+        ],
+    )
+
+    assert not old_session_cache.exists()
+    assert not new_session_cache.exists()
+
+
+def test_snapshot_treats_empty_notebook_as_custom(tmp_path) -> None:
+    project_root = init_project_root(tmp_path / 'project').root
+    project_service = ProjectService(_FakeEventService(), TemplateService())
+    project_service.open_project(project_root)
+    graph_service = GraphService(project_service)
+
+    graph_service.apply_operations(
+        int(project_service.graph().meta['graph_version']),
+        [
+            {
+                'type': 'add_notebook_node',
+                'node_id': 'custom_notebook',
+                'title': 'Custom Notebook',
+                'template_ref': 'builtin/empty_notebook',
+            }
+        ],
+    )
+
+    snapshot = project_service.snapshot()
+    notebook = next(node for node in snapshot['graph']['nodes'] if node['id'] == 'custom_notebook')
+
+    assert notebook['template'] is None
+    assert notebook['template_status'] is None
+
+
+def test_snapshot_keeps_new_template_notebook_as_template_until_edited(tmp_path) -> None:
+    project_root = init_project_root(tmp_path / 'project').root
+    project_service = ProjectService(_FakeEventService(), TemplateService())
+    project_service.open_project(project_root)
+    graph_service = GraphService(project_service)
+
+    graph_service.apply_operations(
+        int(project_service.graph().meta['graph_version']),
+        [
+            {
+                'type': 'add_notebook_node',
+                'node_id': 'sample_node',
+                'title': 'Sample Node',
+                'template_ref': 'builtin/test_starter_notebook',
+            }
+        ],
+    )
+
+    snapshot = project_service.snapshot()
+    notebook = next(node for node in snapshot['graph']['nodes'] if node['id'] == 'sample_node')
+    assert notebook['template']['ref'] == 'builtin/test_starter_notebook'
+    assert notebook['template_status'] == 'template'
+
+    notebook_path = project_root / 'notebooks' / 'sample_node.py'
+    source = notebook_path.read_text(encoding='utf-8')
+    notebook_path.write_text(source.replace('Sample output frame', 'Modified output frame'), encoding='utf-8')
+    NotebookService(project_service).reparse_notebook('sample_node')
+
+    updated_snapshot = project_service.snapshot()
+    updated_notebook = next(node for node in updated_snapshot['graph']['nodes'] if node['id'] == 'sample_node')
+    assert updated_notebook['template_status'] == 'modified'
 
 
 def test_graph_service_blocks_notebook_id_change_while_editor_is_open(tmp_path) -> None:

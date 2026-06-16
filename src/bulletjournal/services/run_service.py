@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import threading
 import time
 import uuid
 from dataclasses import dataclass
@@ -25,6 +26,7 @@ from bulletjournal.execution.runner import WorkerRunner
 from bulletjournal.execution.sessions import SessionManager
 from bulletjournal.parser.source_hash import compute_source_hash
 from bulletjournal.parser.validation import build_issue_id
+from bulletjournal.services.notebook_freshness import lineage_metadata_for_notebook, notebook_uses_execution_head
 from bulletjournal.utils import utc_now_iso
 
 
@@ -331,6 +333,7 @@ class RunService:
         nodes = stale_or_pending_nodes(
             graph,
             [*state_db.list_artifact_heads(), *state_db.list_asset_heads()],
+            notebook_execution_heads=state_db.list_notebook_execution_heads(),
         )
         if not nodes:
             return {'status': 'noop', 'node_ids': []}
@@ -572,39 +575,80 @@ class RunService:
         return result
 
     def _execute_managed_run(self, *, plan: list[str], mode: RunMode, target_json: dict[str, Any]) -> dict[str, Any]:
+        launch = self._prepare_managed_run(plan=plan, mode=mode, target_json=target_json)
+        self._start_managed_run_thread(launch)
+        return {
+            'run_id': launch['run_id'],
+            'status': 'running',
+            'node_ids': list(plan),
+        }
+
+    def _prepare_managed_run(self, *, plan: list[str], mode: RunMode, target_json: dict[str, Any]) -> dict[str, Any]:
         project = self.project_service.require_project()
+        graph_version = int(self.project_service.graph().meta['graph_version'])
+        started_at = utc_now_iso()
         with self._lock:
             if self._active_run is not None:
                 raise RunConflictError('Another run is already active for this project.')
             run_id = str(uuid.uuid4())
-            active = ActiveRun(run_id=run_id, cancel_event=Event(), node_ids=plan)
+            active = ActiveRun(run_id=run_id, cancel_event=Event(), node_ids=list(plan))
             self._active_run = active
             self._orchestrator_node_states = {
                 node_id: OrchestratorNodeState(node_id=node_id, run_id=run_id, status='queued') for node_id in plan
             }
+        project.state_db.record_run(
+            run_id,
+            project.metadata.project_id,
+            mode.value,
+            target_json,
+            graph_version,
+            {'started_at': started_at},
+        )
+        self.project_service.event_service.publish(
+            'run.queued',
+            project_id=project.metadata.project_id,
+            graph_version=graph_version,
+            payload={'run_id': run_id, 'node_ids': plan, 'mode': mode.value},
+        )
+        project.state_db.update_run_status(run_id, RunStatus.RUNNING)
+        self.project_service.event_service.publish(
+            'run.started',
+            project_id=project.metadata.project_id,
+            graph_version=graph_version,
+            payload={'run_id': run_id, 'node_ids': plan, 'mode': mode.value},
+        )
+        return {
+            'project': project,
+            'graph_version': graph_version,
+            'run_id': run_id,
+            'active': active,
+            'plan': list(plan),
+            'mode': mode,
+        }
+
+    def _start_managed_run_thread(self, launch: dict[str, Any]) -> None:
+        thread = threading.Thread(
+            target=self._run_managed_plan,
+            args=(
+                cast(Any, launch['project']),
+                int(launch['graph_version']),
+                str(launch['run_id']),
+                cast(ActiveRun, launch['active']),
+                cast(list[str], launch['plan']),
+            ),
+            daemon=True,
+        )
+        thread.start()
+
+    def _run_managed_plan(
+        self,
+        project,
+        graph_version: int,
+        run_id: str,
+        active: ActiveRun,
+        plan: list[str],
+    ) -> None:
         try:
-            graph_version = int(self.project_service.graph().meta['graph_version'])
-            project.state_db.record_run(
-                run_id,
-                project.metadata.project_id,
-                mode.value,
-                target_json,
-                graph_version,
-                {'started_at': utc_now_iso()},
-            )
-            self.project_service.event_service.publish(
-                'run.queued',
-                project_id=project.metadata.project_id,
-                graph_version=graph_version,
-                payload={'run_id': run_id, 'node_ids': plan, 'mode': mode.value},
-            )
-            project.state_db.update_run_status(run_id, RunStatus.RUNNING)
-            self.project_service.event_service.publish(
-                'run.started',
-                project_id=project.metadata.project_id,
-                graph_version=graph_version,
-                payload={'run_id': run_id, 'node_ids': plan, 'mode': mode.value},
-            )
             for index, current_node_id in enumerate(plan, start=1):
                 active.current_node = current_node_id
                 active.current_node_started_at = utc_now_iso()
@@ -694,7 +738,7 @@ class RunService:
                             'cancelled_by_graph_edit': cancelled_by_graph_edit,
                         },
                     )
-                    return {'run_id': run_id, 'status': 'cancelled', 'node_results': result}
+                    return
                 if result['status'] != 'ok':
                     finished_at = utc_now_iso()
                     with self._lock:
@@ -728,7 +772,7 @@ class RunService:
                         graph_version=graph_version,
                         payload={'run_id': run_id, 'failure': result},
                     )
-                    return {'run_id': run_id, 'status': 'failed', 'node_results': result}
+                    return
                 finished_at = utc_now_iso()
                 with self._lock:
                     self._orchestrator_node_states[current_node_id] = OrchestratorNodeState(
@@ -751,6 +795,12 @@ class RunService:
                     stdout_path=str(stdout_path),
                     stderr_path=str(stderr_path),
                 )
+                self._record_notebook_execution_success(
+                    node_id=current_node_id,
+                    run_id=run_id,
+                    started_at=active.current_node_started_at or finished_at,
+                    finished_at=finished_at,
+                )
             project.state_db.update_run_status(run_id, RunStatus.SUCCEEDED)
             self.project_service.event_service.publish(
                 'run.finished',
@@ -758,11 +808,21 @@ class RunService:
                 graph_version=graph_version,
                 payload={'run_id': run_id, 'status': 'succeeded'},
             )
-            return {'run_id': run_id, 'status': 'succeeded', 'node_ids': plan}
+        except Exception as exc:
+            failure = {'status': 'error', 'node_id': active.current_node or 'project', 'error': str(exc), 'outputs': []}
+            self._record_run_failure_notice(run_id=run_id, result=failure)
+            project.state_db.update_run_status(run_id, RunStatus.FAILED, failure_json=failure)
+            self.project_service.event_service.publish(
+                'run.failed',
+                project_id=project.metadata.project_id,
+                graph_version=graph_version,
+                payload={'run_id': run_id, 'failure': failure},
+            )
         finally:
             with self._lock:
-                self._active_run = None
-                self._orchestrator_node_states = {}
+                if self._active_run is not None and self._active_run.run_id == run_id:
+                    self._active_run = None
+                    self._orchestrator_node_states = {}
 
     def _record_run_failure_notice(self, *, run_id: str, result: dict[str, Any]) -> None:
         node_id = str(result.get('node_id') or 'project')
@@ -859,9 +919,14 @@ class RunService:
         if interface is None and not asset_names:
             return True
         output_names = [] if interface is None else [str(port['name']) for port in interface.get('outputs', [])]
-        if not output_names and not asset_names:
-            return False
         state_db = self.project_service.require_project().state_db
+        if not output_names and not asset_names:
+            if notebook_uses_execution_head(self.project_service, node_id, interface):
+                execution_head = state_db.get_notebook_execution_head(node_id)
+                if execution_head is None:
+                    return True
+                return execution_head.get('state') != ArtifactState.READY.value
+            return False
         for output_name in output_names:
             head = state_db.get_artifact_head(node_id, output_name)
             if head is None or head['state'] != ArtifactState.READY.value:
@@ -950,6 +1015,31 @@ class RunService:
                 if str(head.get('node_id')) == node_id
             },
         }
+
+    def _record_notebook_execution_success(
+        self,
+        *,
+        node_id: str,
+        run_id: str,
+        started_at: str,
+        finished_at: str,
+    ) -> None:
+        interface = self.project_service.latest_interface(node_id)
+        if not notebook_uses_execution_head(self.project_service, node_id, interface):
+            return
+        lineage = lineage_metadata_for_notebook(self.project_service, node_id, self.project_service.graph())
+        if lineage is None:
+            return
+        self.project_service.require_project().state_db.upsert_notebook_execution_head(
+            node_id=node_id,
+            state=ArtifactState.READY,
+            source_hash=str(lineage['source_hash']),
+            upstream_code_hash=str(lineage['upstream_code_hash']),
+            upstream_data_hash=str(lineage['upstream_data_hash']),
+            run_id=run_id,
+            last_run_started_at=started_at,
+            last_run_finished_at=finished_at,
+        )
 
     def _record_graph_edit_interruption(self, *, run_id: str, active_run: ActiveRun) -> None:
         issue_id = build_issue_id(

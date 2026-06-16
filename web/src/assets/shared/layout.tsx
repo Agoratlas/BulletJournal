@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
+import { useEffect, useId, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
 
-import { ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, Cog } from '../../components/Icons'
+import { ChevronDown, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, Cog } from '../../components/Icons'
 import type { AssetFilter, AssetSort, AssetRecord, PreparedTablePayload } from '../../lib/types'
 import {
   clampPanelHeight,
@@ -503,6 +503,9 @@ export function PreparedAssetTableSection({
   canGoPrevious,
   canGoNext,
   hasTemporarySelection = false,
+  title,
+  collapsible = false,
+  defaultExpanded = true,
   onPageInputChange,
   onCommitPageInput,
   onResetPageInput,
@@ -531,6 +534,9 @@ export function PreparedAssetTableSection({
   canGoPrevious: boolean
   canGoNext: boolean
   hasTemporarySelection?: boolean
+  title?: string
+  collapsible?: boolean
+  defaultExpanded?: boolean
   onPageInputChange: (value: string) => void
   onCommitPageInput: () => void
   onResetPageInput: () => void
@@ -549,113 +555,136 @@ export function PreparedAssetTableSection({
   const showDisplayedRows = viewerMode === 'dashboard' && displayedRows !== totalRows
   const rowsLabel = viewerMode === 'dashboard' ? totalRows : displayedRows
   const showDashboardClearFilters = viewerMode === 'dashboard' && Boolean(onClearFilters) && (hasActiveFilters || hasActiveSort || hasTemporarySelection)
+  const [isExpanded, setIsExpanded] = useState(defaultExpanded)
+  const regionId = useId()
+
+  useEffect(() => {
+    setIsExpanded(defaultExpanded)
+  }, [defaultExpanded])
 
   return (
-    <div className={`asset-dataframe-shell${isRefreshing ? ' is-refreshing' : ''}`}>
-      <PreparedTable
-        table={table}
-        columns={columns}
-        activeSort={activeSort}
-        activeFilters={activeFilters}
-        disabled={disabled}
-        onToggleSort={onToggleSort}
-        onApplyFilter={onApplyFilter}
-        onRemoveFilter={onRemoveFilter}
-      />
-      <div className="asset-dataframe-toolbar">
-        <div className="asset-dataframe-stats">
-          <span>
-            {formatCount(rowsLabel)} rows x {formatCount(columnCount)} cols
-            {showDisplayedRows ? ` (${formatCount(displayedRows)} rows displayed)` : ''}
-          </span>
-          {showDashboardClearFilters ? (
-            <button
-              type="button"
-              className="asset-dataframe-clear-filters"
-              onClick={onClearFilters}
-              disabled={disabled || isRefreshing}
-            >
-              Clear filters
-            </button>
-          ) : null}
-        </div>
-        <div className="asset-dataframe-controls">
-          <select
-            className="asset-page-size-select"
-            value={table.page.size}
-            onChange={(event) => onPageSizeChange(Number(event.target.value))}
-            aria-label="Rows per page"
-          >
-            {PAGE_SIZE_OPTIONS.map((size) => (
-              <option key={size} value={size}>{size} / page</option>
-            ))}
-          </select>
-          <div className="asset-dataframe-pagination">
-            <button
-              type="button"
-              className="secondary asset-page-nav-button"
-              onClick={onFirstPage}
-              disabled={!canGoPrevious || isRefreshing}
-              aria-label="Go to first page"
-              title="First page"
-            >
-              <ChevronsLeft width={16} height={16} />
-            </button>
-            <button
-              type="button"
-              className="secondary asset-page-nav-button"
-              onClick={onPreviousPage}
-              disabled={!canGoPrevious || isRefreshing}
-              aria-label="Go to previous page"
-              title="Previous page"
-            >
-              <ChevronLeft width={16} height={16} />
-            </button>
-            <input
-              className="asset-page-input"
-              value={pageInput}
-              inputMode="numeric"
-              aria-label="Page number"
-              onChange={(event) => onPageInputChange(event.target.value.replace(/[^0-9]/g, ''))}
-              onBlur={onCommitPageInput}
-              onKeyDown={(event) => {
-                if (event.key === 'Enter') {
-                  event.preventDefault()
-                  onCommitPageInput()
-                }
-                if (event.key === 'Escape') {
-                  event.preventDefault()
-                  onResetPageInput()
-                }
-              }}
-            />
-            <span className="asset-page-count-label">/ {pageCount}</span>
-            <button
-              type="button"
-              className="secondary asset-page-nav-button"
-              onClick={onNextPage}
-              disabled={!canGoNext || isRefreshing}
-              aria-label="Go to next page"
-              title="Next page"
-            >
-              <ChevronRight width={16} height={16} />
-            </button>
-            <button
-              type="button"
-              className="secondary asset-page-nav-button"
-              onClick={onLastPage}
-              disabled={!canGoNext || isRefreshing}
-              aria-label="Go to last page"
-              title="Last page"
-            >
-              <ChevronsRight width={16} height={16} />
-            </button>
+    <div className={`asset-dataframe-section${collapsible ? ' is-collapsible' : ''}${isExpanded ? ' is-expanded' : ' is-collapsed'}`}>
+      {collapsible ? (
+        <button
+          type="button"
+          className="asset-dataframe-section-toggle"
+          aria-expanded={isExpanded}
+          aria-controls={regionId}
+          onClick={() => setIsExpanded((current) => !current)}
+        >
+          <ChevronDown width={16} height={16} />
+          <span className="asset-dataframe-section-toggle-label">{title ?? 'DataFrame'}</span>
+          <span className="asset-dataframe-section-toggle-line" aria-hidden="true" />
+        </button>
+      ) : null}
+      {(!collapsible || isExpanded) ? (
+        <div id={regionId} className={`asset-dataframe-shell${isRefreshing ? ' is-refreshing' : ''}`}>
+          <PreparedTable
+            table={table}
+            columns={columns}
+            activeSort={activeSort}
+            activeFilters={activeFilters}
+            disabled={disabled}
+            onToggleSort={onToggleSort}
+            onApplyFilter={onApplyFilter}
+            onRemoveFilter={onRemoveFilter}
+          />
+          <div className="asset-dataframe-toolbar">
+            <div className="asset-dataframe-stats">
+              <span>
+                {formatCount(rowsLabel)} rows x {formatCount(columnCount)} cols
+                {showDisplayedRows ? ` (${formatCount(displayedRows)} rows displayed)` : ''}
+              </span>
+              {showDashboardClearFilters ? (
+                <button
+                  type="button"
+                  className="asset-dataframe-clear-filters"
+                  onClick={onClearFilters}
+                  disabled={disabled || isRefreshing}
+                >
+                  Clear filters
+                </button>
+              ) : null}
+            </div>
+            <div className="asset-dataframe-controls">
+              <select
+                className="asset-page-size-select"
+                value={table.page.size}
+                onChange={(event) => onPageSizeChange(Number(event.target.value))}
+                aria-label="Rows per page"
+              >
+                {PAGE_SIZE_OPTIONS.map((size) => (
+                  <option key={size} value={size}>{size} / page</option>
+                ))}
+              </select>
+              <div className="asset-dataframe-pagination">
+                <button
+                  type="button"
+                  className="secondary asset-page-nav-button"
+                  onClick={onFirstPage}
+                  disabled={!canGoPrevious || isRefreshing}
+                  aria-label="Go to first page"
+                  title="First page"
+                >
+                  <ChevronsLeft width={16} height={16} />
+                </button>
+                <button
+                  type="button"
+                  className="secondary asset-page-nav-button"
+                  onClick={onPreviousPage}
+                  disabled={!canGoPrevious || isRefreshing}
+                  aria-label="Go to previous page"
+                  title="Previous page"
+                >
+                  <ChevronLeft width={16} height={16} />
+                </button>
+                <input
+                  className="asset-page-input"
+                  value={pageInput}
+                  inputMode="numeric"
+                  aria-label="Page number"
+                  onChange={(event) => onPageInputChange(event.target.value.replace(/[^0-9]/g, ''))}
+                  onBlur={onCommitPageInput}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter') {
+                      event.preventDefault()
+                      onCommitPageInput()
+                    }
+                    if (event.key === 'Escape') {
+                      event.preventDefault()
+                      onResetPageInput()
+                    }
+                  }}
+                />
+                <span className="asset-page-count-label">/ {pageCount}</span>
+                <button
+                  type="button"
+                  className="secondary asset-page-nav-button"
+                  onClick={onNextPage}
+                  disabled={!canGoNext || isRefreshing}
+                  aria-label="Go to next page"
+                  title="Next page"
+                >
+                  <ChevronRight width={16} height={16} />
+                </button>
+                <button
+                  type="button"
+                  className="secondary asset-page-nav-button"
+                  onClick={onLastPage}
+                  disabled={!canGoNext || isRefreshing}
+                  aria-label="Go to last page"
+                  title="Last page"
+                >
+                  <ChevronsRight width={16} height={16} />
+                </button>
+              </div>
+            </div>
           </div>
-        </div>
-      </div>
-      {isRefreshing ? (
-        <div className="asset-dataframe-loading-overlay" aria-hidden="true">
-          <div className="asset-dataframe-loading-spinner" />
+          {isRefreshing ? (
+            <div className="asset-dataframe-loading-overlay" aria-hidden="true">
+              <div className="asset-dataframe-loading-spinner" />
+            </div>
+          ) : null}
         </div>
       ) : null}
     </div>

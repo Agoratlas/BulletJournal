@@ -17,7 +17,7 @@ class _CollectionEntry:
 
 @dataclass(slots=True)
 class Collection(BaseAsset):
-    display_mode: str = 'all'
+    display_mode: str = 'single'
     _children: list[_CollectionEntry] = field(default_factory=list, init=False, repr=False)
 
     asset_type_id = 'collection'

@@ -8,6 +8,7 @@ from bulletjournal.domain.errors import InvalidRequestError
 from bulletjournal.domain.models import AssetDeclaration, NotebookInterface, ParsedNotebookContract, ValidationIssue
 from bulletjournal.parser import parse_notebook_contract
 from bulletjournal.parser.validation import build_issue
+from bulletjournal.services.notebook_freshness import lineage_metadata_for_notebook, notebook_uses_execution_head
 
 
 class NotebookService:
@@ -49,6 +50,9 @@ class NotebookService:
             first_parse = previous_interface is None
             if changed or first_parse:
                 self.project_service.record_notebook_activity()
+            self._sync_execution_freshness_head(
+                node_id, contract.interface.to_dict(), changed=changed, first_parse=first_parse
+            )
             if changed:
                 if self.project_service.run_service is not None:
                     self.project_service.run_service.interrupt_active_run_if_nodes_affected(
@@ -191,6 +195,44 @@ class NotebookService:
         for removed_name in sorted(previous_names - current_names):
             project.state_db.delete_asset_state(node_id, removed_name)
         return previous_signatures != current_signatures
+
+    def _sync_execution_freshness_head(
+        self,
+        node_id: str,
+        interface: dict[str, Any],
+        *,
+        changed: bool,
+        first_parse: bool,
+    ) -> None:
+        project = self.project_service.require_project()
+        state_db = project.state_db
+        uses_execution_head = notebook_uses_execution_head(self.project_service, node_id, interface)
+        if not uses_execution_head:
+            state_db.delete_notebook_execution_head(node_id)
+            return
+        head = state_db.get_notebook_execution_head(node_id)
+        if first_parse and head is None:
+            state_db.ensure_notebook_execution_head(node_id, ArtifactState.PENDING)
+            return
+        if head is None:
+            state_db.ensure_notebook_execution_head(node_id, ArtifactState.PENDING)
+            head = state_db.get_notebook_execution_head(node_id)
+        if not changed or head is None:
+            return
+        lineage = lineage_metadata_for_notebook(self.project_service, node_id, self.project_service.graph())
+        if head.get('last_run_finished_at') is None or lineage is None:
+            state_db.upsert_notebook_execution_head(node_id=node_id, state=ArtifactState.PENDING)
+            return
+        state_db.upsert_notebook_execution_head(
+            node_id=node_id,
+            state=ArtifactState.STALE,
+            source_hash=str(lineage['source_hash']),
+            upstream_code_hash=str(lineage['upstream_code_hash']),
+            upstream_data_hash=str(lineage['upstream_data_hash']),
+            run_id=head.get('run_id'),
+            last_run_started_at=head.get('last_run_started_at'),
+            last_run_finished_at=head.get('last_run_finished_at'),
+        )
 
 
 def _output_ports(interface_json: dict[str, Any] | None) -> dict[str, dict[str, Any]]:

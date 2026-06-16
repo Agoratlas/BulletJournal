@@ -71,6 +71,41 @@ def test_state_db_tracks_artifact_head_lifecycle_and_cache_nondeterminism(tmp_pa
     assert stale['state'] == ArtifactState.STALE.value
 
 
+def test_state_db_tracks_notebook_execution_head_lifecycle(tmp_path) -> None:
+    paths = init_project_root(tmp_path / 'project')
+    db = StateDB(paths.state_db_path)
+
+    db.ensure_notebook_execution_head('node_a', ArtifactState.PENDING)
+    pending = db.get_notebook_execution_head('node_a')
+
+    assert pending is not None
+    assert pending['state'] == ArtifactState.PENDING.value
+    assert pending['run_id'] is None
+
+    db.upsert_notebook_execution_head(
+        node_id='node_a',
+        state=ArtifactState.READY,
+        source_hash='source-a',
+        upstream_code_hash='code-a',
+        upstream_data_hash='data-a',
+        run_id='run-1',
+        last_run_started_at='2026-03-26T00:00:00Z',
+        last_run_finished_at='2026-03-26T00:00:05Z',
+    )
+    ready = db.get_notebook_execution_head('node_a')
+
+    assert ready is not None
+    assert ready['state'] == ArtifactState.READY.value
+    assert ready['source_hash'] == 'source-a'
+    assert ready['run_id'] == 'run-1'
+
+    db.set_notebook_execution_head_state('node_a', ArtifactState.STALE)
+    stale = db.get_notebook_execution_head('node_a')
+
+    assert stale is not None
+    assert stale['state'] == ArtifactState.STALE.value
+
+
 def test_state_db_connection_context_closes_connection(tmp_path) -> None:
     paths = init_project_root(tmp_path / 'project')
     db = StateDB(paths.state_db_path)
@@ -191,6 +226,7 @@ def test_state_db_delete_node_state_removes_all_visible_node_records(tmp_path) -
     assert db.latest_interface_json('node_a') is not None
     assert any(issue['node_id'] == 'node_a' for issue in db.list_validation_issues())
     assert any(head['node_id'] == 'node_a' for head in db.list_artifact_heads())
+    db.ensure_notebook_execution_head('node_a', ArtifactState.PENDING)
     assert 'node_a' in db.list_orchestrator_execution_meta()
     assert any(run['run_id'] == 'run-1' for run in db.list_run_records())
     with db._connection() as connection:
@@ -202,6 +238,7 @@ def test_state_db_delete_node_state_removes_all_visible_node_records(tmp_path) -
     assert db.latest_interface_json('node_a') is None
     assert all(issue['node_id'] != 'node_a' for issue in db.list_validation_issues())
     assert all(head['node_id'] != 'node_a' for head in db.list_artifact_heads())
+    assert db.get_notebook_execution_head('node_a') is None
     assert 'node_a' not in db.list_orchestrator_execution_meta()
     assert 'node_a' not in db.list_state_node_ids()
     assert all(run['run_id'] != 'run-1' for run in db.list_run_records())
@@ -429,6 +466,16 @@ def test_state_db_rename_node_state_updates_all_node_id_indexes_and_payloads(tmp
         status='queued',
         started_at='2026-03-26T00:00:00Z',
     )
+    db.upsert_notebook_execution_head(
+        node_id='node_a',
+        state=ArtifactState.READY,
+        source_hash='source-a',
+        upstream_code_hash='code-hash',
+        upstream_data_hash='data-hash',
+        run_id='run-1',
+        last_run_started_at='2026-03-26T00:00:00Z',
+        last_run_finished_at='2026-03-26T00:00:05Z',
+    )
 
     db.rename_node_state('node_a', 'node_b')
 
@@ -438,6 +485,8 @@ def test_state_db_rename_node_state_updates_all_node_id_indexes_and_payloads(tmp
     assert any(issue['node_id'] == 'node_b' for issue in db.list_validation_issues(include_dismissed=True))
     assert all(head['node_id'] != 'node_a' for head in db.list_artifact_heads())
     assert any(head['node_id'] == 'node_b' for head in db.list_artifact_heads())
+    assert db.get_notebook_execution_head('node_a') is None
+    assert db.get_notebook_execution_head('node_b') is not None
     assert 'node_a' not in db.list_orchestrator_execution_meta()
     assert 'node_b' in db.list_orchestrator_execution_meta()
     assert 'node_a' not in db.list_state_node_ids()

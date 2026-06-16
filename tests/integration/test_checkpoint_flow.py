@@ -1,7 +1,20 @@
+import time
+
 from fastapi.testclient import TestClient
 
 from bulletjournal.api.app import create_app
 from bulletjournal.storage.project_fs import init_project_root
+
+
+def wait_for_run_status(client: TestClient, run_id: str, expected: str, *, timeout: float = 10.0) -> dict:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        snapshot = client.get('/api/v1/project/snapshot').json()
+        run = next((entry for entry in snapshot['runs'] if entry['run_id'] == run_id), None)
+        if run is not None and run['status'] == expected:
+            return snapshot
+        time.sleep(0.05)
+    raise AssertionError(f'Run `{run_id}` did not reach status `{expected}` within {timeout} seconds.')
 
 
 def test_checkpoint_restore_recovers_graph_state(tmp_path) -> None:
@@ -93,7 +106,8 @@ def test_checkpoint_restore_removes_post_checkpoint_nodes_and_artifacts(tmp_path
         json={'mode': 'run_stale', 'action': 'use_stale'},
     )
     assert run.status_code == 200
-    assert run.json()['status'] == 'succeeded'
+    assert run.json()['status'] == 'running'
+    wait_for_run_status(client, run.json()['run_id'], 'succeeded')
 
     artifact = client.get('/api/v1/artifacts/after_checkpoint/value')
     assert artifact.status_code == 200
@@ -166,7 +180,8 @@ def test_checkpoint_restore_marks_restored_outputs_stale(tmp_path) -> None:
         json={'mode': 'run_stale', 'action': 'run_upstream'},
     )
     assert run.status_code == 200
-    assert run.json()['status'] == 'succeeded'
+    assert run.json()['status'] == 'running'
+    wait_for_run_status(client, run.json()['run_id'], 'succeeded')
 
     ready = client.get('/api/v1/artifacts/table_sink/sample_df')
     assert ready.status_code == 200
@@ -196,7 +211,8 @@ def test_checkpoint_restore_marks_restored_outputs_stale(tmp_path) -> None:
         json={'mode': 'run_stale', 'action': 'use_stale'},
     )
     assert rerun.status_code == 200
-    assert rerun.json()['status'] == 'succeeded'
+    assert rerun.json()['status'] == 'running'
+    wait_for_run_status(client, rerun.json()['run_id'], 'succeeded')
 
     defaulted = client.get('/api/v1/artifacts/table_sink/sample_df')
     assert defaulted.status_code == 200

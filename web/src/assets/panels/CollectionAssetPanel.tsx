@@ -415,7 +415,7 @@ function collectionChildrenFromAsset(asset: AssetRecord): CollectionChild[] {
 
 function collectionDefaultState(asset: AssetRecord, children: CollectionChild[]): CollectionState {
   return {
-    displayMode: asset.definition?.display_mode_default === 'single' ? 'single' : 'all',
+    displayMode: asset.definition?.display_mode_default === 'all' ? 'all' : 'single',
     selectedChildName: children[0]?.name ?? null,
   }
 }

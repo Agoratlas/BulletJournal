@@ -39,7 +39,7 @@ from bulletjournal.assets.validation import (
 )
 from bulletjournal.domain.errors import InvalidRequestError
 
-MAX_SCATTER_PLOT_POINTS = 2_000
+MAX_SCATTER_PLOT_POINTS = 10_000
 
 
 @dataclass(slots=True, init=False)
@@ -85,6 +85,11 @@ class ScatterPlot(BaseAsset):
     def __post_init__(self) -> None:
         if not isinstance(self.dataframe, pd.DataFrame):
             raise TypeError('Scatter plot assets require a pandas.DataFrame payload.')
+        if len(self.dataframe.index) > MAX_SCATTER_PLOT_POINTS:
+            raise ValueError(
+                f'Scatter plot assets support at most {MAX_SCATTER_PLOT_POINTS:,} rows; '
+                f'received {len(self.dataframe.index):,}.'
+            )
         if not isinstance(self.x, str) or not self.x:
             raise TypeError('Scatter plot assets require `x` to be a non-empty column name.')
         if not isinstance(self.y, str) or not self.y:

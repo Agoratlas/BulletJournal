@@ -9,6 +9,12 @@ import pandas as pd
 import polars as pl
 
 from bulletjournal.assets.base import BaseAsset
+from bulletjournal.assets.category_ordering import (
+    normalize_category_order_modifier_value,
+    resolve_category_order,
+    sort_category_rows,
+    validate_category_order_value,
+)
 from bulletjournal.assets.prepare_utils import (
     coerce_filter_value,
     frame_with_filters,
@@ -27,12 +33,6 @@ from bulletjournal.assets.serialization import (
     dataset_modifier_schema,
     json_safe_modifier_value,
     title_modifier_defaults,
-)
-from bulletjournal.assets.types.category_order import (
-    normalize_category_order_modifier_value,
-    resolve_category_order,
-    sort_category_rows,
-    validate_category_order_value,
 )
 from bulletjournal.assets.validation import (
     merge_nested_dicts,

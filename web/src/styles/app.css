@@ -1158,7 +1158,7 @@ label span,
 }
 
 .rf-node > .react-flow__handle {
-  z-index: 1;
+  z-index: 8;
 }
 
 .rf-node.state-ready { --rf-node-border-color: rgba(47, 133, 90, 0.48); }
@@ -1603,7 +1603,7 @@ label span,
   position: absolute;
   top: -9px;
   left: 50%;
-  z-index: 4;
+  z-index: 12;
   box-sizing: border-box;
   cursor: pointer;
   width: 18px !important;
@@ -1618,6 +1618,7 @@ label span,
   display: grid;
   place-items: center;
   box-shadow: 0 1px 4px rgba(15, 23, 42, 0.28);
+  pointer-events: auto !important;
 }
 
 .rf-dashboard-source-port.react-flow__handle-top {
@@ -4638,6 +4639,60 @@ input.invalid {
   border: 1px solid var(--line);
   background: color-mix(in srgb, var(--panel-2) 82%, transparent);
   overflow: visible;
+}
+
+.asset-dataframe-section {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.asset-dataframe-section-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 8px;
+  width: 100%;
+  padding: 2px 0;
+  border-radius: 0;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 400;
+}
+
+.asset-dataframe-section-toggle svg {
+  flex: 0 0 auto;
+  color: var(--ink);
+  transition: transform 140ms ease;
+}
+
+.asset-dataframe-section-toggle-label {
+  color: var(--ink);
+  font-weight: 500;
+}
+
+.asset-dataframe-section-toggle-line {
+  flex: 1 1 auto;
+  min-width: 24px;
+  height: 1px;
+  background: var(--line);
+  opacity: 0.9;
+}
+
+.asset-dataframe-section-toggle:hover,
+.asset-dataframe-section-toggle:focus-visible {
+  background: transparent;
+  color: var(--muted);
+}
+
+.asset-dataframe-section.is-expanded .asset-dataframe-section-toggle svg {
+  transform: rotate(0deg);
+}
+
+.asset-dataframe-section.is-collapsed .asset-dataframe-section-toggle svg {
+  transform: rotate(-90deg);
 }
 
 .asset-dataframe-shell.is-refreshing {
