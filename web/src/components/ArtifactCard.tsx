@@ -7,6 +7,7 @@ import { Download, Info } from './Icons'
 export function ArtifactCard({ artifact }: { artifact: ArtifactRecord }) {
   const downloadHref = artifactEndpoint(artifact, 'download')
   const imageSrc = artifact.preview?.kind === 'file' && artifact.preview.mime_type?.startsWith('image/')
+    && artifact.preview.image_inline
     ? artifactEndpoint(artifact, 'content')
     : null
   const isDataFrame = artifact.data_type === 'pandas.DataFrame'

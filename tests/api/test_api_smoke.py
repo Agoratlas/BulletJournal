@@ -3051,6 +3051,61 @@ def test_file_artifact_content_endpoint_renders_inline_image(tmp_path) -> None:
     assert content.content == png_bytes
 
 
+def test_large_image_file_preview_is_not_marked_inline(tmp_path, monkeypatch) -> None:
+    project_root = init_project_root(tmp_path / 'project').root
+    app = create_app(project_path=project_root)
+    client = TestClient(app)
+    from bulletjournal.runtime import serializers as serializers_module
+
+    monkeypatch.setattr(serializers_module, 'IMAGE_PREVIEW_MAX_BYTES', 4)
+
+    opened = client.get('/api/v1/project/snapshot')
+    graph_version = opened.json()['graph']['meta']['graph_version']
+
+    created = client.patch(
+        '/api/v1/graph',
+        json={
+            'graph_version': graph_version,
+            'operations': [
+                {
+                    'type': 'add_file_input_node',
+                    'node_id': 'large_image_source',
+                    'title': 'Large Image Source',
+                    'artifact_name': 'preview_image',
+                }
+            ],
+        },
+    )
+    assert created.status_code == 200
+
+    png_bytes = (
+        b'\x89PNG\r\n\x1a\n'
+        b'\x00\x00\x00\rIHDR'
+        b'\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00'
+        b'\x1f\x15\xc4\x89'
+        b'\x00\x00\x00\x0cIDATx\x9cc``\xf8\xcf\xc0\x00\x00\x03\x01\x01\x00'
+        b'\x18\xdd\x8d\xb1'
+        b'\x00\x00\x00\x00IEND\xaeB`\x82'
+    )
+    upload = client.post(
+        '/api/v1/file-inputs/large_image_source/upload',
+        content=png_bytes,
+        headers={
+            'X-Filename': 'large chart.png',
+            'Content-Type': 'image/png',
+        },
+    )
+    assert upload.status_code == 200
+
+    artifact = client.get('/api/v1/artifacts/large_image_source/preview_image')
+
+    assert artifact.status_code == 200
+    preview = artifact.json()['preview']
+    assert preview['kind'] == 'file'
+    assert preview.get('image_inline') is None
+    assert preview['mime_type'] == 'image/png'
+
+
 def test_notebook_download_endpoint_returns_python_source(tmp_path) -> None:
     project_root = init_project_root(tmp_path / 'project').root
     app = create_app(project_path=project_root)

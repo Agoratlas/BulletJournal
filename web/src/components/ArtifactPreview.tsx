@@ -89,6 +89,17 @@ export function ArtifactPreviewPanel({ preview, imageSrc = null }: ArtifactPrevi
     )
   }
 
+  if (preview.kind === 'file' && preview.mime_type?.startsWith('image/') && !preview.image_inline) {
+    return (
+      <div className="artifact-preview meta-preview">
+        <div>Image preview disabled, file too large</div>
+        <div>{preview.original_filename ?? preview.filename ?? 'Image artifact'}</div>
+        <div>{preview.mime_type}</div>
+        <div>{formatBytes(preview.size_bytes)}</div>
+      </div>
+    )
+  }
+
   return (
     <div className="artifact-preview meta-preview">
       <div>{preview.original_filename ?? preview.filename ?? 'File artifact'}</div>
