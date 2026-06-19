@@ -29,6 +29,7 @@ class MarimoSession:
 class SessionManager:
     def __init__(self) -> None:
         self._sessions: dict[str, MarimoSession] = {}
+        self._stopped_session_ids: set[str] = set()
 
     def create(
         self,
@@ -43,6 +44,7 @@ class SessionManager:
         if existing is not None and existing.process.poll() is None:
             return existing
         session_id = secrets.token_hex(8)
+        self._stopped_session_ids.discard(session_id)
         port = _free_port()
         base_url = f'/api/v1/edit/sessions/{session_id}'
         public_url = f'{public_base_url}{base_url}'
@@ -82,12 +84,19 @@ class SessionManager:
                 return session
         return None
 
-    def stop(self, session_id: str) -> None:
+    def stop(self, session_id: str, *, record_stop: bool = True) -> None:
         session = self._sessions.pop(session_id, None)
         if session is None:
             return
+        if record_stop:
+            self._stopped_session_ids.add(session_id)
         if session.process.poll() is None:
             session.process.terminate()
+
+    def consume_stopped_session_ids(self) -> list[str]:
+        stopped = sorted(self._stopped_session_ids)
+        self._stopped_session_ids.clear()
+        return stopped
 
     def stop_by_node(self, node_id: str) -> bool:
         session = self.get_by_node(node_id)
@@ -113,6 +122,7 @@ class SessionManager:
     def _cleanup(self) -> None:
         dead = [session_id for session_id, session in self._sessions.items() if session.process.poll() is not None]
         for session_id in dead:
+            self._stopped_session_ids.add(session_id)
             self._sessions.pop(session_id, None)
 
 

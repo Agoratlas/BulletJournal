@@ -883,6 +883,9 @@ export const SNAPSHOT_REFRESH_EVENTS = [
   'run.progress',
   'run.queued',
   'run.started',
+  'session.created',
+  'session.ready',
+  'session.stopped',
   'validation.updated',
 ]
 

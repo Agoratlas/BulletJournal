@@ -78,6 +78,7 @@ class RunService:
             str,
             dict[str, dict[str, tuple[int | None, str]]],
         ] = {}
+        self._session_ready_watchers: set[str] = set()
 
     def has_active_run(self) -> bool:
         with self._lock:
@@ -361,6 +362,7 @@ class RunService:
         )
 
     def list_sessions(self) -> list[dict[str, Any]]:
+        self._publish_stopped_session_events()
         return [
             {
                 'session_id': session.session_id,
@@ -376,10 +378,12 @@ class RunService:
         session = self.session_manager.get(session_id)
         if session is None:
             raise NotFoundError(f'Unknown editor session `{session_id}`.')
-        self.session_manager.stop(session_id)
+        result = {'session_id': session_id, 'node_id': session.node_id, 'status': 'stopped'}
+        self.session_manager.stop(session_id, record_stop=False)
         with self._lock:
             self._editor_session_output_snapshots.pop(session.node_id, None)
-        return {'session_id': session_id, 'node_id': session.node_id, 'status': 'stopped'}
+        self._publish_session_event('session.stopped', session=session, payload={'status': 'stopped'})
+        return result
 
     def stop(self) -> None:
         if self._active_run is not None:
@@ -388,6 +392,7 @@ class RunService:
             self._orchestrator_node_states = {}
             self._editor_session_output_snapshots = {}
         self.session_manager.stop_all()
+        self._publish_stopped_session_events()
 
     def sync_editor_session_outputs(self, node_id: str) -> None:
         project = self.project_service.require_project()
@@ -989,12 +994,70 @@ class RunService:
         )
         with self._lock:
             self._editor_session_output_snapshots[node_id] = self._output_snapshot_for_node(node_id)
+        self._publish_session_event('session.created', session=session, payload={'ready': False})
+        self._watch_session_ready(session.session_id)
         return {
             'mode': RunMode.EDIT_RUN.value,
             'session_id': session.session_id,
             'url': session.url,
             'lineage_mode': LineageMode.INTERACTIVE_HEURISTIC.value,
         }
+
+    def _watch_session_ready(self, session_id: str) -> None:
+        with self._lock:
+            if session_id in self._session_ready_watchers:
+                return
+            self._session_ready_watchers.add(session_id)
+
+        thread = threading.Thread(target=self._await_session_ready, args=(session_id,), daemon=True)
+        thread.start()
+
+    def _await_session_ready(self, session_id: str) -> None:
+        try:
+            while True:
+                session = self.session_manager.get(session_id)
+                if session is None:
+                    self._publish_stopped_session_events()
+                    return
+                if self.session_manager.is_ready(session_id):
+                    self._publish_session_event('session.ready', session=session, payload={'ready': True})
+                    return
+                time.sleep(0.25)
+        finally:
+            with self._lock:
+                self._session_ready_watchers.discard(session_id)
+
+    def _publish_stopped_session_events(self) -> None:
+        stopped_session_ids = self.session_manager.consume_stopped_session_ids()
+        if not stopped_session_ids:
+            return
+        project = self.project_service.require_project()
+        graph_version = int(self.project_service.graph().meta['graph_version'])
+        for session_id in stopped_session_ids:
+            self.project_service.event_service.publish(
+                'session.stopped',
+                project_id=project.metadata.project_id,
+                graph_version=graph_version,
+                payload={'session_id': session_id, 'status': 'stopped'},
+            )
+
+    def _publish_session_event(self, event_type: str, *, session, payload: dict[str, Any]) -> None:
+        project = self.project_service.require_project()
+        graph_version = int(self.project_service.graph().meta['graph_version'])
+        session_payload = {
+            'session_id': session.session_id,
+            'node_id': session.node_id,
+            'run_id': session.run_id,
+            'url': session.url,
+            'ready': self.session_manager.is_ready(session.session_id),
+            **payload,
+        }
+        self.project_service.event_service.publish(
+            event_type,
+            project_id=project.metadata.project_id,
+            graph_version=graph_version,
+            payload=session_payload,
+        )
 
     def _output_snapshot_for_node(self, node_id: str) -> dict[str, dict[str, tuple[int | None, str]]]:
         state_db = self.project_service.require_project().state_db

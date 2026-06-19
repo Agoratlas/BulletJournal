@@ -17,6 +17,8 @@ import bulletjournal.api.app as api_app_module
 import bulletjournal.api.sse as sse_module
 from bulletjournal.config import ServerConfig
 from bulletjournal.domain.errors import ProjectValidationError
+from bulletjournal.execution.sessions import MarimoSession
+from bulletjournal.services.run_service import RunService
 from bulletjournal.storage.project_fs import init_project_root, require_project_root
 from bulletjournal.storage.state_db import StateDB
 
@@ -66,6 +68,9 @@ class FakeProjectService:
             raise RuntimeError('No project open')
         return self._project
 
+    def graph(self):
+        return SimpleNamespace(meta={'graph_version': 1})
+
     def stop(self) -> None:
         self.stop_calls += 1
 
@@ -81,6 +86,34 @@ class FakeRunService:
 
     def sync_editor_session_outputs(self, node_id: str) -> None:
         self.synced_node_ids.append(node_id)
+
+
+class FakePublishedEventService:
+    def __init__(self) -> None:
+        self.published: list[dict[str, Any]] = []
+
+    def publish(
+        self, event_type: str, *, project_id: str, graph_version: int, payload: dict[str, Any]
+    ) -> dict[str, Any]:
+        event = {
+            'id': len(self.published) + 1,
+            'event_type': event_type,
+            'project_id': project_id,
+            'graph_version': graph_version,
+            'payload': payload,
+        }
+        self.published.append(event)
+        return event
+
+    def events_after(self, last_event_id: int):
+        return {
+            'events': [event for event in self.published if event['id'] > last_event_id],
+            'reset_required': False,
+            'earliest_available_id': 1,
+        }
+
+    def latest_event_id(self) -> int:
+        return len(self.published)
 
 
 class FakeContainer:
@@ -824,6 +857,34 @@ def test_sse_response_starts_new_connections_from_latest_event_id(monkeypatch) -
     assert calls == [8]
     assert chunks[0] == 'retry: 1000\n\n'
     assert chunks[1] == ': keepalive\n\n'
+
+
+def test_run_service_publishes_session_stopped_event_when_session_exits() -> None:
+    event_service = FakePublishedEventService()
+    project_service = SimpleNamespace(
+        event_service=event_service,
+        require_project=lambda: SimpleNamespace(metadata=SimpleNamespace(project_id='demo')),
+        graph=lambda: SimpleNamespace(meta={'graph_version': 7}),
+    )
+    run_service = RunService(project_service)
+    session = MarimoSession(
+        session_id='session-1',
+        node_id='node-a',
+        run_id='run-1',
+        notebook_path='/tmp/demo.py',
+        host='127.0.0.1',
+        port=1234,
+        base_url='/api/v1/edit/sessions/session-1',
+        public_url='http://example.test/api/v1/edit/sessions/session-1',
+        process=cast(Any, SimpleNamespace(poll=lambda: None, terminate=lambda: None)),
+    )
+    run_service.session_manager._sessions[session.session_id] = session
+
+    run_service.stop_session(session.session_id)
+
+    assert event_service.published[-1]['event_type'] == 'session.stopped'
+    assert event_service.published[-1]['payload']['session_id'] == 'session-1'
+    assert event_service.published[-1]['payload']['node_id'] == 'node-a'
 
 
 def test_resolve_last_event_id_prefers_header_and_defaults_query() -> None:

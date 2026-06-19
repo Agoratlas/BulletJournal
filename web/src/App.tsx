@@ -286,7 +286,7 @@ function App() {
     clientAnchorMs: Date.now(),
   }))
   const [pasteSequence, setPasteSequence] = useState(0)
-  const [activeEditorNodeIds, setActiveEditorNodeIds] = useState<string[]>([])
+  const [editorSessions, setEditorSessions] = useState<Record<string, SessionRecord>>({})
   const [hoveredNoticeNodeId, setHoveredNoticeNodeId] = useState<string | null>(null)
   const [noticeFocusRequest, setNoticeFocusRequest] = useState<NoticeFocusRequest | null>(null)
   const [notebookAssetCountsByNodeId, setNotebookAssetCountsByNodeId] = useState<Record<string, number>>({})
@@ -320,6 +320,10 @@ function App() {
         nodeId: startupSearch.get('node_id') ?? 'notebook',
       }
     : null
+  const activeEditorNodeIds = useMemo(
+    () => Array.from(new Set(Object.values(editorSessions).map((session) => session.node_id))),
+    [editorSessions],
+  )
 
   const projectQuery = useQuery({
     queryKey: ['project-current'],
@@ -599,33 +603,14 @@ function App() {
   }, [themeMode])
 
   useEffect(() => {
-    let cancelled = false
-    async function waitForSession() {
-      if (!loadingSession) {
-        return
-      }
-      try {
-        for (let attempt = 0; attempt < 60; attempt += 1) {
-          const sessions = await listSessions()
-          const session = sessions.find((item) => item.session_id === loadingSession.sessionId)
-          if (session?.ready && typeof session.url === 'string') {
-            window.location.replace(session.url)
-            return
-          }
-          await new Promise((resolve) => window.setTimeout(resolve, 250))
-          if (cancelled) {
-            return
-          }
-        }
-      } catch {
-        // ignore polling failure and let user retry
-      }
+    if (!loadingSession) {
+      return
     }
-    void waitForSession()
-    return () => {
-      cancelled = true
+    const session = editorSessions[loadingSession.sessionId]
+    if (session?.ready && typeof session.url === 'string' && session.url) {
+      window.location.replace(session.url)
     }
-  }, [loadingSession])
+  }, [editorSessions, loadingSession])
 
   useEffect(() => {
     if (!projectId) {
@@ -658,6 +643,31 @@ function App() {
       const dashboardVersion = typeof parsedEvent?.payload?.version === 'number' ? parsedEvent.payload.version : null
       const nodeId = typeof parsedEvent?.payload?.node_id === 'string' ? parsedEvent.payload.node_id : null
       const assetName = typeof parsedEvent?.payload?.asset_name === 'string' ? parsedEvent.payload.asset_name : null
+      const sessionId = typeof parsedEvent?.payload?.session_id === 'string' ? parsedEvent.payload.session_id : null
+      const sessionRunId = typeof parsedEvent?.payload?.run_id === 'string' ? parsedEvent.payload.run_id : ''
+      const sessionUrl = typeof parsedEvent?.payload?.url === 'string' ? parsedEvent.payload.url : ''
+      const sessionReady = typeof parsedEvent?.payload?.ready === 'boolean' ? parsedEvent.payload.ready : false
+
+      if (eventType === 'session.created' || eventType === 'session.ready') {
+        if (sessionId && nodeId) {
+          upsertEditorSession({
+            session_id: sessionId,
+            node_id: nodeId,
+            run_id: sessionRunId,
+            url: sessionUrl,
+            ready: sessionReady,
+          })
+        }
+        return
+      }
+
+      if (eventType === 'session.stopped') {
+        if (!sessionId) {
+          return
+        }
+        removeEditorSession(sessionId)
+        return
+      }
 
       if (eventType === 'asset.state_changed' || eventType === 'asset.version_created') {
         if (nodeId) {
@@ -1207,15 +1217,14 @@ function App() {
     if (!nodeIds.length) {
       return []
     }
-    const targetNodeIds = new Set(nodeIds)
-    try {
-      const sessions = await listSessions()
-      return sessions.filter((session) => targetNodeIds.has(session.node_id))
-    } catch {
-      return activeEditorNodeIds
-        .filter((nodeId) => targetNodeIds.has(nodeId))
-        .map((nodeId) => ({ session_id: '', node_id: nodeId, run_id: '', url: '' }))
+    const sessions = sessionsForNodeIds(nodeIds)
+    if (sessions.length) {
+      return sessions
     }
+    const targetNodeIds = new Set(nodeIds)
+    return activeEditorNodeIds
+      .filter((nodeId) => targetNodeIds.has(nodeId))
+      .map((nodeId) => ({ session_id: '', node_id: nodeId, run_id: '', url: '' }))
   }
 
   async function ensureNoOpenEditorsForRun(nodeIds: string[]): Promise<boolean> {
@@ -1680,7 +1689,7 @@ function App() {
 
   useEffect(() => {
     if (!projectId || notebookAssetsNodeId || savedDashboardId) {
-      setActiveEditorNodeIds([])
+      setEditorSessions({})
       return
     }
     let cancelled = false
@@ -1688,26 +1697,19 @@ function App() {
       try {
         const sessions = await listSessions()
         if (!cancelled) {
-          setActiveEditorNodeIds(Array.from(new Set(sessions.map((session) => session.node_id))))
+          setEditorSessions(
+            Object.fromEntries(sessions.map((session) => [session.session_id, session] satisfies [string, SessionRecord])),
+          )
         }
       } catch {
         if (!cancelled) {
-          setActiveEditorNodeIds([])
+          setEditorSessions({})
         }
       }
     }
     void loadSessions()
-    const interval = window.setInterval(() => {
-      void loadSessions()
-    }, 2000)
-    function handleWindowFocus() {
-      void loadSessions()
-    }
-    window.addEventListener('focus', handleWindowFocus)
     return () => {
       cancelled = true
-      window.clearInterval(interval)
-      window.removeEventListener('focus', handleWindowFocus)
     }
   }, [projectId, notebookAssetsNodeId, savedDashboardId])
 
@@ -2395,17 +2397,30 @@ function App() {
     await refreshSnapshotNow()
   }
 
-  async function refreshActiveEditorNodeIds() {
-    if (!projectId) {
-      setActiveEditorNodeIds([])
-      return
+  function sessionsForNodeIds(nodeIds: string[]): SessionRecord[] {
+    if (!nodeIds.length) {
+      return []
     }
-    try {
-      const sessions = await listSessions()
-      setActiveEditorNodeIds(Array.from(new Set(sessions.map((session) => session.node_id))))
-    } catch {
-      setActiveEditorNodeIds([])
-    }
+    const targetNodeIds = new Set(nodeIds)
+    return Object.values(editorSessions).filter((session) => targetNodeIds.has(session.node_id))
+  }
+
+  function upsertEditorSession(session: SessionRecord) {
+    setEditorSessions((current) => ({
+      ...current,
+      [session.session_id]: session,
+    }))
+  }
+
+  function removeEditorSession(sessionId: string) {
+    setEditorSessions((current) => {
+      if (!(sessionId in current)) {
+        return current
+      }
+      const next = { ...current }
+      delete next[sessionId]
+      return next
+    })
   }
 
   async function mutateGraph(
@@ -2456,12 +2471,9 @@ function App() {
     if (!projectId || !nodeIds.length) {
       return
     }
-    const targetNodeIds = new Set(nodeIds)
     try {
-      const sessions = await listSessions()
-      const matching = sessions.filter((session) => targetNodeIds.has(session.node_id))
+      const matching = sessionsForNodeIds(nodeIds)
       await Promise.all(matching.map((session) => stopSession(session.session_id)))
-      setActiveEditorNodeIds((current) => current.filter((nodeId) => !targetNodeIds.has(nodeId)))
     } catch {
       // Deletion still stops editors on the backend as a fallback.
     }
@@ -3297,8 +3309,13 @@ function App() {
         return
       }
       if (typeof response.session_id === 'string') {
-        setActiveEditorNodeIds((current) => (current.includes(nodeId) ? current : [...current, nodeId]))
-        void refreshActiveEditorNodeIds()
+        upsertEditorSession({
+          session_id: response.session_id,
+          node_id: nodeId,
+          run_id: '',
+          url: typeof response.url === 'string' ? response.url : '',
+          ready: false,
+        })
         launchEditorTab(response.session_id, nodeId)
       } else if (response.status === 'failed') {
         if (!isManagedRunFailure(response)) {
@@ -3316,8 +3333,7 @@ function App() {
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Run failed.'
       if (isEditorOpenConflict(message)) {
-        const sessions = await listSessions()
-        const session = sessions.find((item) => item.node_id === nodeId)
+        const session = sessionsForNodeIds([nodeId])[0]
         reportClientWarning(
           `editor-open:${nodeId}`,
           'editor_already_open',
@@ -3797,13 +3813,16 @@ function App() {
       onSuccess: () => {
         selectSingleNode(nextNodeId)
         setArtifactNodeId((current) => current === currentNodeId ? nextNodeId : current)
-        setActiveEditorNodeIds((current) => current.filter((nodeId) => nodeId !== currentNodeId))
+        const session = sessionsForNodeIds([currentNodeId])[0]
+        if (session) {
+          removeEditorSession(session.session_id)
+        }
         setNodeActionMenu(null)
         setPortActionMenu(null)
       },
     })
     if (success && node.kind === 'notebook') {
-      await refreshActiveEditorNodeIds()
+      return
     }
   }
 
@@ -3946,7 +3965,6 @@ function App() {
     }
     await stopSession(details.session_id)
     dismissClientNotice(notice.issue_id)
-    await refreshActiveEditorNodeIds()
     await refreshSnapshot()
   }
 
@@ -3962,14 +3980,11 @@ function App() {
     if (!projectId) {
       return
     }
-    const sessions = await listSessions()
-    const session = sessions.find((item) => item.node_id === nodeId)
+    const session = sessionsForNodeIds([nodeId])[0]
     if (!session) {
-      await refreshActiveEditorNodeIds()
       return
     }
     await stopSession(session.session_id)
-    await refreshActiveEditorNodeIds()
     await refreshSnapshot()
   }
 
