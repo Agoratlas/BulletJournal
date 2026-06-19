@@ -265,14 +265,9 @@ class GraphService:
             self.mark_nodes_and_downstream_stale(sorted(stale_roots))
             self.restore_nodes_and_downstream_ready_if_lineage_matches(sorted(stale_roots))
         snapshot = self.project_service.snapshot()
-        graph_payload = snapshot['graph']
-        return {
-            'meta': graph_payload['meta'],
-            'nodes': graph_payload['nodes'],
-            'edges': graph_payload['edges'],
-            'layout': graph_payload['layout'],
-            'interrupted_run': active_run_interruption,
-        }
+        if active_run_interruption is not None:
+            snapshot['interrupted_run'] = active_run_interruption
+        return snapshot
 
     def remove_edges_for_port_changes(
         self,

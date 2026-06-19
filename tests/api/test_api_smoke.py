@@ -1298,7 +1298,7 @@ def test_graph_layout_patch_accepts_position_only_updates(tmp_path) -> None:
     moved = client.patch(
         '/api/v1/graph',
         json={
-            'graph_version': created.json()['meta']['graph_version'],
+            'graph_version': created.json()['graph']['meta']['graph_version'],
             'operations': [
                 {
                     'type': 'update_node_layout',
@@ -1311,7 +1311,7 @@ def test_graph_layout_patch_accepts_position_only_updates(tmp_path) -> None:
     )
 
     assert moved.status_code == 200
-    layout = next(item for item in moved.json()['layout'] if item['node_id'] == 'sample_node')
+    layout = next(item for item in moved.json()['graph']['layout'] if item['node_id'] == 'sample_node')
     assert layout['x'] == 220
     assert layout['y'] == 260
     assert layout['w'] == 480
@@ -1673,7 +1673,7 @@ def test_graph_patch_can_add_and_update_organizer_node(tmp_path) -> None:
     updated = client.patch(
         '/api/v1/graph',
         json={
-            'graph_version': created.json()['meta']['graph_version'],
+            'graph_version': created.json()['graph']['meta']['graph_version'],
             'operations': [
                 {
                     'type': 'update_organizer_ports',
@@ -1731,7 +1731,7 @@ def test_graph_patch_can_add_edge_to_new_organizer_port_in_same_request(tmp_path
     updated = client.patch(
         '/api/v1/graph',
         json={
-            'graph_version': created.json()['meta']['graph_version'],
+            'graph_version': created.json()['graph']['meta']['graph_version'],
             'operations': [
                 {
                     'type': 'update_organizer_ports',
@@ -1793,7 +1793,7 @@ def test_graph_patch_can_add_and_style_area_node(tmp_path) -> None:
     updated = client.patch(
         '/api/v1/graph',
         json={
-            'graph_version': created.json()['meta']['graph_version'],
+            'graph_version': created.json()['graph']['meta']['graph_version'],
             'operations': [
                 {
                     'type': 'update_area_style',
@@ -1898,7 +1898,7 @@ def test_graph_patch_requires_prefix_when_pipeline_template_collides(tmp_path) -
     duplicate = client.patch(
         '/api/v1/graph',
         json={
-            'graph_version': created.json()['meta']['graph_version'],
+            'graph_version': created.json()['graph']['meta']['graph_version'],
             'operations': [
                 {
                     'type': 'add_pipeline_template',
@@ -1938,7 +1938,7 @@ def test_graph_patch_accepts_prefixed_pipeline_template(tmp_path) -> None:
     second = client.patch(
         '/api/v1/graph',
         json={
-            'graph_version': first.json()['meta']['graph_version'],
+            'graph_version': first.json()['graph']['meta']['graph_version'],
             'operations': [
                 {
                     'type': 'add_pipeline_template',
@@ -2029,7 +2029,7 @@ def test_pipeline_constants_do_not_force_prefix_collisions(tmp_path, monkeypatch
     second = client.patch(
         '/api/v1/graph',
         json={
-            'graph_version': first.json()['meta']['graph_version'],
+            'graph_version': first.json()['graph']['meta']['graph_version'],
             'operations': [{'type': 'add_pipeline_template', 'template_ref': 'acme/constant_only'}],
         },
     )
@@ -2633,7 +2633,7 @@ def test_constant_node_can_populate_downstream_notebook(tmp_path) -> None:
     connected = client.patch(
         '/api/v1/graph',
         json={
-            'graph_version': created.json()['meta']['graph_version'],
+            'graph_version': created.json()['graph']['meta']['graph_version'],
             'operations': [
                 {
                     'type': 'add_edge',
@@ -3234,7 +3234,7 @@ def test_marking_node_outputs_stale_also_stales_downstream_nodes(tmp_path) -> No
     connected = client.patch(
         '/api/v1/graph',
         json={
-            'graph_version': created.json()['meta']['graph_version'],
+            'graph_version': created.json()['graph']['meta']['graph_version'],
             'operations': [
                 {
                     'type': 'add_edge',
@@ -3303,7 +3303,7 @@ def test_marking_outputs_ready_is_blocked_when_inputs_are_stale(tmp_path) -> Non
     connected = client.patch(
         '/api/v1/graph',
         json={
-            'graph_version': created.json()['meta']['graph_version'],
+            'graph_version': created.json()['graph']['meta']['graph_version'],
             'operations': [
                 {
                     'type': 'add_edge',
@@ -3370,7 +3370,7 @@ def test_frozen_block_blocks_upstream_graph_edits_and_editor_sessions(tmp_path) 
     connected = client.patch(
         '/api/v1/graph',
         json={
-            'graph_version': created.json()['meta']['graph_version'],
+            'graph_version': created.json()['graph']['meta']['graph_version'],
             'operations': [
                 {
                     'type': 'add_edge',
@@ -3387,7 +3387,7 @@ def test_frozen_block_blocks_upstream_graph_edits_and_editor_sessions(tmp_path) 
     frozen = client.patch(
         '/api/v1/graph',
         json={
-            'graph_version': connected.json()['meta']['graph_version'],
+            'graph_version': connected.json()['graph']['meta']['graph_version'],
             'operations': [
                 {
                     'type': 'update_node_frozen',
@@ -3415,7 +3415,7 @@ def test_frozen_block_blocks_upstream_graph_edits_and_editor_sessions(tmp_path) 
     blocked_graph_edit = client.patch(
         '/api/v1/graph',
         json={
-            'graph_version': frozen.json()['meta']['graph_version'],
+            'graph_version': frozen.json()['graph']['meta']['graph_version'],
             'operations': [
                 {
                     'type': 'remove_edge',
@@ -3462,7 +3462,7 @@ def test_freezing_notebook_is_blocked_when_upstream_editor_is_open(tmp_path) -> 
     connected = client.patch(
         '/api/v1/graph',
         json={
-            'graph_version': created.json()['meta']['graph_version'],
+            'graph_version': created.json()['graph']['meta']['graph_version'],
             'operations': [
                 {
                     'type': 'add_edge',
@@ -3485,7 +3485,7 @@ def test_freezing_notebook_is_blocked_when_upstream_editor_is_open(tmp_path) -> 
     frozen = client.patch(
         '/api/v1/graph',
         json={
-            'graph_version': connected.json()['meta']['graph_version'],
+            'graph_version': connected.json()['graph']['meta']['graph_version'],
             'operations': [
                 {
                     'type': 'update_node_frozen',
@@ -3533,7 +3533,7 @@ def test_unfreezing_upstream_notebook_also_unfreezes_frozen_descendants(tmp_path
     connected = client.patch(
         '/api/v1/graph',
         json={
-            'graph_version': created.json()['meta']['graph_version'],
+            'graph_version': created.json()['graph']['meta']['graph_version'],
             'operations': [
                 {
                     'type': 'add_edge',
@@ -3550,7 +3550,7 @@ def test_unfreezing_upstream_notebook_also_unfreezes_frozen_descendants(tmp_path
     frozen = client.patch(
         '/api/v1/graph',
         json={
-            'graph_version': connected.json()['meta']['graph_version'],
+            'graph_version': connected.json()['graph']['meta']['graph_version'],
             'operations': [
                 {
                     'type': 'update_node_frozen',
@@ -3565,7 +3565,7 @@ def test_unfreezing_upstream_notebook_also_unfreezes_frozen_descendants(tmp_path
     unfrozen = client.patch(
         '/api/v1/graph',
         json={
-            'graph_version': frozen.json()['meta']['graph_version'],
+            'graph_version': frozen.json()['graph']['meta']['graph_version'],
             'operations': [
                 {
                     'type': 'update_node_frozen',
@@ -3636,7 +3636,7 @@ def test_freezing_downstream_block_also_freezes_upstream_file_blocks(tmp_path) -
     connected = client.patch(
         '/api/v1/graph',
         json={
-            'graph_version': created.json()['meta']['graph_version'],
+            'graph_version': created.json()['graph']['meta']['graph_version'],
             'operations': [
                 {
                     'type': 'add_edge',
@@ -3653,7 +3653,7 @@ def test_freezing_downstream_block_also_freezes_upstream_file_blocks(tmp_path) -
     frozen = client.patch(
         '/api/v1/graph',
         json={
-            'graph_version': connected.json()['meta']['graph_version'],
+            'graph_version': connected.json()['graph']['meta']['graph_version'],
             'operations': [
                 {
                     'type': 'update_node_frozen',
@@ -3697,7 +3697,7 @@ def test_frozen_file_input_blocks_upload_and_shows_frozen_state(tmp_path) -> Non
     frozen = client.patch(
         '/api/v1/graph',
         json={
-            'graph_version': created.json()['meta']['graph_version'],
+            'graph_version': created.json()['graph']['meta']['graph_version'],
             'operations': [
                 {
                     'type': 'update_node_frozen',
@@ -3761,7 +3761,7 @@ def test_deleting_node_stops_active_editor_session(tmp_path) -> None:
     deleted = client.patch(
         '/api/v1/graph',
         json={
-            'graph_version': created.json()['meta']['graph_version'],
+            'graph_version': created.json()['graph']['meta']['graph_version'],
             'operations': [
                 {
                     'type': 'delete_node',
@@ -3809,7 +3809,7 @@ def test_freezing_node_stops_active_editor_session(tmp_path) -> None:
     frozen = client.patch(
         '/api/v1/graph',
         json={
-            'graph_version': created.json()['meta']['graph_version'],
+            'graph_version': created.json()['graph']['meta']['graph_version'],
             'operations': [
                 {
                     'type': 'update_node_frozen',

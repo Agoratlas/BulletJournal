@@ -494,16 +494,7 @@ export type ProjectSnapshot = {
   templates: TemplateRecord[]
 }
 
-export type GraphPatchResponse = {
-  meta: {
-    schema_version: number
-    project_id: string
-    graph_version: number
-    updated_at: string
-  }
-  nodes: NodeRecord[]
-  edges: EdgeRecord[]
-  layout: LayoutRecord[]
+export type GraphPatchResponse = ProjectSnapshot & {
   interrupted_run?: {
     run_id: string
     node_id: string | null
