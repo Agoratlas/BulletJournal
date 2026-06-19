@@ -109,6 +109,13 @@ type ServerEventMessage = {
   payload: Record<string, unknown> | null
 }
 
+type QueuedGraphMutation = {
+  operations: GraphPatchOperation[]
+  history?: GraphHistoryEntry | null
+  onSuccess?: () => void
+  resolve: (success: boolean) => void
+}
+
 function parseServerEventMessage(event?: MessageEvent): ServerEventMessage | null {
   if (!event || typeof event.data !== 'string') {
     return null
@@ -309,6 +316,10 @@ function App() {
   const pendingClickSelectionTokenRef = useRef(0)
   const dashboardUpdateQueueRef = useRef(new Map<string, Promise<boolean>>())
   const dashboardMutationIdRef = useRef(0)
+  const graphMutationQueueRef = useRef<QueuedGraphMutation[]>([])
+  const graphMutationInFlightRef = useRef<QueuedGraphMutation[]>([])
+  const graphMutationProcessorRef = useRef<Promise<void> | null>(null)
+  const graphMutationFlushScheduledRef = useRef(false)
   const lastSnapshotRefreshAtRef = useRef(0)
   const startupSearch = useMemo(() => new URLSearchParams(window.location.search), [])
   const [pathname, setPathname] = useState(() => window.location.pathname)
@@ -345,6 +356,67 @@ function App() {
 
   const serverSnapshot = snapshotQuery.data ?? snapshot
   const liveSnapshot = optimisticGraph?.snapshot ?? serverSnapshot
+
+  function setOptimisticGraphState(
+    next: OptimisticGraphState | null | ((current: OptimisticGraphState | null) => OptimisticGraphState | null),
+  ) {
+    setOptimisticGraph((current) => {
+      const resolved = typeof next === 'function'
+        ? (next as (current: OptimisticGraphState | null) => OptimisticGraphState | null)(current)
+        : next
+      return resolved
+    })
+  }
+
+  function currentCommittedSnapshot(fallbackSnapshot: ProjectSnapshot | null = null): ProjectSnapshot | null {
+    return (queryClient.getQueryData(['snapshot']) as ProjectSnapshot | undefined)
+      ?? (queryClient.getQueryData(['project-current']) as ProjectSnapshot | undefined)
+      ?? fallbackSnapshot
+      ?? serverSnapshot
+      ?? snapshot
+      ?? null
+  }
+
+  function allPendingGraphMutations(): QueuedGraphMutation[] {
+    return [...graphMutationInFlightRef.current, ...graphMutationQueueRef.current]
+  }
+
+  function buildOptimisticGraphForMutations(
+    baseSnapshot: ProjectSnapshot,
+    mutations: QueuedGraphMutation[],
+  ): OptimisticGraphState | null {
+    let nextSnapshot = baseSnapshot
+    let clearSelection = false
+    let clearArtifacts = false
+    let changed = false
+    for (const mutation of mutations) {
+      const optimistic = applyOptimisticGraphOperations(nextSnapshot, mutation.operations as Array<Record<string, unknown>>)
+      if (!optimistic) {
+        continue
+      }
+      nextSnapshot = optimistic.snapshot
+      clearSelection = clearSelection || Boolean(optimistic.clearSelection)
+      clearArtifacts = clearArtifacts || Boolean(optimistic.clearArtifacts)
+      changed = true
+    }
+    if (!changed) {
+      return null
+    }
+    return {
+      snapshot: nextSnapshot,
+      clearSelection,
+      clearArtifacts,
+    }
+  }
+
+  function syncGraphMutationOptimisticState(fallbackSnapshot: ProjectSnapshot | null = null) {
+    const committedSnapshot = currentCommittedSnapshot(fallbackSnapshot)
+    if (!committedSnapshot) {
+      setOptimisticGraphState(null)
+      return
+    }
+    setOptimisticGraphState(buildOptimisticGraphForMutations(committedSnapshot, allPendingGraphMutations()))
+  }
 
   useEffect(() => {
     const handlePopState = () => setPathname(window.location.pathname)
@@ -563,10 +635,14 @@ function App() {
 
   useEffect(() => {
     if (!serverSnapshot) {
-      setOptimisticGraph(null)
+      setOptimisticGraphState(null)
       return
     }
-    setOptimisticGraph((current) => {
+    if (graphMutationInFlightRef.current.length || graphMutationQueueRef.current.length) {
+      syncGraphMutationOptimisticState(serverSnapshot)
+      return
+    }
+    setOptimisticGraphState((current) => {
       if (!current) {
         return null
       }
@@ -2397,6 +2473,80 @@ function App() {
     await refreshSnapshotNow()
   }
 
+  async function flushQueuedGraphMutations() {
+    if (graphMutationProcessorRef.current) {
+      await graphMutationProcessorRef.current
+      return
+    }
+    const processor = (async () => {
+      while (graphMutationQueueRef.current.length) {
+        const committedSnapshot = currentCommittedSnapshot()
+        if (!committedSnapshot || !projectId) {
+          const failed = [
+            ...graphMutationInFlightRef.current,
+            ...graphMutationQueueRef.current.splice(0, graphMutationQueueRef.current.length),
+          ]
+          graphMutationInFlightRef.current = []
+          syncGraphMutationOptimisticState()
+          failed.forEach((mutation) => mutation.resolve(false))
+          return
+        }
+        const batch = graphMutationQueueRef.current.splice(0, graphMutationQueueRef.current.length)
+        graphMutationInFlightRef.current = batch
+        syncGraphMutationOptimisticState(committedSnapshot)
+        try {
+          const response = await patchGraph(
+            committedSnapshot.graph.meta.graph_version,
+            batch.flatMap((mutation) => mutation.operations),
+          )
+          setSnapshotData(queryClient, committedSnapshot, (current) => mergeGraphIntoSnapshot(current, response))
+          graphMutationInFlightRef.current = []
+          syncGraphMutationOptimisticState(currentCommittedSnapshot(committedSnapshot))
+          const historyEntries = batch
+            .map((mutation) => mutation.history)
+            .filter((entry): entry is GraphHistoryEntry => Boolean(entry))
+          if (historyEntries.length) {
+            setGraphHistoryPast((current) => [...current, ...historyEntries])
+            setGraphHistoryFuture([])
+          }
+          batch.forEach((mutation) => mutation.onSuccess?.())
+          dismissClientNotice('graph-update')
+          await refreshSnapshot()
+          batch.forEach((mutation) => mutation.resolve(true))
+        } catch (err) {
+          graphMutationInFlightRef.current = []
+          const pending = graphMutationQueueRef.current.splice(0, graphMutationQueueRef.current.length)
+          syncGraphMutationOptimisticState(committedSnapshot)
+          setSnapshotData(queryClient, committedSnapshot, () => committedSnapshot)
+          const message = err instanceof Error ? err.message : 'Graph update failed.'
+          if (isFreezeConflict(message)) {
+            reportClientWarning('graph-update-frozen', 'frozen_block', message)
+          } else {
+            reportClientError('graph-update', 'graph_update_failed', message)
+          }
+          await refreshSnapshot()
+          ;[...batch, ...pending].forEach((mutation) => mutation.resolve(false))
+          return
+        }
+      }
+    })().finally(() => {
+      graphMutationProcessorRef.current = null
+    })
+    graphMutationProcessorRef.current = processor
+    await processor
+  }
+
+  function scheduleGraphMutationFlush() {
+    if (graphMutationProcessorRef.current || graphMutationFlushScheduledRef.current) {
+      return
+    }
+    graphMutationFlushScheduledRef.current = true
+    queueMicrotask(() => {
+      graphMutationFlushScheduledRef.current = false
+      void flushQueuedGraphMutations()
+    })
+  }
+
   function sessionsForNodeIds(nodeIds: string[]): SessionRecord[] {
     if (!nodeIds.length) {
       return []
@@ -2427,44 +2577,24 @@ function App() {
     operations: GraphPatchOperation[],
     options: { history?: GraphHistoryEntry | null; onSuccess?: () => void } = {},
   ): Promise<boolean> {
-    const currentSnapshot = (queryClient.getQueryData(['snapshot']) as ProjectSnapshot | undefined)
-      ?? (queryClient.getQueryData(['project-current']) as ProjectSnapshot | undefined)
-      ?? liveSnapshot
+    const currentSnapshot = currentCommittedSnapshot()
     if (!currentSnapshot || !projectId) {
       return false
     }
-    const rollbackSnapshot = currentSnapshot
-    try {
-      await Promise.all([
-        queryClient.cancelQueries({ queryKey: ['snapshot'], exact: true }),
-        queryClient.cancelQueries({ queryKey: ['project-current'], exact: true }),
-      ])
-      const optimistic = applyOptimisticGraphOperations(currentSnapshot, operations as Array<Record<string, unknown>>)
-      if (optimistic) {
-        setOptimisticGraph(optimistic)
-      }
-      const response = await patchGraph(currentSnapshot.graph.meta.graph_version, operations)
-      setSnapshotData(queryClient, rollbackSnapshot, (current) => mergeGraphIntoSnapshot(current, response))
-      if (options.history) {
-        setGraphHistoryPast((current) => [...current, options.history as GraphHistoryEntry])
-        setGraphHistoryFuture([])
-      }
-      options.onSuccess?.()
-      dismissClientNotice('graph-update')
-      await refreshSnapshot()
-      return true
-    } catch (err) {
-      setOptimisticGraph(null)
-      setSnapshotData(queryClient, rollbackSnapshot, () => rollbackSnapshot)
-      const message = err instanceof Error ? err.message : 'Graph update failed.'
-      if (isFreezeConflict(message)) {
-        reportClientWarning('graph-update-frozen', 'frozen_block', message)
-      } else {
-        reportClientError('graph-update', 'graph_update_failed', message)
-      }
-      await refreshSnapshot()
-      return false
-    }
+    await Promise.all([
+      queryClient.cancelQueries({ queryKey: ['snapshot'], exact: true }),
+      queryClient.cancelQueries({ queryKey: ['project-current'], exact: true }),
+    ])
+    return new Promise<boolean>((resolve) => {
+      graphMutationQueueRef.current.push({
+        operations,
+        history: options.history,
+        onSuccess: options.onSuccess,
+        resolve,
+      })
+      syncGraphMutationOptimisticState(currentSnapshot)
+      scheduleGraphMutationFlush()
+    })
   }
 
   async function stopEditorsForNodes(nodeIds: string[]) {
@@ -3722,7 +3852,7 @@ function App() {
       return
     }
     await restoreCheckpoint(checkpointId)
-    setOptimisticGraph(null)
+    setOptimisticGraphState(null)
     applySelection([], [], { openInspector: false })
     setArtifactNodeId(null)
     setShowProjectInfo(false)
