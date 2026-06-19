@@ -269,7 +269,7 @@ if __name__ == '__main__':
     connect = client.patch(
         '/api/v1/graph',
         json={
-            'graph_version': patch.json()['meta']['graph_version'],
+            'graph_version': patch.json()['graph']['meta']['graph_version'],
             'operations': [
                 {
                     'type': 'add_edge',
@@ -425,7 +425,7 @@ if __name__ == '__main__':
     connect = client.patch(
         '/api/v1/graph',
         json={
-            'graph_version': patch.json()['meta']['graph_version'],
+            'graph_version': patch.json()['graph']['meta']['graph_version'],
             'operations': [
                 {
                     'type': 'add_edge',
@@ -557,7 +557,7 @@ if __name__ == '__main__':
     connect = client.patch(
         '/api/v1/graph',
         json={
-            'graph_version': patch.json()['meta']['graph_version'],
+            'graph_version': patch.json()['graph']['meta']['graph_version'],
             'operations': [
                 {
                     'type': 'add_edge',
@@ -631,7 +631,7 @@ def test_run_upstream_executes_through_organizer(tmp_path) -> None:
     connect = client.patch(
         '/api/v1/graph',
         json={
-            'graph_version': patch.json()['meta']['graph_version'],
+            'graph_version': patch.json()['graph']['meta']['graph_version'],
             'operations': [
                 {
                     'type': 'add_edge',
@@ -699,7 +699,7 @@ def test_disconnecting_edge_marks_downstream_artifact_stale_until_rerun(tmp_path
     )
     assert patch.status_code == 200
 
-    graph_version = patch.json()['meta']['graph_version']
+    graph_version = patch.json()['graph']['meta']['graph_version']
     connect = client.patch(
         '/api/v1/graph',
         json={
@@ -730,7 +730,7 @@ def test_disconnecting_edge_marks_downstream_artifact_stale_until_rerun(tmp_path
     assert artifact.json()['state'] == 'ready'
     assert artifact.json()['preview']['rows'] == 42
 
-    graph_version = connect.json()['meta']['graph_version']
+    graph_version = connect.json()['graph']['meta']['graph_version']
     disconnect = client.patch(
         '/api/v1/graph',
         json={
@@ -829,7 +829,7 @@ def test_graph_patch_failure_does_not_delete_existing_node_file(tmp_path) -> Non
     failed = client.patch(
         '/api/v1/graph',
         json={
-            'graph_version': patch.json()['meta']['graph_version'],
+            'graph_version': patch.json()['graph']['meta']['graph_version'],
             'operations': [
                 {
                     'type': 'delete_node',
@@ -887,7 +887,7 @@ def test_deleting_node_removes_artifacts_and_stales_downstream(tmp_path) -> None
     connect = client.patch(
         '/api/v1/graph',
         json={
-            'graph_version': patch.json()['meta']['graph_version'],
+            'graph_version': patch.json()['graph']['meta']['graph_version'],
             'operations': [
                 {
                     'type': 'add_edge',
@@ -912,7 +912,7 @@ def test_deleting_node_removes_artifacts_and_stales_downstream(tmp_path) -> None
     delete = client.patch(
         '/api/v1/graph',
         json={
-            'graph_version': connect.json()['meta']['graph_version'],
+            'graph_version': connect.json()['graph']['meta']['graph_version'],
             'operations': [
                 {
                     'type': 'delete_node',
@@ -976,7 +976,7 @@ def test_reparse_input_port_removal_disconnects_edges_and_stales_node_outputs(tm
     connect = client.patch(
         '/api/v1/graph',
         json={
-            'graph_version': patch.json()['meta']['graph_version'],
+            'graph_version': patch.json()['graph']['meta']['graph_version'],
             'operations': [
                 {
                     'type': 'add_edge',
@@ -1067,7 +1067,7 @@ def test_recreating_same_edge_restores_matching_stale_outputs_to_ready(tmp_path)
     connect = client.patch(
         '/api/v1/graph',
         json={
-            'graph_version': patch.json()['meta']['graph_version'],
+            'graph_version': patch.json()['graph']['meta']['graph_version'],
             'operations': [
                 {
                     'type': 'add_edge',
@@ -1097,7 +1097,7 @@ def test_recreating_same_edge_restores_matching_stale_outputs_to_ready(tmp_path)
     disconnected = client.patch(
         '/api/v1/graph',
         json={
-            'graph_version': connect.json()['meta']['graph_version'],
+            'graph_version': connect.json()['graph']['meta']['graph_version'],
             'operations': [
                 {
                     'type': 'remove_edge',
@@ -1117,7 +1117,7 @@ def test_recreating_same_edge_restores_matching_stale_outputs_to_ready(tmp_path)
     reconnected = client.patch(
         '/api/v1/graph',
         json={
-            'graph_version': disconnected.json()['meta']['graph_version'],
+            'graph_version': disconnected.json()['graph']['meta']['graph_version'],
             'operations': [
                 {
                     'type': 'add_edge',
@@ -1601,7 +1601,7 @@ if __name__ == '__main__':
     connect = client.patch(
         '/api/v1/graph',
         json={
-            'graph_version': patch.json()['meta']['graph_version'],
+            'graph_version': patch.json()['graph']['meta']['graph_version'],
             'operations': [
                 {
                     'type': 'add_edge',
@@ -2046,7 +2046,7 @@ if __name__ == '__main__':
     connect = client.patch(
         '/api/v1/graph',
         json={
-            'graph_version': patch.json()['meta']['graph_version'],
+            'graph_version': patch.json()['graph']['meta']['graph_version'],
             'operations': [
                 {
                     'type': 'add_edge',
@@ -2165,7 +2165,7 @@ def test_hidden_input_updates_are_not_supported(tmp_path) -> None:
     hidden_input_update = client.patch(
         '/api/v1/graph',
         json={
-            'graph_version': patch.json()['meta']['graph_version'],
+            'graph_version': patch.json()['graph']['meta']['graph_version'],
             'operations': [
                 {
                     'type': 'update_node_hidden_inputs',
@@ -2213,7 +2213,7 @@ def test_recreating_deleted_node_id_clears_execution_metadata(tmp_path) -> None:
         opened.json()['project']['project_id'],
         'run_stale',
         {'node_id': 'sample_node', 'node_ids': ['sample_node'], 'plan': ['sample_node']},
-        patch.json()['meta']['graph_version'],
+        patch.json()['graph']['meta']['graph_version'],
         {'started_at': '2026-03-26T00:00:00Z'},
     )
     project.state_db.update_run_status(
@@ -2244,7 +2244,7 @@ def test_recreating_deleted_node_id_clears_execution_metadata(tmp_path) -> None:
     deleted = client.patch(
         '/api/v1/graph',
         json={
-            'graph_version': patch.json()['meta']['graph_version'],
+            'graph_version': patch.json()['graph']['meta']['graph_version'],
             'operations': [
                 {
                     'type': 'delete_node',
@@ -2258,7 +2258,7 @@ def test_recreating_deleted_node_id_clears_execution_metadata(tmp_path) -> None:
     recreated = client.patch(
         '/api/v1/graph',
         json={
-            'graph_version': deleted.json()['meta']['graph_version'],
+            'graph_version': deleted.json()['graph']['meta']['graph_version'],
             'operations': [
                 {
                     'type': 'add_notebook_node',

@@ -75,7 +75,7 @@ def test_graph_service_restores_deleted_notebook_and_edges_in_same_request(tmp_p
     )
 
     connected = graph_service.apply_operations(
-        int(created['meta']['graph_version']),
+        int(created['graph']['meta']['graph_version']),
         [
             {
                 'type': 'add_edge',
@@ -88,7 +88,7 @@ def test_graph_service_restores_deleted_notebook_and_edges_in_same_request(tmp_p
     )
 
     deleted = graph_service.apply_operations(
-        int(connected['meta']['graph_version']),
+        int(connected['graph']['meta']['graph_version']),
         [
             {
                 'type': 'delete_node',
@@ -98,7 +98,7 @@ def test_graph_service_restores_deleted_notebook_and_edges_in_same_request(tmp_p
     )
 
     restored = graph_service.apply_operations(
-        int(deleted['meta']['graph_version']),
+        int(deleted['graph']['meta']['graph_version']),
         [
             {
                 'type': 'add_notebook_node',
@@ -123,7 +123,7 @@ def test_graph_service_restores_deleted_notebook_and_edges_in_same_request(tmp_p
         and edge['source_port'] == 'value'
         and edge['target_node'] == 'consumer'
         and edge['target_port'] == 'sample_count'
-        for edge in restored['edges']
+        for edge in restored['graph']['edges']
     )
     snapshot = project_service.snapshot()
     consumer = next(node for node in snapshot['graph']['nodes'] if node['id'] == 'consumer')
@@ -150,7 +150,7 @@ def test_graph_service_renames_notebook_app_title_with_new_node_id(tmp_path) -> 
     )
 
     renamed = graph_service.apply_operations(
-        int(created['meta']['graph_version']),
+        int(created['graph']['meta']['graph_version']),
         [
             {
                 'type': 'rename_node',
@@ -164,7 +164,7 @@ def test_graph_service_renames_notebook_app_title_with_new_node_id(tmp_path) -> 
     source = (project_root / 'notebooks' / 'renamed_node.py').read_text(encoding='utf-8')
     assert "app_title='renamed_node'" in source
     assert not (project_root / 'notebooks' / 'sample_node.py').exists()
-    assert any(node['id'] == 'renamed_node' for node in renamed['nodes'])
+    assert any(node['id'] == 'renamed_node' for node in renamed['graph']['nodes'])
 
 
 def test_graph_service_deletes_marimo_session_cache_for_deleted_notebook(tmp_path) -> None:
@@ -189,7 +189,7 @@ def test_graph_service_deletes_marimo_session_cache_for_deleted_notebook(tmp_pat
     session_cache.write_text('{"cells": []}', encoding='utf-8')
 
     graph_service.apply_operations(
-        int(created['meta']['graph_version']),
+        int(created['graph']['meta']['graph_version']),
         [
             {
                 'type': 'delete_node',
@@ -226,7 +226,7 @@ def test_graph_service_deletes_marimo_session_cache_for_renamed_notebook(tmp_pat
     new_session_cache.write_text('{"cells": ["stale"]}', encoding='utf-8')
 
     graph_service.apply_operations(
-        int(created['meta']['graph_version']),
+        int(created['graph']['meta']['graph_version']),
         [
             {
                 'type': 'rename_node',
@@ -323,7 +323,7 @@ def test_graph_service_blocks_notebook_id_change_while_editor_is_open(tmp_path) 
 
     with pytest.raises(GraphValidationError, match='editor is open'):
         graph_service.apply_operations(
-            int(created['meta']['graph_version']),
+            int(created['graph']['meta']['graph_version']),
             [
                 {
                     'type': 'rename_node',
@@ -335,7 +335,7 @@ def test_graph_service_blocks_notebook_id_change_while_editor_is_open(tmp_path) 
         )
 
     updated = graph_service.apply_operations(
-        int(created['meta']['graph_version']),
+        int(created['graph']['meta']['graph_version']),
         [
             {
                 'type': 'update_node_title',
@@ -345,7 +345,7 @@ def test_graph_service_blocks_notebook_id_change_while_editor_is_open(tmp_path) 
         ],
     )
 
-    assert any(node['id'] == 'sample_node' and node['title'] == 'Renamed Sample' for node in updated['nodes'])
+    assert any(node['id'] == 'sample_node' and node['title'] == 'Renamed Sample' for node in updated['graph']['nodes'])
 
 
 def test_graph_service_blocks_notebook_id_change_while_queued(tmp_path) -> None:
@@ -372,7 +372,7 @@ def test_graph_service_blocks_notebook_id_change_while_queued(tmp_path) -> None:
 
     with pytest.raises(GraphValidationError, match='queued for execution'):
         graph_service.apply_operations(
-            int(created['meta']['graph_version']),
+            int(created['graph']['meta']['graph_version']),
             [
                 {
                     'type': 'rename_node',
@@ -384,7 +384,7 @@ def test_graph_service_blocks_notebook_id_change_while_queued(tmp_path) -> None:
         )
 
     updated = graph_service.apply_operations(
-        int(created['meta']['graph_version']),
+        int(created['graph']['meta']['graph_version']),
         [
             {
                 'type': 'update_node_title',
@@ -394,7 +394,7 @@ def test_graph_service_blocks_notebook_id_change_while_queued(tmp_path) -> None:
         ],
     )
 
-    assert any(node['id'] == 'sample_node' and node['title'] == 'Renamed Sample' for node in updated['nodes'])
+    assert any(node['id'] == 'sample_node' and node['title'] == 'Renamed Sample' for node in updated['graph']['nodes'])
 
 
 def test_graph_service_blocks_notebook_id_change_while_running(tmp_path) -> None:
@@ -421,7 +421,7 @@ def test_graph_service_blocks_notebook_id_change_while_running(tmp_path) -> None
 
     with pytest.raises(GraphValidationError, match='while it is running'):
         graph_service.apply_operations(
-            int(created['meta']['graph_version']),
+            int(created['graph']['meta']['graph_version']),
             [
                 {
                     'type': 'rename_node',
@@ -433,7 +433,7 @@ def test_graph_service_blocks_notebook_id_change_while_running(tmp_path) -> None
         )
 
     updated = graph_service.apply_operations(
-        int(created['meta']['graph_version']),
+        int(created['graph']['meta']['graph_version']),
         [
             {
                 'type': 'update_node_title',
@@ -443,7 +443,7 @@ def test_graph_service_blocks_notebook_id_change_while_running(tmp_path) -> None
         ],
     )
 
-    assert any(node['id'] == 'sample_node' and node['title'] == 'Renamed Sample' for node in updated['nodes'])
+    assert any(node['id'] == 'sample_node' and node['title'] == 'Renamed Sample' for node in updated['graph']['nodes'])
 
 
 def test_graph_service_materializes_dashboard_nodes_from_pipeline_templates(tmp_path) -> None:
@@ -536,7 +536,9 @@ def _():
         ],
     )
 
-    assert any(node['id'] == 'demo_dashboard_view' and node['kind'] == 'dashboard' for node in created['nodes'])
+    assert any(
+        node['id'] == 'demo_dashboard_view' and node['kind'] == 'dashboard' for node in created['graph']['nodes']
+    )
     dashboard_payload = project_service.dashboard_service.get_dashboard('demo_dashboard_view')
     assert dashboard_payload['sources'] == [{'node_id': 'demo_analysis'}]
     assert dashboard_payload['panels'][0]['node_id'] == 'demo_analysis'

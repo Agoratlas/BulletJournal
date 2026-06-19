@@ -88,7 +88,7 @@ def test_checkpoint_restore_removes_post_checkpoint_nodes_and_artifacts(tmp_path
     added = client.patch(
         '/api/v1/graph',
         json={
-            'graph_version': base.json()['meta']['graph_version'],
+            'graph_version': base.json()['graph']['meta']['graph_version'],
             'operations': [
                 {
                     'type': 'add_notebook_node',
@@ -161,7 +161,7 @@ def test_checkpoint_restore_marks_restored_outputs_stale(tmp_path) -> None:
     connected = client.patch(
         '/api/v1/graph',
         json={
-            'graph_version': patch.json()['meta']['graph_version'],
+            'graph_version': patch.json()['graph']['meta']['graph_version'],
             'operations': [
                 {
                     'type': 'add_edge',
@@ -195,7 +195,7 @@ def test_checkpoint_restore_marks_restored_outputs_stale(tmp_path) -> None:
     disconnected = client.patch(
         '/api/v1/graph',
         json={
-            'graph_version': connected.json()['meta']['graph_version'],
+            'graph_version': connected.json()['graph']['meta']['graph_version'],
             'operations': [
                 {
                     'type': 'remove_edge',
