@@ -3716,13 +3716,22 @@ function App() {
   }
 
   async function handleNodeMove(nodeId: string, x: number, y: number) {
+    if (!liveSnapshot) {
+      return
+    }
+    const nextX = Math.round(x / 20) * 20
+    const nextY = Math.round(y / 20) * 20
+    const currentLayout = liveSnapshot.graph.layout.find((entry) => entry.node_id === nodeId)
+    if (currentLayout && currentLayout.x === nextX && currentLayout.y === nextY) {
+      return
+    }
     const redo = {
       operations: [
         {
           type: 'update_node_layout',
           node_id: nodeId,
-          x: Math.round(x / 20) * 20,
-          y: Math.round(y / 20) * 20,
+          x: nextX,
+          y: nextY,
         } satisfies GraphPatchOperation,
       ],
     }
