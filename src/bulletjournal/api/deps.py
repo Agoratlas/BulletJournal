@@ -28,6 +28,7 @@ class ServiceContainer:
         self.run_service = RunService(self.project_service)
         self.project_service.run_service = self.run_service
         self.checkpoint_service = CheckpointService(self.project_service)
+        self.project_service.checkpoint_service = self.checkpoint_service
 
 
 def get_container(app):

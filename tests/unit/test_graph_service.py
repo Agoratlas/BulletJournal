@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
 
 from bulletjournal.domain.errors import GraphValidationError
+from bulletjournal.domain.models import CheckpointRecord
+from bulletjournal.services.checkpoint_service import CheckpointService
 from bulletjournal.services.dashboard_service import DashboardService
 from bulletjournal.services.graph_service import GraphService
 from bulletjournal.services.notebook_service import NotebookService
@@ -16,6 +19,12 @@ from bulletjournal.storage.project_fs import init_project_root
 class _FakeEventService:
     def publish(self, *args, **kwargs) -> None:
         _ = (args, kwargs)
+
+
+def _attach_checkpoint_service(project_service: ProjectService) -> CheckpointService:
+    checkpoint_service = CheckpointService(project_service)
+    project_service.checkpoint_service = checkpoint_service
+    return checkpoint_service
 
 
 def _consumer_source() -> str:
@@ -543,3 +552,145 @@ def _():
     assert dashboard_payload['sources'] == [{'node_id': 'demo_analysis'}]
     assert dashboard_payload['panels'][0]['node_id'] == 'demo_analysis'
     assert dashboard_payload['panels'][0]['panel_id'] == 'demo_analysis/notes'
+
+
+def test_graph_changes_create_automatic_checkpoint_when_last_is_older_than_ten_minutes(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project_root = init_project_root(tmp_path / 'project').root
+    project_service = ProjectService(_FakeEventService(), TemplateService())
+    project_service.open_project(project_root)
+    checkpoint_service = _attach_checkpoint_service(project_service)
+    graph_service = GraphService(project_service)
+
+    old_created_at = (
+        (datetime.now(tz=UTC) - timedelta(minutes=11)).replace(microsecond=0).isoformat().replace('+00:00', 'Z')
+    )
+    monkeypatch.setattr(
+        project_service.require_project().state_db,
+        'list_checkpoints',
+        lambda: [
+            CheckpointRecord(
+                checkpoint_id='existing', created_at=old_created_at, graph_version=1, path='x', restored_at=None
+            )
+        ],
+    )
+
+    calls: list[str] = []
+
+    def record_create_checkpoint() -> dict[str, object]:
+        calls.append('created')
+        return {'checkpoint_id': 'auto', 'path': 'x', 'graph_version': 1}
+
+    monkeypatch.setattr(checkpoint_service, 'create_checkpoint', record_create_checkpoint)
+
+    graph_service.apply_operations(
+        int(project_service.graph().meta['graph_version']),
+        [
+            {
+                'type': 'add_notebook_node',
+                'node_id': 'sample_node',
+                'title': 'Sample Node',
+            }
+        ],
+    )
+
+    assert calls == ['created']
+
+
+def test_graph_changes_skip_automatic_checkpoint_when_recent_checkpoint_exists(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project_root = init_project_root(tmp_path / 'project').root
+    project_service = ProjectService(_FakeEventService(), TemplateService())
+    project_service.open_project(project_root)
+    checkpoint_service = _attach_checkpoint_service(project_service)
+    graph_service = GraphService(project_service)
+
+    recent_created_at = (
+        (datetime.now(tz=UTC) - timedelta(minutes=9)).replace(microsecond=0).isoformat().replace('+00:00', 'Z')
+    )
+    monkeypatch.setattr(
+        project_service.require_project().state_db,
+        'list_checkpoints',
+        lambda: [
+            CheckpointRecord(
+                checkpoint_id='recent', created_at=recent_created_at, graph_version=1, path='x', restored_at=None
+            )
+        ],
+    )
+
+    calls: list[str] = []
+
+    def record_create_checkpoint() -> dict[str, object]:
+        calls.append('created')
+        return {'checkpoint_id': 'auto', 'path': 'x', 'graph_version': 1}
+
+    monkeypatch.setattr(checkpoint_service, 'create_checkpoint', record_create_checkpoint)
+
+    graph_service.apply_operations(
+        int(project_service.graph().meta['graph_version']),
+        [
+            {
+                'type': 'add_notebook_node',
+                'node_id': 'sample_node',
+                'title': 'Sample Node',
+            }
+        ],
+    )
+
+    assert calls == []
+
+
+def test_notebook_source_changes_create_automatic_checkpoint_when_due(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project_root = init_project_root(tmp_path / 'project').root
+    project_service = ProjectService(_FakeEventService(), TemplateService())
+    project_service.open_project(project_root)
+    checkpoint_service = _attach_checkpoint_service(project_service)
+    graph_service = GraphService(project_service)
+
+    graph_service.apply_operations(
+        int(project_service.graph().meta['graph_version']),
+        [
+            {
+                'type': 'add_notebook_node',
+                'node_id': 'sample_node',
+                'title': 'Sample Node',
+                'template_ref': 'builtin/test_starter_notebook',
+            }
+        ],
+    )
+
+    old_created_at = (
+        (datetime.now(tz=UTC) - timedelta(minutes=11)).replace(microsecond=0).isoformat().replace('+00:00', 'Z')
+    )
+    monkeypatch.setattr(
+        project_service.require_project().state_db,
+        'list_checkpoints',
+        lambda: [
+            CheckpointRecord(
+                checkpoint_id='existing', created_at=old_created_at, graph_version=1, path='x', restored_at=None
+            )
+        ],
+    )
+
+    calls: list[str] = []
+
+    def record_create_checkpoint() -> dict[str, object]:
+        calls.append('created')
+        return {'checkpoint_id': 'auto', 'path': 'x', 'graph_version': 1}
+
+    monkeypatch.setattr(checkpoint_service, 'create_checkpoint', record_create_checkpoint)
+
+    notebook_path = project_root / 'notebooks' / 'sample_node.py'
+    source = notebook_path.read_text(encoding='utf-8')
+    notebook_path.write_text(source.replace('Sample output frame', 'Modified output frame'), encoding='utf-8')
+
+    NotebookService(project_service).reparse_notebook('sample_node')
+
+    assert calls == ['created']

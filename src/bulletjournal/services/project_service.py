@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
@@ -74,9 +75,11 @@ class ProjectService:
         self.event_service = event_service
         self.template_service = template_service
         self.dashboard_service = None
+        self.checkpoint_service = None
         self.project: OpenProject | None = None
         self.run_service = None
         self.watcher = NotebookWatcher(self)
+        self._automatic_checkpoint_suspensions = 0
 
     def init_project(self, path: Path, *, title: str | None = None, project_id: str | None = None) -> dict[str, Any]:
         paths = init_project_root(path, title=title, project_id=project_id)
@@ -503,6 +506,23 @@ class ProjectService:
 
     def record_notebook_activity(self, timestamp: str | None = None) -> None:
         self.require_project().state_db.set_project_meta('last_notebook_edit_at', timestamp or utc_now_iso())
+
+    @property
+    def automatic_checkpoints_suspended(self) -> bool:
+        return self._automatic_checkpoint_suspensions > 0
+
+    @contextmanager
+    def suspend_automatic_checkpoints(self):
+        self._automatic_checkpoint_suspensions += 1
+        try:
+            yield
+        finally:
+            self._automatic_checkpoint_suspensions -= 1
+
+    def create_automatic_checkpoint_if_due(self) -> dict[str, object] | None:
+        if self.checkpoint_service is None or self.automatic_checkpoints_suspended:
+            return None
+        return self.checkpoint_service.create_automatic_checkpoint_if_due()
 
     def mark_environment_changed(self, *, reason: str, mark_all_artifacts_stale: bool = True) -> dict[str, Any]:
         project = self.require_project()

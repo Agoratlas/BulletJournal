@@ -60,210 +60,216 @@ class GraphService:
         }
 
     def apply_operations(self, graph_version: int, operations: list[dict[str, Any]]) -> dict[str, Any]:
-        graph = self.project_service.graph()
-        if int(graph.meta['graph_version']) != graph_version:
-            raise GraphValidationError('Graph version conflict.')
-        self._assert_operations_allowed_with_frozen_blocks(graph, operations)
-        active_run_interruption = None
-        reparse_all = False
-        stale_roots: set[str] = set()
-        interruption_roots: set[str] = set()
-        pending_notebook_creates: list[tuple[str, str]] = []
-        pending_notebook_deletes: list[str] = []
-        pending_notebook_renames: list[tuple[str, str, str | None]] = []
-        pending_dashboard_creates: list[dict[str, Any]] = []
-        pending_dashboard_deletes: list[str] = []
-        pending_dashboard_renames: list[tuple[str, str, str]] = []
-        pending_dashboard_ref_renames: list[tuple[str, str]] = []
-        pending_dashboard_ref_deletes: list[str] = []
-        pending_editor_stops: list[str] = []
-        pending_input_heads: list[tuple[str, str]] = []
-        pending_constant_values: list[tuple[str, Any, str | None]] = []
-        pending_artifact_state_resets: list[tuple[str, str]] = []
-        pending_state_deletes: list[str] = []
-        pending_state_renames: list[tuple[str, str]] = []
-        pending_notebook_interfaces: dict[str, dict[str, Any]] = {}
-        for operation in operations:
-            op_type = operation['type']
-            if op_type == 'add_notebook_node':
-                node_id, source, interface = self._add_notebook_node(graph, operation)
-                pending_notebook_creates.append((node_id, source))
-                pending_notebook_interfaces[node_id] = interface
-                reparse_all = True
-                interruption_roots.add(node_id)
-            elif op_type == 'add_constant_node':
-                node_id, artifact_name = self._add_constant_node(graph, operation)
-                pending_input_heads.append((node_id, artifact_name))
-                if operation.get('value') is not None or operation.get('value_json') is not None:
-                    pending_constant_values.append((node_id, operation.get('value'), _constant_value_json(operation)))
-                interruption_roots.add(node_id)
-            elif op_type == 'add_file_input_node':
-                node_id = self._add_file_input_node(graph, operation)
-                pending_input_heads.append(
-                    (node_id, file_input_artifact_name(next(node for node in graph.nodes if node.id == node_id)))
-                )
-                interruption_roots.add(node_id)
-            elif op_type == 'add_organizer_node':
-                self._add_organizer_node(graph, operation)
-            elif op_type == 'add_area_node':
-                self._add_area_node(graph, operation)
-            elif op_type == 'add_dashboard_node':
-                node_id = self._add_dashboard_node(graph, operation)
-                pending_dashboard_creates.append(
-                    {
-                        'dashboard_id': node_id,
-                        'title': str(operation.get('title') or 'Dashboard'),
-                        'sources': [],
-                        'panels': [],
-                    }
-                )
-            elif op_type == 'add_pipeline_template':
-                created = self._add_pipeline_template(graph, operation)
-                pending_notebook_creates.extend(created['notebook_creates'])
-                pending_dashboard_creates.extend(created['dashboard_creates'])
-                pending_input_heads.extend(created['input_heads'])
-                pending_constant_values.extend(created['constant_values'])
-                reparse_all = True
-                interruption_roots.update(node_id for node_id, _ in created['notebook_creates'])
-                interruption_roots.update(node_id for node_id, _ in created['input_heads'])
-            elif op_type == 'add_edge':
-                self._add_edge(graph, operation, pending_interfaces_by_node=pending_notebook_interfaces)
-                stale_roots.add(str(operation['target_node']))
-                interruption_roots.add(str(operation['target_node']))
-            elif op_type == 'remove_edge':
-                edge = self._remove_edge(graph, str(operation['edge_id']))
-                if edge is not None:
-                    stale_roots.add(edge.target_node)
-                    interruption_roots.add(edge.target_node)
-            elif op_type == 'update_node_layout':
-                self._update_layout(graph, operation)
-            elif op_type == 'update_node_title':
-                self._update_title(graph, operation)
-            elif op_type == 'rename_node':
-                renamed = self._rename_node(graph, operation)
-                pending_state_renames.append((renamed['old_node_id'], renamed['new_node_id']))
-                pending_dashboard_ref_renames.append((renamed['old_node_id'], renamed['new_node_id']))
-                if renamed['interface'] is not None:
-                    pending_notebook_interfaces.pop(renamed['old_node_id'], None)
-                    pending_notebook_interfaces[renamed['new_node_id']] = renamed['interface']
-                if renamed['rename_notebook_file']:
-                    pending_notebook_renames.append(
-                        (
-                            renamed['old_node_id'],
-                            renamed['new_node_id'],
-                            self._renamed_notebook_source(
-                                old_node_id=renamed['old_node_id'],
-                                new_node_id=renamed['new_node_id'],
-                            ),
-                        )
-                    )
-                    pending_editor_stops.append(renamed['old_node_id'])
+        with self.project_service.suspend_automatic_checkpoints():
+            graph = self.project_service.graph()
+            if int(graph.meta['graph_version']) != graph_version:
+                raise GraphValidationError('Graph version conflict.')
+            self._assert_operations_allowed_with_frozen_blocks(graph, operations)
+            active_run_interruption = None
+            reparse_all = False
+            stale_roots: set[str] = set()
+            interruption_roots: set[str] = set()
+            pending_notebook_creates: list[tuple[str, str]] = []
+            pending_notebook_deletes: list[str] = []
+            pending_notebook_renames: list[tuple[str, str, str | None]] = []
+            pending_dashboard_creates: list[dict[str, Any]] = []
+            pending_dashboard_deletes: list[str] = []
+            pending_dashboard_renames: list[tuple[str, str, str]] = []
+            pending_dashboard_ref_renames: list[tuple[str, str]] = []
+            pending_dashboard_ref_deletes: list[str] = []
+            pending_editor_stops: list[str] = []
+            pending_input_heads: list[tuple[str, str]] = []
+            pending_constant_values: list[tuple[str, Any, str | None]] = []
+            pending_artifact_state_resets: list[tuple[str, str]] = []
+            pending_state_deletes: list[str] = []
+            pending_state_renames: list[tuple[str, str]] = []
+            pending_notebook_interfaces: dict[str, dict[str, Any]] = {}
+            for operation in operations:
+                op_type = operation['type']
+                if op_type == 'add_notebook_node':
+                    node_id, source, interface = self._add_notebook_node(graph, operation)
+                    pending_notebook_creates.append((node_id, source))
+                    pending_notebook_interfaces[node_id] = interface
                     reparse_all = True
-                if renamed['rename_dashboard_file']:
-                    pending_dashboard_renames.append((renamed['old_node_id'], renamed['new_node_id'], renamed['title']))
-                interruption_roots.add(renamed['new_node_id'])
-            elif op_type == 'update_constant_node':
-                updated = self._update_constant_node(graph, operation)
-                if not updated['changed']:
-                    continue
-                stale_roots.update(updated['stale_roots'])
-                interruption_roots.update(updated['stale_roots'])
-                pending_artifact_state_resets.append((updated['node_id'], updated['artifact_name']))
-                pending_input_heads.append((updated['node_id'], updated['artifact_name']))
-            elif op_type == 'update_organizer_ports':
-                removed_targets = self._update_organizer_ports(graph, operation)
-                stale_roots.update(removed_targets)
-                interruption_roots.update(removed_targets)
-            elif op_type == 'update_area_style':
-                self._update_area_style(graph, operation)
-            elif op_type == 'update_node_frozen':
-                pending_editor_stops.extend(self._update_frozen(graph, operation))
-            elif op_type == 'delete_node':
-                deleted = self._delete_node(graph, str(operation['node_id']))
-                stale_roots.update(deleted['stale_roots'])
-                interruption_roots.update(deleted['stale_roots'])
-                interruption_roots.add(str(deleted['node_id']))
-                if deleted['delete_notebook_file']:
-                    pending_notebook_deletes.append(str(deleted['node_id']))
-                    pending_editor_stops.append(str(deleted['node_id']))
-                if deleted['delete_dashboard_file']:
-                    pending_dashboard_deletes.append(str(deleted['node_id']))
-                pending_dashboard_ref_deletes.append(str(deleted['node_id']))
-                pending_state_deletes.append(str(deleted['node_id']))
-                reparse_all = True
-            else:
-                raise GraphValidationError(f'Unsupported graph operation `{op_type}`.')
-        self._validate_graph(graph)
-        if interruption_roots and self.project_service.run_service is not None:
-            active_run_interruption = self.project_service.run_service.interrupt_active_run_if_nodes_affected(
-                sorted(interruption_roots),
-                graph,
-            )
-        graph = self.project_service.write_graph(graph)
-        if self.project_service.dashboard_service is not None:
-            for dashboard in pending_dashboard_creates:
-                self.project_service.dashboard_service.materialize_template_dashboard(**dashboard)
-        for node_id, source in pending_notebook_creates:
-            self.project_service.require_project().paths.notebook_path(node_id).write_text(source, encoding='utf-8')
-        for node_id in pending_editor_stops:
-            if self.project_service.run_service is not None:
-                self.project_service.run_service.session_manager.stop_by_node(node_id)
-        for node_id, artifact_name in pending_artifact_state_resets:
-            self.project_service.require_project().state_db.delete_artifact_state(node_id, artifact_name)
-        for node_id, artifact_name in pending_input_heads:
-            self.project_service.require_project().state_db.ensure_artifact_head(
-                node_id,
-                artifact_name,
-                ArtifactState.PENDING,
-            )
-        for node_id, value, value_json in pending_constant_values:
-            from bulletjournal.services.artifact_service import ArtifactService  # local import to avoid cycle
-
-            ArtifactService(self.project_service).set_constant_value(
-                node_id,
-                value,
-                value_json=value_json,
-                propagate_downstream_stale=False,
-                interrupt_active_run=False,
-            )
-        for node_id in pending_notebook_deletes:
-            path = self.project_service.require_project().paths.notebook_path(node_id)
-            if path.exists():
-                path.unlink()
-            self._delete_notebook_output_cache(node_id)
-        for old_node_id, new_node_id, rewritten_source in pending_notebook_renames:
-            old_path = self.project_service.require_project().paths.notebook_path(old_node_id)
-            new_path = self.project_service.require_project().paths.notebook_path(new_node_id)
-            if new_path.exists():
-                raise GraphValidationError(f'Notebook file `{new_path.name}` already exists.')
-            if old_path.exists():
-                if rewritten_source is None:
-                    old_path.rename(new_path)
+                    interruption_roots.add(node_id)
+                elif op_type == 'add_constant_node':
+                    node_id, artifact_name = self._add_constant_node(graph, operation)
+                    pending_input_heads.append((node_id, artifact_name))
+                    if operation.get('value') is not None or operation.get('value_json') is not None:
+                        pending_constant_values.append(
+                            (node_id, operation.get('value'), _constant_value_json(operation))
+                        )
+                    interruption_roots.add(node_id)
+                elif op_type == 'add_file_input_node':
+                    node_id = self._add_file_input_node(graph, operation)
+                    pending_input_heads.append(
+                        (node_id, file_input_artifact_name(next(node for node in graph.nodes if node.id == node_id)))
+                    )
+                    interruption_roots.add(node_id)
+                elif op_type == 'add_organizer_node':
+                    self._add_organizer_node(graph, operation)
+                elif op_type == 'add_area_node':
+                    self._add_area_node(graph, operation)
+                elif op_type == 'add_dashboard_node':
+                    node_id = self._add_dashboard_node(graph, operation)
+                    pending_dashboard_creates.append(
+                        {
+                            'dashboard_id': node_id,
+                            'title': str(operation.get('title') or 'Dashboard'),
+                            'sources': [],
+                            'panels': [],
+                        }
+                    )
+                elif op_type == 'add_pipeline_template':
+                    created = self._add_pipeline_template(graph, operation)
+                    pending_notebook_creates.extend(created['notebook_creates'])
+                    pending_dashboard_creates.extend(created['dashboard_creates'])
+                    pending_input_heads.extend(created['input_heads'])
+                    pending_constant_values.extend(created['constant_values'])
+                    reparse_all = True
+                    interruption_roots.update(node_id for node_id, _ in created['notebook_creates'])
+                    interruption_roots.update(node_id for node_id, _ in created['input_heads'])
+                elif op_type == 'add_edge':
+                    self._add_edge(graph, operation, pending_interfaces_by_node=pending_notebook_interfaces)
+                    stale_roots.add(str(operation['target_node']))
+                    interruption_roots.add(str(operation['target_node']))
+                elif op_type == 'remove_edge':
+                    edge = self._remove_edge(graph, str(operation['edge_id']))
+                    if edge is not None:
+                        stale_roots.add(edge.target_node)
+                        interruption_roots.add(edge.target_node)
+                elif op_type == 'update_node_layout':
+                    self._update_layout(graph, operation)
+                elif op_type == 'update_node_title':
+                    self._update_title(graph, operation)
+                elif op_type == 'rename_node':
+                    renamed = self._rename_node(graph, operation)
+                    pending_state_renames.append((renamed['old_node_id'], renamed['new_node_id']))
+                    pending_dashboard_ref_renames.append((renamed['old_node_id'], renamed['new_node_id']))
+                    if renamed['interface'] is not None:
+                        pending_notebook_interfaces.pop(renamed['old_node_id'], None)
+                        pending_notebook_interfaces[renamed['new_node_id']] = renamed['interface']
+                    if renamed['rename_notebook_file']:
+                        pending_notebook_renames.append(
+                            (
+                                renamed['old_node_id'],
+                                renamed['new_node_id'],
+                                self._renamed_notebook_source(
+                                    old_node_id=renamed['old_node_id'],
+                                    new_node_id=renamed['new_node_id'],
+                                ),
+                            )
+                        )
+                        pending_editor_stops.append(renamed['old_node_id'])
+                        reparse_all = True
+                    if renamed['rename_dashboard_file']:
+                        pending_dashboard_renames.append(
+                            (renamed['old_node_id'], renamed['new_node_id'], renamed['title'])
+                        )
+                    interruption_roots.add(renamed['new_node_id'])
+                elif op_type == 'update_constant_node':
+                    updated = self._update_constant_node(graph, operation)
+                    if not updated['changed']:
+                        continue
+                    stale_roots.update(updated['stale_roots'])
+                    interruption_roots.update(updated['stale_roots'])
+                    pending_artifact_state_resets.append((updated['node_id'], updated['artifact_name']))
+                    pending_input_heads.append((updated['node_id'], updated['artifact_name']))
+                elif op_type == 'update_organizer_ports':
+                    removed_targets = self._update_organizer_ports(graph, operation)
+                    stale_roots.update(removed_targets)
+                    interruption_roots.update(removed_targets)
+                elif op_type == 'update_area_style':
+                    self._update_area_style(graph, operation)
+                elif op_type == 'update_node_frozen':
+                    pending_editor_stops.extend(self._update_frozen(graph, operation))
+                elif op_type == 'delete_node':
+                    deleted = self._delete_node(graph, str(operation['node_id']))
+                    stale_roots.update(deleted['stale_roots'])
+                    interruption_roots.update(deleted['stale_roots'])
+                    interruption_roots.add(str(deleted['node_id']))
+                    if deleted['delete_notebook_file']:
+                        pending_notebook_deletes.append(str(deleted['node_id']))
+                        pending_editor_stops.append(str(deleted['node_id']))
+                    if deleted['delete_dashboard_file']:
+                        pending_dashboard_deletes.append(str(deleted['node_id']))
+                    pending_dashboard_ref_deletes.append(str(deleted['node_id']))
+                    pending_state_deletes.append(str(deleted['node_id']))
+                    reparse_all = True
                 else:
-                    new_path.write_text(rewritten_source, encoding='utf-8')
-                    old_path.unlink()
-            self._delete_notebook_output_cache(old_node_id)
-            self._delete_notebook_output_cache(new_node_id)
-        if self.project_service.dashboard_service is not None:
-            for old_node_id, new_node_id, title in pending_dashboard_renames:
-                self.project_service.dashboard_service.rename_dashboard(old_node_id, new_node_id, title=title)
-        for old_node_id, new_node_id in pending_state_renames:
-            self.project_service.require_project().state_db.rename_node_state(old_node_id, new_node_id)
-        for node_id in pending_state_deletes:
-            self.project_service.require_project().state_db.delete_node_state(node_id)
-            self._delete_execution_logs(node_id)
-        if self.project_service.dashboard_service is not None:
-            for old_node_id, new_node_id in pending_dashboard_ref_renames:
-                self.project_service.dashboard_service.rename_node_references(old_node_id, new_node_id)
-            for node_id in pending_dashboard_ref_deletes:
-                self.project_service.dashboard_service.remove_node_references(node_id)
-            for dashboard_id in pending_dashboard_deletes:
-                self.project_service.dashboard_service.delete_dashboard_file(dashboard_id)
-        if reparse_all:
-            self.project_service.reparse_all_notebooks()
-        if stale_roots:
-            self.mark_nodes_and_downstream_stale(sorted(stale_roots))
-            self.restore_nodes_and_downstream_ready_if_lineage_matches(sorted(stale_roots))
+                    raise GraphValidationError(f'Unsupported graph operation `{op_type}`.')
+            self._validate_graph(graph)
+            if interruption_roots and self.project_service.run_service is not None:
+                active_run_interruption = self.project_service.run_service.interrupt_active_run_if_nodes_affected(
+                    sorted(interruption_roots),
+                    graph,
+                )
+            graph = self.project_service.write_graph(graph)
+            if self.project_service.dashboard_service is not None:
+                for dashboard in pending_dashboard_creates:
+                    self.project_service.dashboard_service.materialize_template_dashboard(**dashboard)
+            for node_id, source in pending_notebook_creates:
+                self.project_service.require_project().paths.notebook_path(node_id).write_text(source, encoding='utf-8')
+            for node_id in pending_editor_stops:
+                if self.project_service.run_service is not None:
+                    self.project_service.run_service.session_manager.stop_by_node(node_id)
+            for node_id, artifact_name in pending_artifact_state_resets:
+                self.project_service.require_project().state_db.delete_artifact_state(node_id, artifact_name)
+            for node_id, artifact_name in pending_input_heads:
+                self.project_service.require_project().state_db.ensure_artifact_head(
+                    node_id,
+                    artifact_name,
+                    ArtifactState.PENDING,
+                )
+            for node_id, value, value_json in pending_constant_values:
+                from bulletjournal.services.artifact_service import ArtifactService  # local import to avoid cycle
+
+                ArtifactService(self.project_service).set_constant_value(
+                    node_id,
+                    value,
+                    value_json=value_json,
+                    propagate_downstream_stale=False,
+                    interrupt_active_run=False,
+                )
+            for node_id in pending_notebook_deletes:
+                path = self.project_service.require_project().paths.notebook_path(node_id)
+                if path.exists():
+                    path.unlink()
+                self._delete_notebook_output_cache(node_id)
+            for old_node_id, new_node_id, rewritten_source in pending_notebook_renames:
+                old_path = self.project_service.require_project().paths.notebook_path(old_node_id)
+                new_path = self.project_service.require_project().paths.notebook_path(new_node_id)
+                if new_path.exists():
+                    raise GraphValidationError(f'Notebook file `{new_path.name}` already exists.')
+                if old_path.exists():
+                    if rewritten_source is None:
+                        old_path.rename(new_path)
+                    else:
+                        new_path.write_text(rewritten_source, encoding='utf-8')
+                        old_path.unlink()
+                self._delete_notebook_output_cache(old_node_id)
+                self._delete_notebook_output_cache(new_node_id)
+            if self.project_service.dashboard_service is not None:
+                for old_node_id, new_node_id, title in pending_dashboard_renames:
+                    self.project_service.dashboard_service.rename_dashboard(old_node_id, new_node_id, title=title)
+            for old_node_id, new_node_id in pending_state_renames:
+                self.project_service.require_project().state_db.rename_node_state(old_node_id, new_node_id)
+            for node_id in pending_state_deletes:
+                self.project_service.require_project().state_db.delete_node_state(node_id)
+                self._delete_execution_logs(node_id)
+            if self.project_service.dashboard_service is not None:
+                for old_node_id, new_node_id in pending_dashboard_ref_renames:
+                    self.project_service.dashboard_service.rename_node_references(old_node_id, new_node_id)
+                for node_id in pending_dashboard_ref_deletes:
+                    self.project_service.dashboard_service.remove_node_references(node_id)
+                for dashboard_id in pending_dashboard_deletes:
+                    self.project_service.dashboard_service.delete_dashboard_file(dashboard_id)
+            if reparse_all:
+                self.project_service.reparse_all_notebooks()
+            if stale_roots:
+                self.mark_nodes_and_downstream_stale(sorted(stale_roots))
+                self.restore_nodes_and_downstream_ready_if_lineage_matches(sorted(stale_roots))
+        self.project_service.create_automatic_checkpoint_if_due()
         snapshot = self.project_service.snapshot()
         return {
             **snapshot,

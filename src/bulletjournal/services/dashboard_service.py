@@ -79,6 +79,7 @@ class DashboardService:
             )
             self._write_dashboard_document(document)
             self.project_service.write_graph(graph)
+            self.project_service.create_automatic_checkpoint_if_due()
             self._publish_dashboard_updated(document)
             return document.to_dict()
 
@@ -153,6 +154,7 @@ class DashboardService:
                 graph_node.title = updated.title
                 graph_node.ui = self._dashboard_ui(updated)
                 self.project_service.write_graph(graph)
+                self.project_service.create_automatic_checkpoint_if_due()
             self._publish_dashboard_updated(updated)
             return updated.to_dict()
 
@@ -166,6 +168,7 @@ class DashboardService:
             graph.nodes = [item for item in graph.nodes if item.id != dashboard_id]
             graph.layout = [item for item in graph.layout if item.node_id != dashboard_id]
             self.project_service.write_graph(graph)
+            self.project_service.create_automatic_checkpoint_if_due()
             self.delete_dashboard_file(dashboard_id)
             self.project_service.event_service.publish(
                 'dashboard.deleted',
@@ -543,6 +546,7 @@ class DashboardService:
         graph_node.title = document.title
         graph_node.ui = self._dashboard_ui(document)
         self.project_service.write_graph(graph)
+        self.project_service.create_automatic_checkpoint_if_due()
 
     def _publish_dashboard_updated(self, document: DashboardDocument) -> None:
         self.project_service.event_service.publish(

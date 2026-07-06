@@ -49,6 +49,12 @@ class NotebookService:
             changed = previous_interface is not None and previous_interface.get('source_hash') != contract.source_hash
             first_parse = previous_interface is None
             if changed or first_parse:
+                if (
+                    changed
+                    and self.project_service.checkpoint_service is not None
+                    and not self.project_service.automatic_checkpoints_suspended
+                ):
+                    self.project_service.checkpoint_service.create_automatic_checkpoint_if_due()
                 self.project_service.record_notebook_activity()
             self._sync_execution_freshness_head(
                 node_id, contract.interface.to_dict(), changed=changed, first_parse=first_parse

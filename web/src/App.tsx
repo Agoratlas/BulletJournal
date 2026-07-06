@@ -2424,8 +2424,10 @@ function App() {
       return
     }
     const refreshPromise = queryClient
-      .refetchQueries({ queryKey: ['snapshot'], exact: true })
-      .then(() => {
+      .fetchQuery({ queryKey: ['snapshot'], queryFn: getSnapshot })
+      .then((fetchedSnapshot) => {
+        queryClient.setQueryData(['snapshot'], fetchedSnapshot)
+        queryClient.setQueryData(['project-current'], fetchedSnapshot)
         lastSnapshotRefreshAtRef.current = Date.now()
       })
       .finally(() => {
@@ -3851,6 +3853,10 @@ function App() {
       return
     }
     await restoreCheckpoint(checkpointId)
+    graphMutationQueueRef.current = []
+    graphMutationInFlightRef.current = []
+    graphMutationFlushScheduledRef.current = false
+    graphMutationProcessorRef.current = null
     setOptimisticGraphState(null)
     applySelection([], [], { openInspector: false })
     setArtifactNodeId(null)

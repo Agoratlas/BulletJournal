@@ -1,8 +1,11 @@
 import time
+from datetime import UTC, datetime, timedelta
 
+import pytest
 from fastapi.testclient import TestClient
 
 from bulletjournal.api.app import create_app
+from bulletjournal.domain.models import CheckpointRecord
 from bulletjournal.storage.project_fs import init_project_root
 
 
@@ -226,3 +229,87 @@ def test_checkpoint_restore_marks_restored_outputs_stale(tmp_path) -> None:
     assert restored_artifact.status_code == 200
     assert restored_artifact.json()['state'] == 'stale'
     assert restored_artifact.json()['preview']['rows'] == 10
+
+
+def test_manual_checkpoint_endpoint_still_creates_checkpoint_even_when_auto_checkpoint_not_due(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project_root = init_project_root(tmp_path / 'project').root
+    app = create_app(project_path=project_root)
+    client = TestClient(app)
+
+    recent_created_at = (
+        (datetime.now(tz=UTC) - timedelta(minutes=9)).replace(microsecond=0).isoformat().replace('+00:00', 'Z')
+    )
+    monkeypatch.setattr(
+        app.state.container.project_service.require_project().state_db,
+        'list_checkpoints',
+        lambda: [
+            CheckpointRecord(
+                checkpoint_id='recent', created_at=recent_created_at, graph_version=1, path='x', restored_at=None
+            )
+        ],
+    )
+
+    created: list[str] = []
+    original_create_checkpoint = app.state.container.checkpoint_service.create_checkpoint
+
+    def wrapped_create_checkpoint() -> dict[str, object]:
+        created.append('created')
+        return original_create_checkpoint()
+
+    monkeypatch.setattr(app.state.container.checkpoint_service, 'create_checkpoint', wrapped_create_checkpoint)
+
+    response = client.post('/api/v1/checkpoints')
+
+    assert response.status_code == 200
+    assert created == ['created']
+
+
+def test_automatic_checkpoint_for_pipeline_template_includes_materialized_notebooks(tmp_path) -> None:
+    project_root = init_project_root(tmp_path / 'project').root
+    app = create_app(project_path=project_root)
+    client = TestClient(app)
+
+    opened = client.get('/api/v1/project/snapshot').json()
+    graph_version = opened['graph']['meta']['graph_version']
+
+    created = client.patch(
+        '/api/v1/graph',
+        json={
+            'graph_version': graph_version,
+            'operations': [
+                {
+                    'type': 'add_pipeline_template',
+                    'template_ref': 'builtin/example_movie_pipeline',
+                    'x': 200,
+                    'y': 240,
+                }
+            ],
+        },
+    )
+
+    assert created.status_code == 200
+    snapshot = client.get('/api/v1/project/snapshot').json()
+    assert len(snapshot['checkpoints']) == 1
+    checkpoint_id = snapshot['checkpoints'][0]['checkpoint_id']
+
+    restored = client.post(f'/api/v1/checkpoints/{checkpoint_id}/restore')
+    assert restored.status_code == 200
+
+    reopened = create_app(project_path=project_root)
+    reopened_client = TestClient(reopened)
+    reopened_snapshot = reopened_client.get('/api/v1/project/snapshot').json()
+
+    notebook_ids = {
+        'advanced_rating_analysis',
+        'duration_and_date_analysis',
+        'movie_dataset_download',
+        'movie_genre_analysis',
+        'movie_recommendation',
+    }
+    restored_node_ids = {node['id'] for node in reopened_snapshot['graph']['nodes']}
+    assert notebook_ids <= restored_node_ids
+    for node_id in notebook_ids:
+        assert (project_root / 'notebooks' / f'{node_id}.py').is_file()
