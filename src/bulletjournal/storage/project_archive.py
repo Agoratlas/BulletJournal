@@ -5,6 +5,7 @@ import shutil
 import sqlite3
 import tempfile
 import zipfile
+from contextlib import suppress
 from enum import StrEnum
 from pathlib import Path, PurePosixPath
 
@@ -201,13 +202,14 @@ def _reconcile_staged_state_db(paths: ProjectPaths, *, mode: ProjectExportMode) 
                     continue
                 connection.execute('DELETE FROM checkpoints WHERE checkpoint_id = ?', (checkpoint_id,))
         connection.commit()
+        _checkpoint_sqlite_database(connection)
 
 
 def _write_archive_from_root(root: Path, archive_path: Path) -> None:
     with zipfile.ZipFile(archive_path, 'w', compression=zipfile.ZIP_DEFLATED) as zf:
         for directory in sorted(_iter_directory_members(root)):
             zf.writestr(f'{directory}/', b'')
-        for file_path in sorted(path for path in root.rglob('*') if path.is_file()):
+        for file_path in sorted(path for path in root.rglob('*') if path.is_file() and not _should_exclude_path(path)):
             zf.write(file_path, arcname=file_path.relative_to(root).as_posix())
 
 
@@ -282,6 +284,12 @@ def _rewrite_imported_state_paths(paths: ProjectPaths) -> None:
             connection.execute('DELETE FROM checkpoints WHERE checkpoint_id = ?', (checkpoint_id,))
         connection.execute('UPDATE orchestrator_execution_meta SET stdout_path = NULL, stderr_path = NULL')
         connection.commit()
+        _checkpoint_sqlite_database(connection)
+
+
+def _checkpoint_sqlite_database(connection: sqlite3.Connection) -> None:
+    with suppress(sqlite3.OperationalError):
+        connection.execute('PRAGMA wal_checkpoint(TRUNCATE)')
 
 
 def _normalize_archive_name(name: str) -> str:
