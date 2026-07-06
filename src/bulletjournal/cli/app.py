@@ -14,6 +14,7 @@ from bulletjournal.cli.rebuild_state import rebuild_state
 from bulletjournal.cli.start import start_server
 from bulletjournal.cli.validate_templates import validate_templates
 from bulletjournal.storage import is_project_root, require_project_root
+from bulletjournal.storage.project_archive import ProjectExportMode
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -58,7 +59,11 @@ def build_parser() -> argparse.ArgumentParser:
     export_parser = subparsers.add_parser('export', help='Export a BulletJournal project as a zip archive')
     export_parser.add_argument('path')
     export_parser.add_argument('archive')
-    export_parser.add_argument('--without-artifacts', action='store_true')
+    export_parser.add_argument(
+        '--mode',
+        choices=[mode.value for mode in ProjectExportMode],
+        default=ProjectExportMode.FULL.value,
+    )
 
     import_parser = subparsers.add_parser('import', help='Import a BulletJournal project from a zip archive')
     import_parser.add_argument('archive')
@@ -107,7 +112,7 @@ def app() -> None:
     if args.command == 'export':
         print(
             json.dumps(
-                export_project(args.path, args.archive, include_artifacts=not args.without_artifacts),
+                export_project(args.path, args.archive, mode=ProjectExportMode(args.mode)),
                 indent=2,
                 sort_keys=True,
             )

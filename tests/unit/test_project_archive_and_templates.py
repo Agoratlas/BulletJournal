@@ -8,12 +8,13 @@ from types import SimpleNamespace
 
 import pytest
 
-import bulletjournal.storage.project_archive as project_archive_module
 from bulletjournal.api.app import create_app
+from bulletjournal.domain.enums import ArtifactRole, ArtifactState, LineageMode
 from bulletjournal.domain.errors import ProjectValidationError
 from bulletjournal.services.template_service import TemplateService
-from bulletjournal.storage.project_archive import export_project_archive, import_project_archive
-from bulletjournal.storage.project_fs import init_project_root
+from bulletjournal.storage.project_archive import ProjectExportMode, export_project_archive, import_project_archive
+from bulletjournal.storage.project_fs import ProjectPaths, init_project_root
+from bulletjournal.storage.state_db import StateDB
 from bulletjournal.templates.builtin_provider import FilesystemTemplateProvider, example_provider
 
 
@@ -21,11 +22,12 @@ def test_project_archive_round_trip_preserves_project_id(tmp_path: Path) -> None
     project_root = init_project_root(tmp_path / 'project', project_id='study-a').root
     archive_path = tmp_path / 'study-a.zip'
 
-    exported = export_project_archive(project_root, archive_path, include_artifacts=False)
+    exported = export_project_archive(project_root, archive_path, mode=ProjectExportMode.CODE_ONLY)
     imported = import_project_archive(archive_path, tmp_path / 'imported')
 
     assert exported['project_id'] == 'study-a'
     assert imported['project_id'] == 'study-a'
+    assert exported['mode'] == ProjectExportMode.CODE_ONLY.value
     assert (tmp_path / 'imported' / 'pyproject.toml').is_file()
     assert (tmp_path / 'imported' / 'uv.lock').is_file()
 
@@ -50,7 +52,7 @@ def test_project_archive_round_trip_preserves_dashboards(tmp_path: Path) -> None
     )
     archive_path = tmp_path / 'study-a.zip'
 
-    export_project_archive(project_root, archive_path, include_artifacts=False)
+    export_project_archive(project_root, archive_path, mode=ProjectExportMode.CODE_ONLY)
     import_project_archive(archive_path, tmp_path / 'imported')
 
     imported_dashboard = tmp_path / 'imported' / 'dashboards' / 'study_a.json'
@@ -58,85 +60,232 @@ def test_project_archive_round_trip_preserves_dashboards(tmp_path: Path) -> None
     assert json.loads(imported_dashboard.read_text(encoding='utf-8'))['title'] == 'Study Dashboard'
 
 
-def test_project_archive_export_ignores_missing_sqlite_sidecars(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    project_root = init_project_root(tmp_path / 'project', project_id='study-a').root
-    archive_path = tmp_path / 'study-a.zip'
-    original_write = zipfile.ZipFile.write
-
-    monkeypatch.setattr(
-        project_archive_module,
-        '_iter_project_files',
-        lambda paths, *, include_artifacts: [Path('metadata/state.db'), Path('metadata/state.db-shm')],
-    )
-
-    def flaky_write(self, filename, arcname=None, compress_type=None, compresslevel=None):
-        if Path(filename).name == 'state.db-shm':
-            raise FileNotFoundError(filename)
-        return original_write(
-            self,
-            filename,
-            arcname=arcname,
-            compress_type=compress_type,
-            compresslevel=compresslevel,
-        )
-
-    monkeypatch.setattr(zipfile.ZipFile, 'write', flaky_write)
-
-    exported = export_project_archive(project_root, archive_path, include_artifacts=False)
-
-    assert exported['project_id'] == 'study-a'
-    with zipfile.ZipFile(archive_path) as zf:
-        assert 'project/metadata/state.db' in zf.namelist()
-        assert 'project/metadata/state.db-shm' not in zf.namelist()
-
-
-def test_project_archive_export_reraises_missing_non_sidecar(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    project_root = init_project_root(tmp_path / 'project', project_id='study-a').root
-    archive_path = tmp_path / 'study-a.zip'
-    original_write = zipfile.ZipFile.write
-
-    monkeypatch.setattr(
-        project_archive_module,
-        '_iter_project_files',
-        lambda paths, *, include_artifacts: [Path('metadata/state.db'), Path('metadata/project.json')],
-    )
-
-    def flaky_write(self, filename, arcname=None, compress_type=None, compresslevel=None):
-        if Path(filename).name == 'project.json':
-            raise FileNotFoundError(filename)
-        return original_write(
-            self,
-            filename,
-            arcname=arcname,
-            compress_type=compress_type,
-            compresslevel=compresslevel,
-        )
-
-    monkeypatch.setattr(zipfile.ZipFile, 'write', flaky_write)
-
-    with pytest.raises(FileNotFoundError):
-        export_project_archive(project_root, archive_path, include_artifacts=False)
-
-
 def test_project_archive_import_rejects_schema_version_1(tmp_path: Path) -> None:
     project_root = init_project_root(tmp_path / 'project', project_id='study-a').root
     archive_path = tmp_path / 'study-a.zip'
     invalid_archive_path = tmp_path / 'study-a-invalid.zip'
 
-    export_project_archive(project_root, archive_path, include_artifacts=False)
+    export_project_archive(project_root, archive_path, mode=ProjectExportMode.CODE_ONLY)
 
     with zipfile.ZipFile(archive_path) as source_zip, zipfile.ZipFile(invalid_archive_path, 'w') as target_zip:
         for info in source_zip.infolist():
             payload = source_zip.read(info.filename)
-            if info.filename == 'project/metadata/project.json':
+            if info.filename == 'metadata/project.json':
                 project_json = json.loads(payload.decode('utf-8'))
                 project_json['schema_version'] = 1
                 payload = json.dumps(project_json).encode('utf-8')
             target_zip.writestr(info, payload)
 
     with pytest.raises(ProjectValidationError, match='Schema version 1 projects are no longer supported'):
+        import_project_archive(invalid_archive_path, tmp_path / 'imported-invalid')
+
+
+def test_project_archive_export_uses_root_level_layout_without_manifest(tmp_path: Path) -> None:
+    project_root = init_project_root(tmp_path / 'project', project_id='study-a').root
+    archive_path = tmp_path / 'study-a.zip'
+
+    export_project_archive(project_root, archive_path, mode=ProjectExportMode.CODE_ONLY)
+
+    with zipfile.ZipFile(archive_path) as zf:
+        names = set(zf.namelist())
+
+    assert 'graph/meta.json' in names
+    assert 'metadata/project.json' in names
+    assert 'metadata/state.db' in names
+    assert 'project/graph/meta.json' not in names
+    assert 'export_manifest.json' not in names
+    assert 'objects/' in names
+    assert 'checkpoints/' in names
+
+
+def test_project_archive_export_modes_include_expected_payloads(tmp_path: Path) -> None:
+    project_root = init_project_root(tmp_path / 'project', project_id='study-a').root
+    paths = ProjectPaths(project_root)
+    object_file = paths.object_store_dir / 'ab' / 'cdef'
+    object_file.parent.mkdir(parents=True, exist_ok=True)
+    object_file.write_text('artifact', encoding='utf-8')
+    checkpoint_dir = paths.checkpoints_dir / 'cp-1'
+    checkpoint_dir.mkdir(parents=True)
+    (checkpoint_dir / 'graph').mkdir()
+    (checkpoint_dir / 'notebooks').mkdir()
+
+    archives = {mode: tmp_path / f'{mode.value}.zip' for mode in ProjectExportMode}
+    for mode, archive_path in archives.items():
+        export_project_archive(project_root, archive_path, mode=mode)
+
+    with zipfile.ZipFile(archives[ProjectExportMode.CODE_ONLY]) as zf:
+        names = set(zf.namelist())
+        assert 'objects/ab/cdef' not in names
+        assert 'checkpoints/cp-1/graph/' not in names
+    with zipfile.ZipFile(archives[ProjectExportMode.CODE_AND_DATA]) as zf:
+        names = set(zf.namelist())
+        assert 'objects/ab/cdef' in names
+        assert 'checkpoints/cp-1/graph/' not in names
+    with zipfile.ZipFile(archives[ProjectExportMode.FULL]) as zf:
+        names = set(zf.namelist())
+        assert 'objects/ab/cdef' in names
+        assert 'checkpoints/cp-1/graph/' in names
+
+
+def test_project_archive_code_only_reconciles_state_db(tmp_path: Path) -> None:
+    project_root = init_project_root(tmp_path / 'project', project_id='study-a').root
+    paths = ProjectPaths(project_root)
+    db = StateDB(paths.state_db_path)
+    paths.execution_logs_dir.mkdir(parents=True, exist_ok=True)
+    (paths.execution_logs_dir / 'run-1_node-a.stdout.log').write_text('stdout', encoding='utf-8')
+    (paths.execution_logs_dir / 'run-1_node-a.stderr.log').write_text('stderr', encoding='utf-8')
+
+    db.upsert_artifact_object(
+        'hash-1', 'json', 'int', 2, None, None, {'kind': 'simple', 'repr': '1', 'truncated': False}
+    )
+    db.create_artifact_version(
+        node_id='node-a',
+        artifact_name='output',
+        role=ArtifactRole.OUTPUT,
+        artifact_hash='hash-1',
+        source_hash='source-a',
+        upstream_code_hash='code-a',
+        upstream_data_hash='data-a',
+        run_id='run-1',
+        lineage_mode=LineageMode.MANAGED,
+        warnings=[],
+    )
+    db.replace_asset_declarations(
+        'node-a',
+        'source-a',
+        [],
+    )
+    asset_version_id = db.create_asset_version(
+        node_id='node-a',
+        asset_name='asset',
+        asset_type='markdown',
+        interactive=False,
+        source_hash='source-a',
+        upstream_code_hash='code-a',
+        upstream_data_hash='data-a',
+        run_id='run-1',
+        lineage_mode=LineageMode.MANAGED,
+        definition={'kind': 'markdown', 'content': 'hello'},
+        modifier_schema=[],
+        default_modifiers={},
+        override_schema_hash='schema-hash',
+        warnings=[],
+        objects=[{'object_role': 'primary', 'artifact_hash': 'hash-1'}],
+        state=ArtifactState.READY,
+    )
+    assert asset_version_id > 0
+    db.record_run('run-1', 'study-a', 'run_stale', {'node_id': 'node-a'}, 1, {'started_at': '2026-01-01T00:00:00Z'})
+    db.record_run_input('run-1', 'node-a/output', 'hash-1', ArtifactState.READY.value)
+    db.upsert_notebook_execution_head(
+        node_id='node-a',
+        state=ArtifactState.READY,
+        source_hash='source-a',
+        upstream_code_hash='code-a',
+        upstream_data_hash='data-a',
+        run_id='run-1',
+        last_run_started_at='2026-01-01T00:00:00Z',
+        last_run_finished_at='2026-01-01T00:00:05Z',
+    )
+    db.upsert_orchestrator_execution_meta(
+        node_id='node-a',
+        run_id='run-1',
+        status='running',
+        started_at='2026-01-01T00:00:00Z',
+        stdout_path=str(paths.execution_logs_dir / 'run-1_node-a.stdout.log'),
+        stderr_path=str(paths.execution_logs_dir / 'run-1_node-a.stderr.log'),
+    )
+    db.create_checkpoint('cp-1', 1, str(paths.checkpoints_dir / 'cp-1'))
+    archive_path = tmp_path / 'code-only.zip'
+
+    export_project_archive(project_root, archive_path, mode=ProjectExportMode.CODE_ONLY)
+    import_root = tmp_path / 'imported'
+    import_project_archive(archive_path, import_root)
+    imported_db = StateDB(import_root / 'metadata' / 'state.db')
+    artifact_head = imported_db.get_artifact_head('node-a', 'output')
+    asset_head = imported_db.get_asset_head('node-a', 'asset')
+    execution_head = imported_db.get_notebook_execution_head('node-a')
+
+    assert artifact_head is not None
+    assert artifact_head['current_version_id'] is None
+    assert artifact_head['state'] == ArtifactState.PENDING.value
+    assert asset_head is not None
+    assert asset_head['current_asset_version_id'] is None
+    assert asset_head['state'] == ArtifactState.PENDING.value
+    assert execution_head is not None
+    assert execution_head['state'] == ArtifactState.PENDING.value
+    assert imported_db.list_run_records() == []
+    assert imported_db.list_checkpoints() == []
+    assert imported_db.list_orchestrator_execution_meta() == {}
+    assert (import_root / 'objects').exists()
+    assert not any((import_root / 'objects').rglob('*'))
+
+
+def test_project_archive_code_and_data_removes_checkpoint_rows(tmp_path: Path) -> None:
+    project_root = init_project_root(tmp_path / 'project', project_id='study-a').root
+    paths = ProjectPaths(project_root)
+    db = StateDB(paths.state_db_path)
+    checkpoint_dir = paths.checkpoints_dir / 'cp-1'
+    checkpoint_dir.mkdir(parents=True)
+    db.create_checkpoint('cp-1', 1, str(checkpoint_dir))
+    archive_path = tmp_path / 'code-and-data.zip'
+
+    export_project_archive(project_root, archive_path, mode=ProjectExportMode.CODE_AND_DATA)
+    import_root = tmp_path / 'imported'
+    import_project_archive(archive_path, import_root)
+    imported_db = StateDB(import_root / 'metadata' / 'state.db')
+
+    assert imported_db.list_checkpoints() == []
+
+
+def test_project_archive_import_rejects_nested_project_root(tmp_path: Path) -> None:
+    archive_path = tmp_path / 'nested.zip'
+    with zipfile.ZipFile(archive_path, 'w') as zf:
+        zf.writestr('project/metadata/project.json', '{}')
+        zf.writestr('project/metadata/state.db', b'')
+        zf.writestr('project/graph/meta.json', '{}')
+        zf.writestr('project/graph/nodes.json', '[]')
+        zf.writestr('project/graph/edges.json', '[]')
+        zf.writestr('project/graph/layout.json', '[]')
+        zf.writestr('project/pyproject.toml', '[project]\nname = "demo"\n')
+        zf.writestr('project/uv.lock', 'version = 1\n')
+
+    with pytest.raises(ProjectValidationError, match='rooted at zip root'):
+        import_project_archive(archive_path, tmp_path / 'imported')
+
+
+def test_project_archive_import_rejects_manifest_file(tmp_path: Path) -> None:
+    project_root = init_project_root(tmp_path / 'project', project_id='study-a').root
+    archive_path = tmp_path / 'study-a.zip'
+    invalid_archive_path = tmp_path / 'study-a-invalid.zip'
+
+    export_project_archive(project_root, archive_path, mode=ProjectExportMode.CODE_ONLY)
+
+    with zipfile.ZipFile(archive_path) as source_zip, zipfile.ZipFile(invalid_archive_path, 'w') as target_zip:
+        for info in source_zip.infolist():
+            target_zip.writestr(info, source_zip.read(info.filename))
+        target_zip.writestr('export_manifest.json', '{}')
+
+    with pytest.raises(ProjectValidationError, match='must not contain `export_manifest.json`'):
+        import_project_archive(invalid_archive_path, tmp_path / 'imported-invalid')
+
+
+def test_project_archive_import_rejects_invalid_graph_metadata(tmp_path: Path) -> None:
+    project_root = init_project_root(tmp_path / 'project', project_id='study-a').root
+    archive_path = tmp_path / 'study-a.zip'
+    invalid_archive_path = tmp_path / 'study-a-invalid.zip'
+
+    export_project_archive(project_root, archive_path, mode=ProjectExportMode.CODE_ONLY)
+
+    with zipfile.ZipFile(archive_path) as source_zip, zipfile.ZipFile(invalid_archive_path, 'w') as target_zip:
+        for info in source_zip.infolist():
+            payload = source_zip.read(info.filename)
+            if info.filename == 'graph/meta.json':
+                graph_meta = json.loads(payload.decode('utf-8'))
+                graph_meta['project_id'] = 'other-project'
+                payload = json.dumps(graph_meta).encode('utf-8')
+            target_zip.writestr(info, payload)
+
+    with pytest.raises(ProjectValidationError, match='Archive graph metadata has project_id'):
         import_project_archive(invalid_archive_path, tmp_path / 'imported-invalid')
 
 

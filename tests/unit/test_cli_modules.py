@@ -20,6 +20,7 @@ import bulletjournal.cli.rebuild_state as rebuild_state_module
 import bulletjournal.cli.start as start_module
 import bulletjournal.cli.validate_templates as validate_templates_module
 from bulletjournal.config import ServerConfig
+from bulletjournal.storage.project_archive import ProjectExportMode
 
 cli_app = importlib.import_module('bulletjournal.cli.app')
 
@@ -46,7 +47,7 @@ def test_build_parser_parses_supported_commands() -> None:
     doctor_args = parser.parse_args(['doctor', 'demo'])
     validate_args = parser.parse_args(['validate-templates'])
     rebuild_args = parser.parse_args(['rebuild-state', 'demo'])
-    export_args = parser.parse_args(['export', 'demo', 'demo.zip', '--without-artifacts'])
+    export_args = parser.parse_args(['export', 'demo', 'demo.zip', '--mode', 'code_only'])
     import_args = parser.parse_args(['import', 'demo.zip', 'demo'])
     mark_env_args = parser.parse_args(['mark-environment-changed', 'demo', '--reason', 'deps changed'])
 
@@ -62,7 +63,7 @@ def test_build_parser_parses_supported_commands() -> None:
     assert doctor_args.path == 'demo'
     assert validate_args.path is None
     assert rebuild_args.command == 'rebuild-state'
-    assert export_args.without_artifacts is True
+    assert export_args.mode == ProjectExportMode.CODE_ONLY.value
     assert import_args.archive == 'demo.zip'
     assert mark_env_args.reason == 'deps changed'
 
@@ -160,7 +161,7 @@ def test_app_prints_json_for_health_commands(
     validate_parser = DummyParser(argparse.Namespace(command='validate-templates', path='templates'))
     rebuild_parser = DummyParser(argparse.Namespace(command='rebuild-state', path='demo'))
     export_parser = DummyParser(
-        argparse.Namespace(command='export', path='demo', archive='demo.zip', without_artifacts=True)
+        argparse.Namespace(command='export', path='demo', archive='demo.zip', mode=ProjectExportMode.CODE_ONLY.value)
     )
     import_parser = DummyParser(argparse.Namespace(command='import', archive='demo.zip', path='demo'))
     mark_env_parser = DummyParser(
@@ -173,7 +174,7 @@ def test_app_prints_json_for_health_commands(
     monkeypatch.setattr(
         cli_app,
         'export_project',
-        lambda path, archive, include_artifacts=True: {'archive': archive, 'include_artifacts': include_artifacts},
+        lambda path, archive, mode=ProjectExportMode.FULL: {'archive': archive, 'mode': mode.value},
     )
     monkeypatch.setattr(cli_app, 'import_project', lambda archive, path: {'archive': archive, 'path': path})
     monkeypatch.setattr(cli_app, 'mark_environment_changed', lambda path, reason: {'project': path, 'reason': reason})
@@ -199,7 +200,7 @@ def test_app_prints_json_for_health_commands(
         + '\n'
         + json.dumps({'project': 'demo'}, indent=2, sort_keys=True)
         + '\n'
-        + json.dumps({'archive': 'demo.zip', 'include_artifacts': False}, indent=2, sort_keys=True)
+        + json.dumps({'archive': 'demo.zip', 'mode': 'code_only'}, indent=2, sort_keys=True)
         + '\n'
         + json.dumps({'archive': 'demo.zip', 'path': 'demo'}, indent=2, sort_keys=True)
         + '\n'
@@ -457,9 +458,9 @@ def test_export_and_import_commands_delegate_to_archive_helpers(monkeypatch: pyt
     monkeypatch.setattr(
         export_project_module,
         'export_project_archive',
-        lambda path, archive_path, include_artifacts=True: {
+        lambda path, archive_path, mode=ProjectExportMode.FULL: {
             'archive': str(archive_path),
-            'include_artifacts': include_artifacts,
+            'mode': mode.value,
         },
     )
     monkeypatch.setattr(
@@ -468,10 +469,10 @@ def test_export_and_import_commands_delegate_to_archive_helpers(monkeypatch: pyt
         lambda archive_path, path: {'archive': str(archive_path), 'path': str(path)},
     )
 
-    exported = export_project_module.export_project('demo', 'demo.zip', include_artifacts=False)
+    exported = export_project_module.export_project('demo', 'demo.zip', mode=ProjectExportMode.CODE_ONLY)
     imported = import_project_module.import_project('demo.zip', 'demo')
 
-    assert exported == {'archive': 'demo.zip', 'include_artifacts': False}
+    assert exported == {'archive': 'demo.zip', 'mode': 'code_only'}
     assert imported == {'archive': 'demo.zip', 'path': 'demo'}
 
 

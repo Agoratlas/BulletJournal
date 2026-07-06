@@ -2,59 +2,73 @@ from __future__ import annotations
 
 import json
 import shutil
+import sqlite3
+import tempfile
 import zipfile
-from pathlib import Path
+from enum import StrEnum
+from pathlib import Path, PurePosixPath
 
-from bulletjournal.config import EXPORT_MANIFEST_VERSION
+from bulletjournal.config import GRAPH_SCHEMA_VERSION
+from bulletjournal.domain.enums import ArtifactState
 from bulletjournal.domain.errors import ProjectValidationError
 from bulletjournal.storage.project_fs import (
     ProjectPaths,
     load_project_json,
     require_project_root,
+    validate_project_id,
     validate_project_schema_version,
 )
-from bulletjournal.utils import json_dumps, utc_now_iso
+from bulletjournal.utils import utc_now_iso
 
 EXCLUDED_NAMES = {'.DS_Store'}
-EXCLUDED_DIR_NAMES = {'__pycache__', '.runtime', '.venv', 'venv'}
-REQUIRED_EXPORT_MEMBERS = {
-    'export_manifest.json',
-    'project/graph/meta.json',
-    'project/graph/nodes.json',
-    'project/graph/edges.json',
-    'project/graph/layout.json',
-    'project/metadata/project.json',
-    'project/metadata/state.db',
-    'project/pyproject.toml',
-    'project/uv.lock',
+EXCLUDED_DIR_NAMES = {'__marimo__', '__pycache__', '.runtime', '.venv', 'venv'}
+REQUIRED_EXPORT_FILES = {
+    'graph/meta.json',
+    'graph/nodes.json',
+    'graph/edges.json',
+    'graph/layout.json',
+    'metadata/project.json',
+    'metadata/state.db',
+    'pyproject.toml',
+    'uv.lock',
+}
+REQUIRED_EXPORT_DIRECTORIES = {
+    'graph',
+    'notebooks',
+    'objects',
+    'metadata',
+    'checkpoints',
 }
 
 
+class ProjectExportMode(StrEnum):
+    CODE_ONLY = 'code_only'
+    CODE_AND_DATA = 'code_and_data'
+    FULL = 'full'
+
+
 def export_project_archive(
-    project_root: Path, archive_path: Path, *, include_artifacts: bool = True
+    project_root: Path,
+    archive_path: Path,
+    *,
+    mode: ProjectExportMode = ProjectExportMode.FULL,
 ) -> dict[str, object]:
     paths = require_project_root(project_root)
     archive = archive_path.resolve()
     archive.parent.mkdir(parents=True, exist_ok=True)
+    resolved_mode = ProjectExportMode(mode)
     project_json = load_project_json(paths)
-    manifest = {
-        'manifest_version': EXPORT_MANIFEST_VERSION,
+    with tempfile.TemporaryDirectory(prefix='bulletjournal-export-') as temp_dir:
+        staged_root = Path(temp_dir) / 'project'
+        _stage_project_for_export(paths, staged_root, mode=resolved_mode)
+        _reconcile_staged_state_db(ProjectPaths(staged_root), mode=resolved_mode)
+        require_project_root(staged_root)
+        _write_archive_from_root(staged_root, archive)
+    return {
+        'archive_path': str(archive),
         'project_id': str(project_json['project_id']),
-        'created_at': str(project_json['created_at']),
-        'exported_at': utc_now_iso(),
-        'includes_artifacts': include_artifacts,
-        'format': 'bulletjournal-project-zip',
+        'mode': resolved_mode.value,
     }
-    with zipfile.ZipFile(archive, 'w', compression=zipfile.ZIP_DEFLATED) as zf:
-        zf.writestr('export_manifest.json', json_dumps(manifest, pretty=True) + '\n')
-        for relpath in _iter_project_files(paths, include_artifacts=include_artifacts):
-            try:
-                zf.write(paths.root / relpath, arcname=f'project/{relpath.as_posix()}')
-            except FileNotFoundError:
-                if _is_transient_sqlite_sidecar(relpath):
-                    continue
-                raise
-    return {'archive_path': str(archive), 'project_id': manifest['project_id'], 'includes_artifacts': include_artifacts}
 
 
 def import_project_archive(archive_path: Path, destination_root: Path) -> dict[str, object]:
@@ -71,65 +85,207 @@ def import_project_archive(archive_path: Path, destination_root: Path) -> dict[s
     try:
         with zipfile.ZipFile(archive) as zf:
             names = set(zf.namelist())
-            _validate_archive_manifest(zf, names)
+            _validate_archive_members(names)
             zf.extractall(temp_root)
-        extracted = temp_root / 'project'
-        _restore_required_directories(extracted)
-        extracted_paths = require_project_root(extracted)
+        _restore_required_directories(temp_root)
+        _validate_imported_project_metadata(ProjectPaths(temp_root))
+        _rewrite_imported_state_paths(ProjectPaths(temp_root))
+        extracted_paths = require_project_root(temp_root)
         project_json = load_project_json(extracted_paths)
-        os_destination_parent = destination.parent
-        os_destination_parent.mkdir(parents=True, exist_ok=True)
-        extracted.rename(destination)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        temp_root.rename(destination)
         return {'project_root': str(destination), 'project_id': str(project_json['project_id'])}
     finally:
         if temp_root.exists():
             shutil.rmtree(temp_root, ignore_errors=True)
 
 
-def _validate_archive_manifest(zf: zipfile.ZipFile, names: set[str]) -> None:
-    missing = sorted(REQUIRED_EXPORT_MEMBERS - names)
-    if missing:
-        raise ProjectValidationError(f'Archive is missing required members: {", ".join(missing)}')
-    manifest = json.loads(zf.read('export_manifest.json').decode('utf-8'))
-    if not isinstance(manifest, dict):
-        raise ProjectValidationError('Archive manifest must be a JSON object.')
-    if int(manifest.get('manifest_version', 0)) != EXPORT_MANIFEST_VERSION:
-        raise ProjectValidationError('Unsupported export manifest version.')
-    project_json = json.loads(zf.read('project/metadata/project.json').decode('utf-8'))
-    validate_project_schema_version(project_json, source='Archive project metadata')
-    if str(manifest.get('project_id') or '') != str(project_json.get('project_id') or ''):
-        raise ProjectValidationError('Archive manifest project_id does not match metadata/project.json.')
+def _stage_project_for_export(paths: ProjectPaths, staged_root: Path, *, mode: ProjectExportMode) -> None:
+    staged_paths = ProjectPaths(staged_root)
+    for directory in [
+        staged_paths.graph_dir,
+        staged_paths.notebooks_dir,
+        staged_paths.dashboards_dir,
+        staged_paths.metadata_dir,
+        staged_paths.object_store_dir,
+        staged_paths.checkpoints_dir,
+    ]:
+        directory.mkdir(parents=True, exist_ok=True)
+
+    _copy_directory(paths.graph_dir, staged_paths.graph_dir)
+    _copy_directory(paths.notebooks_dir, staged_paths.notebooks_dir)
+    _copy_directory(paths.dashboards_dir, staged_paths.dashboards_dir)
+    _copy_directory(paths.metadata_dir, staged_paths.metadata_dir)
+    _copy_sqlite_database(paths.state_db_path, staged_paths.state_db_path)
+    shutil.copy2(paths.pyproject_path, staged_paths.pyproject_path)
+    shutil.copy2(paths.uv_lock_path, staged_paths.uv_lock_path)
+
+    if mode in {ProjectExportMode.CODE_AND_DATA, ProjectExportMode.FULL}:
+        _copy_directory(paths.object_store_dir, staged_paths.object_store_dir)
+        _copy_directory(paths.uploads_dir, staged_paths.uploads_dir)
+    if mode == ProjectExportMode.FULL:
+        _copy_directory(paths.checkpoints_dir, staged_paths.checkpoints_dir)
 
 
-def _iter_project_files(paths: ProjectPaths, *, include_artifacts: bool) -> list[Path]:
-    included_roots = [
-        paths.graph_dir,
-        paths.notebooks_dir,
-        paths.dashboards_dir,
-        paths.metadata_dir,
-        paths.checkpoints_dir,
-        paths.root / 'uploads',
-    ]
-    if include_artifacts:
-        included_roots.append(paths.object_store_dir)
-    included_files = [paths.pyproject_path, paths.uv_lock_path]
-    members: list[Path] = [file_path.relative_to(paths.root) for file_path in included_files]
-    for root in included_roots:
-        if not root.exists():
+def _copy_directory(source: Path, destination: Path) -> None:
+    destination.mkdir(parents=True, exist_ok=True)
+    if not source.exists():
+        return
+    for child in sorted(source.iterdir()):
+        if _should_exclude_path(child):
             continue
-        for child in sorted(root.rglob('*')):
-            if child.is_dir():
-                if child.name in EXCLUDED_DIR_NAMES:
+        target = destination / child.name
+        if child.is_dir():
+            _copy_directory(child, target)
+            continue
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(child, target)
+
+
+def _copy_sqlite_database(source: Path, destination: Path) -> None:
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    with sqlite3.connect(source) as source_connection, sqlite3.connect(destination) as destination_connection:
+        source_connection.backup(destination_connection)
+
+
+def _should_exclude_path(path: Path) -> bool:
+    if path.name in EXCLUDED_NAMES:
+        return True
+    if path.name in EXCLUDED_DIR_NAMES:
+        return True
+    return path.name.endswith('.db-shm') or path.name.endswith('.db-wal')
+
+
+def _reconcile_staged_state_db(paths: ProjectPaths, *, mode: ProjectExportMode) -> None:
+    now = utc_now_iso()
+    with sqlite3.connect(paths.state_db_path) as connection:
+        connection.execute('PRAGMA foreign_keys = ON')
+        connection.execute('UPDATE orchestrator_execution_meta SET stdout_path = NULL, stderr_path = NULL')
+        if mode == ProjectExportMode.CODE_ONLY:
+            connection.execute(
+                'UPDATE artifact_heads SET current_version_id = NULL, state = ?',
+                (ArtifactState.PENDING.value,),
+            )
+            connection.execute(
+                'UPDATE asset_heads SET current_asset_version_id = NULL, state = ?',
+                (ArtifactState.PENDING.value,),
+            )
+            connection.execute(
+                'UPDATE notebook_execution_heads SET '
+                'state = ?, source_hash = NULL, upstream_code_hash = NULL, upstream_data_hash = NULL, '
+                'run_id = NULL, last_run_started_at = NULL, last_run_finished_at = NULL, updated_at = ?',
+                (ArtifactState.PENDING.value, now),
+            )
+            connection.execute('DELETE FROM run_inputs')
+            connection.execute('DELETE FROM run_outputs')
+            connection.execute('DELETE FROM cache_index')
+            connection.execute('DELETE FROM orchestrator_execution_meta')
+            connection.execute('DELETE FROM run_records')
+            connection.execute('DELETE FROM asset_version_objects')
+            connection.execute('DELETE FROM artifact_versions')
+            connection.execute('DELETE FROM asset_versions')
+            connection.execute('DELETE FROM objects')
+            connection.execute('DELETE FROM persistent_notices WHERE code IN (?, ?)', ('run_failed', 'run_warning'))
+        if mode in {ProjectExportMode.CODE_ONLY, ProjectExportMode.CODE_AND_DATA}:
+            connection.execute('DELETE FROM checkpoints')
+        else:
+            rows = connection.execute('SELECT checkpoint_id FROM checkpoints ORDER BY checkpoint_id').fetchall()
+            for row in rows:
+                checkpoint_id = str(row[0])
+                checkpoint_path = paths.checkpoints_dir / checkpoint_id
+                if checkpoint_path.exists():
+                    connection.execute(
+                        'UPDATE checkpoints SET path = ? WHERE checkpoint_id = ?',
+                        (str(checkpoint_path), checkpoint_id),
+                    )
                     continue
-                continue
-            if child.name in EXCLUDED_NAMES or any(part in EXCLUDED_DIR_NAMES for part in child.parts):
-                continue
-            members.append(child.relative_to(paths.root))
+                connection.execute('DELETE FROM checkpoints WHERE checkpoint_id = ?', (checkpoint_id,))
+        connection.commit()
+
+
+def _write_archive_from_root(root: Path, archive_path: Path) -> None:
+    with zipfile.ZipFile(archive_path, 'w', compression=zipfile.ZIP_DEFLATED) as zf:
+        for directory in sorted(_iter_directory_members(root)):
+            zf.writestr(f'{directory}/', b'')
+        for file_path in sorted(path for path in root.rglob('*') if path.is_file()):
+            zf.write(file_path, arcname=file_path.relative_to(root).as_posix())
+
+
+def _iter_directory_members(root: Path) -> set[str]:
+    members = set(REQUIRED_EXPORT_DIRECTORIES)
+    for path in root.rglob('*'):
+        if path.is_dir():
+            members.add(path.relative_to(root).as_posix())
     return members
 
 
-def _is_transient_sqlite_sidecar(relpath: Path) -> bool:
-    return relpath.name.endswith('.db-shm') or relpath.name.endswith('.db-wal')
+def _validate_archive_members(names: set[str]) -> None:
+    normalized = {_normalize_archive_name(name) for name in names if name}
+    for name in normalized:
+        member_path = PurePosixPath(name)
+        if member_path.is_absolute() or '..' in member_path.parts:
+            raise ProjectValidationError(f'Archive contains an invalid member path: {name}')
+        if member_path.parts and member_path.parts[0] == 'project':
+            raise ProjectValidationError('Archive must be rooted at zip root, not nested under `project/`.')
+        if name == 'export_manifest.json':
+            raise ProjectValidationError('Archive must not contain `export_manifest.json`.')
+    missing_files = sorted(REQUIRED_EXPORT_FILES - normalized)
+    if missing_files:
+        raise ProjectValidationError(f'Archive is missing required members: {", ".join(missing_files)}')
+
+
+def _validate_imported_project_metadata(paths: ProjectPaths) -> None:
+    project_json = _load_required_json_dict(paths.project_json_path, source='Archive project metadata')
+    validate_project_schema_version(project_json, source='Archive project metadata')
+    project_id = validate_project_id(str(project_json.get('project_id') or ''))
+    graph_meta = _load_required_json_dict(paths.graph_dir / 'meta.json', source='Archive graph metadata')
+    raw_version = graph_meta.get('schema_version')
+    try:
+        version = int(raw_version)
+    except (TypeError, ValueError) as exc:
+        raise ProjectValidationError('Archive graph metadata is missing a valid `schema_version`.') from exc
+    if version != GRAPH_SCHEMA_VERSION:
+        raise ProjectValidationError(
+            f'Unsupported BulletJournal graph schema version {version}; expected {GRAPH_SCHEMA_VERSION}.'
+        )
+    graph_project_id = validate_project_id(str(graph_meta.get('project_id') or ''))
+    if graph_project_id != project_id:
+        raise ProjectValidationError(
+            f'Archive graph metadata has project_id {graph_project_id!r}, expected {project_id!r}.'
+        )
+
+
+def _load_required_json_dict(path: Path, *, source: str) -> dict[str, object]:
+    try:
+        payload = json.loads(path.read_text(encoding='utf-8'))
+    except FileNotFoundError as exc:
+        raise ProjectValidationError(f'{source} is missing.') from exc
+    except json.JSONDecodeError as exc:
+        raise ProjectValidationError(f'{source} is not valid JSON.') from exc
+    if not isinstance(payload, dict):
+        raise ProjectValidationError(f'{source} must be a JSON object.')
+    return payload
+
+
+def _rewrite_imported_state_paths(paths: ProjectPaths) -> None:
+    with sqlite3.connect(paths.state_db_path) as connection:
+        rows = connection.execute('SELECT checkpoint_id FROM checkpoints ORDER BY checkpoint_id').fetchall()
+        for row in rows:
+            checkpoint_id = str(row[0])
+            checkpoint_path = paths.checkpoints_dir / checkpoint_id
+            if checkpoint_path.exists():
+                connection.execute(
+                    'UPDATE checkpoints SET path = ? WHERE checkpoint_id = ?',
+                    (str(checkpoint_path), checkpoint_id),
+                )
+                continue
+            connection.execute('DELETE FROM checkpoints WHERE checkpoint_id = ?', (checkpoint_id,))
+        connection.execute('UPDATE orchestrator_execution_meta SET stdout_path = NULL, stderr_path = NULL')
+        connection.commit()
+
+
+def _normalize_archive_name(name: str) -> str:
+    return name[:-1] if name.endswith('/') else name
 
 
 def _restore_required_directories(root: Path) -> None:
