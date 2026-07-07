@@ -614,6 +614,7 @@ const BulletJournalNodeCard = memo(({ data, selected }: NodeProps<BulletJournalN
   const shouldShowExecutionTimer = Boolean(executionMeta) && (isExecutionActive || executionMeta?.status === 'succeeded')
   const shouldShowExecutionProgress = !hasActiveEditor && Boolean(executionMeta)
   const usesExecutionFreshnessHead = node.kind === 'notebook' && outputs.length === 0
+  const playButtonIsExecuting = node.kind === 'notebook' && (isExecutionActive || isExecutionQueued)
   const playButtonNeedsAttention = node.kind === 'notebook' && (
     counts.stale > 0
     || counts.pending > 0
@@ -941,7 +942,7 @@ const BulletJournalNodeCard = memo(({ data, selected }: NodeProps<BulletJournalN
         <div className="rf-actions">
           {!NON_RUNNABLE_NODE_KINDS.has(node.kind) ? (
             <div className="round-action-group" ref={menuRef}>
-              <button className={`round-node-action play ${playButtonNeedsAttention ? 'needs-run' : 'is-ready'}`} onClick={(event) => {
+              <button className={`round-node-action play ${playButtonIsExecuting ? 'is-running' : playButtonNeedsAttention ? 'needs-run' : 'is-ready'}`} onClick={(event) => {
                 event.stopPropagation()
                 setRunMenuOpen(false)
                 onRunNode(node.id, 'run_stale', 'node')

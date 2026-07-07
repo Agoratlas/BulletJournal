@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import pandas as pd
 import pytest
 
@@ -89,6 +91,57 @@ def test_runtime_context_resolves_optional_missing_file_input(tmp_path) -> None:
     assert metadata['upstream_code_hash'] == 'default'
     assert metadata['state'] == ArtifactState.READY.value
     assert metadata['warnings'] == []
+
+
+def test_runtime_context_resolves_file_input_with_declared_extension(tmp_path) -> None:
+    project_root = init_project_root(tmp_path / 'project').root
+    context = RuntimeContext(
+        project_root=project_root,
+        node_id='consumer',
+        run_id='run-file-extension',
+        source_hash='source-hash',
+        lineage_mode=LineageMode.MANAGED,
+        bindings={
+            'dataset': Binding(
+                source_node='producer',
+                source_artifact='report',
+                data_type='file',
+            )
+        },
+        outputs={},
+    )
+
+    uploaded_file = tmp_path / 'report-upload'
+    uploaded_file.write_text('alpha,beta\n1,2\n', encoding='utf-8')
+    persisted = context.object_store.persist_file(uploaded_file, extension='.csv')
+    context.db.upsert_artifact_object(
+        persisted['artifact_hash'],
+        persisted['storage_kind'],
+        persisted['data_type'],
+        persisted['size_bytes'],
+        persisted.get('extension'),
+        persisted.get('mime_type'),
+        persisted.get('preview'),
+    )
+    context.db.create_artifact_version(
+        node_id='producer',
+        artifact_name='report',
+        role=ArtifactRole.OUTPUT,
+        artifact_hash=persisted['artifact_hash'],
+        source_hash='producer-source',
+        upstream_code_hash='producer-code',
+        upstream_data_hash='producer-data',
+        run_id='upstream-run',
+        lineage_mode=LineageMode.MANAGED,
+        warnings=[],
+    )
+
+    metadata = context.resolve_pull_file('dataset')
+
+    resolved_path = Path(metadata['path'])
+    assert resolved_path.parent == context.paths.pulled_files_dir
+    assert resolved_path.suffix == '.csv'
+    assert resolved_path.read_text(encoding='utf-8') == 'alpha,beta\n1,2\n'
 
 
 def test_runtime_context_missing_binding_error_includes_guidance(tmp_path) -> None:

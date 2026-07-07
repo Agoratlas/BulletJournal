@@ -70,6 +70,10 @@ class ProjectPaths:
         return self.temp_dir / 'uploads'
 
     @property
+    def pulled_files_dir(self) -> Path:
+        return self.temp_dir / 'pulled_files'
+
+    @property
     def execution_logs_dir(self) -> Path:
         return self.temp_dir / 'execution_logs'
 
@@ -148,6 +152,7 @@ def _initialize_project_layout(paths: ProjectPaths, *, project_id: str, title: s
     ensure_directory(paths.checkpoints_dir)
     ensure_directory(paths.temp_dir)
     ensure_directory(paths.uploads_dir)
+    ensure_directory(paths.pulled_files_dir)
     ensure_directory(paths.execution_logs_dir)
     ensure_directory(paths.worker_temp_dir)
 
@@ -273,6 +278,7 @@ def require_project_root(path: Path) -> ProjectPaths:
     ensure_directory(paths.dashboards_dir)
     ensure_directory(paths.execution_logs_dir)
     ensure_directory(paths.uploads_dir)
+    ensure_directory(paths.pulled_files_dir)
     ensure_directory(paths.worker_temp_dir)
     return paths
 

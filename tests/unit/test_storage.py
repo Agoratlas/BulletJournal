@@ -55,6 +55,7 @@ def test_layout_only_init_creates_schema_v2_files_and_directories(tmp_path) -> N
     assert paths.dashboards_dir.is_dir()
     assert paths.temp_dir.is_dir()
     assert paths.uploads_dir.is_dir()
+    assert paths.pulled_files_dir.is_dir()
     assert paths.execution_logs_dir.is_dir()
     assert paths.worker_temp_dir.is_dir()
     assert paths.state_db_path.is_file()

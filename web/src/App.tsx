@@ -4248,6 +4248,8 @@ function App() {
         return
       }
       const key = event.key.toLowerCase()
+      const selection = window.getSelection()
+      const hasHighlightedText = Boolean(selection && !selection.isCollapsed && selection.toString())
       if ((key === 'backspace' || key === 'delete') && (selectedNodeIds.length > 0 || selectedEdgeIds.length > 0)) {
         event.preventDefault()
         requestDeleteSelection(selectedNodeIds, selectedEdgeIds)
@@ -4257,7 +4259,7 @@ function App() {
       if (!primaryModifier) {
         return
       }
-      if (key === 'c' && selectedNodeIds.length > 0) {
+      if (key === 'c' && selectedNodeIds.length > 0 && !hasHighlightedText) {
         event.preventDefault()
         void handleCopySelection()
         return

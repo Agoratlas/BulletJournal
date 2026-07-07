@@ -60,11 +60,32 @@ class ObjectStore:
     def load_value(self, artifact_hash: str, data_type: str) -> Any:
         return deserialize_value(self.object_path(artifact_hash).read_bytes(), data_type)
 
-    def load_file_path(self, artifact_hash: str) -> Path:
-        return self.object_path(artifact_hash)
+    def load_file_path(self, artifact_hash: str, *, extension: str | None = None) -> Path:
+        object_path = self.object_path(artifact_hash)
+        normalized_extension = self._normalize_extension(extension)
+        if not normalized_extension:
+            return object_path
+        self.paths.pulled_files_dir.mkdir(parents=True, exist_ok=True)
+        materialized_path = self.paths.pulled_files_dir / f'{artifact_hash}{normalized_extension}'
+        if materialized_path.exists() or materialized_path.is_symlink():
+            return materialized_path
+        try:
+            os.symlink(object_path, materialized_path)
+        except FileExistsError:
+            return materialized_path
+        except OSError:
+            atomic_copy_file(object_path, materialized_path)
+            os.chmod(materialized_path, 0o444)
+        return materialized_path
 
     def create_temp_file(self, suffix: str = '') -> Path:
         self.paths.uploads_dir.mkdir(parents=True, exist_ok=True)
         fd, temp_path = tempfile.mkstemp(dir=self.paths.uploads_dir, suffix=suffix)
         os.close(fd)
         return Path(temp_path)
+
+    @staticmethod
+    def _normalize_extension(extension: str | None) -> str:
+        if not extension:
+            return ''
+        return extension if extension.startswith('.') else f'.{extension}'

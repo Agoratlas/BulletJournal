@@ -143,7 +143,7 @@ class RuntimeContext:
         if head['state'] == ArtifactState.STALE.value:
             warnings.append(stale_input_warning(f'{binding.source_node}/{binding.source_artifact}'))
         return {
-            'path': self.object_store.load_file_path(head['artifact_hash']),
+            'path': self.object_store.load_file_path(head['artifact_hash'], extension=head.get('extension')),
             'artifact_hash': head['artifact_hash'],
             'upstream_code_hash': head['upstream_code_hash'],
             'state': head['state'],

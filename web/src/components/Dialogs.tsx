@@ -850,6 +850,9 @@ export function EditConstantDialog({ mode = 'create', initialDataType, allowType
     if (event.key !== 'Enter') {
       return
     }
+    if (dataType === 'list' || dataType === 'dict') {
+      return
+    }
     if (event.shiftKey || event.ctrlKey || event.metaKey) {
       return
     }

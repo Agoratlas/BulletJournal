@@ -219,6 +219,9 @@ def test_artifacts_api_delegates_to_runtime_context(monkeypatch: pytest.MonkeyPa
         'state': 'ready',
         'warnings': [],
         'upstream_code_hash': 'upstream',
+        'source_node': 'producer',
+        'source_artifact': 'dataset',
+        'loaded_version_id': 'version-1',
     }
     calls: list[tuple[str, object]] = []
 
@@ -368,6 +371,9 @@ def test_artifacts_pull_file_returns_none_for_optional_missing_binding(monkeypat
         'state': 'ready',
         'warnings': [],
         'upstream_code_hash': 'default',
+        'source_node': '',
+        'source_artifact': '',
+        'loaded_version_id': None,
     }
     calls: list[tuple[str, object]] = []
 
@@ -538,6 +544,58 @@ def test_file_push_handle_cleans_up_without_finalize_on_error(monkeypatch: pytes
 
     assert finalized == []
     assert temp_file.exists() is False
+
+
+def test_artifacts_pull_file_returns_materialized_extension_path(tmp_path: Path) -> None:
+    project_root = init_project_root(tmp_path / 'project').root
+    context = runtime_context.RuntimeContext(
+        project_root=project_root,
+        node_id='consumer',
+        run_id='run-file-materialized-extension',
+        source_hash='source-hash',
+        lineage_mode=LineageMode.MANAGED,
+        bindings={
+            'incoming': runtime_context.Binding(
+                source_node='producer',
+                source_artifact='report',
+                data_type='file',
+            )
+        },
+        outputs={},
+    )
+
+    original_file = tmp_path / 'report-upload'
+    original_file.write_text('payload', encoding='utf-8')
+    persisted = context.object_store.persist_file(original_file, extension='.txt')
+    context.db.upsert_artifact_object(
+        persisted['artifact_hash'],
+        persisted['storage_kind'],
+        persisted['data_type'],
+        persisted['size_bytes'],
+        persisted.get('extension'),
+        persisted.get('mime_type'),
+        persisted.get('preview'),
+    )
+    context.db.create_artifact_version(
+        node_id='producer',
+        artifact_name='report',
+        role=ArtifactRole.OUTPUT,
+        artifact_hash=persisted['artifact_hash'],
+        source_hash='producer-source',
+        upstream_code_hash='producer-code',
+        upstream_data_hash='producer-data',
+        run_id='producer-run',
+        lineage_mode=LineageMode.MANAGED,
+        warnings=[],
+    )
+
+    with runtime_context.activate_runtime_context(context):
+        file_path = runtime_artifacts.pull_file(name='incoming')
+
+    assert file_path is not None
+    assert Path(file_path).parent == context.paths.pulled_files_dir
+    assert Path(file_path).suffix == '.txt'
+    assert Path(file_path).read_text(encoding='utf-8') == 'payload'
 
 
 def test_load_notebook_module_imports_python_file(tmp_path: Path) -> None:

@@ -306,6 +306,7 @@ def _restore_required_directories(root: Path) -> None:
         paths.object_store_dir,
         paths.checkpoints_dir,
         paths.uploads_dir,
+        paths.pulled_files_dir,
         paths.worker_temp_dir,
         paths.execution_logs_dir,
     ]:

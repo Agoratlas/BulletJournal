@@ -2326,6 +2326,14 @@ label span,
   background: linear-gradient(135deg, #40c767, #29a450);
 }
 
+.round-node-action.play.is-running {
+  background: linear-gradient(135deg, #4f8ef7, #2563eb);
+}
+
+.round-node-action.play.is-running:hover {
+  background: linear-gradient(135deg, #6ba4ff, #3574f0);
+}
+
 .round-node-action.editor {
   background: rgba(255, 255, 255, 0.72);
   color: var(--ink);
