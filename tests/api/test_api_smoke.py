@@ -477,7 +477,7 @@ def _():
     assert [row['value'] for row in table_payload['rows']] == [5, 6]
 
 
-def test_time_histogram_asset_prepare_returns_chart_and_linked_table(tmp_path) -> None:
+def test_temporal_histogram_asset_prepare_returns_chart_and_linked_table(tmp_path) -> None:
     project_root = init_project_root(tmp_path / 'project').root
     app = create_app(project_path=project_root)
     client = TestClient(app)
@@ -519,10 +519,10 @@ def _():
         'label': [f'row_{index}' for index in range(12)],
     })
     assets.push(
-        assets.TimeHistogram(frame, x='created_at', granularity='auto'),
+        assets.Histogram(frame, x='created_at', granularity='auto'),
         name='created_hist',
         title='Created histogram',
-        asset_type=assets.TimeHistogram,
+        asset_type=assets.Histogram,
     )
     return
 """.strip()
@@ -561,15 +561,15 @@ def _():
     assert prepared.status_code == 200
     payload = prepared.json()
     assert payload['resolved_modifiers']['granularity'] == 'auto'
-    time_histogram_payload = payload['payloads']['main']
-    assert time_histogram_payload['kind'] == 'histogram'
-    assert time_histogram_payload['x_column'] == 'created_at'
-    assert time_histogram_payload['rows_total'] == 10
-    assert time_histogram_payload['non_null_rows'] == 10
-    assert time_histogram_payload['time_granularity'] == 'month'
-    assert len(time_histogram_payload['bins']) == 10
-    assert time_histogram_payload['bins'][0]['label'] == 'Feb 1, 2024 to Feb 29, 2024'
-    assert time_histogram_payload['bins'][-1]['label'] == 'Nov 1, 2024 to Nov 30, 2024'
+    histogram_payload = payload['payloads']['main']
+    assert histogram_payload['kind'] == 'histogram'
+    assert histogram_payload['x_column'] == 'created_at'
+    assert histogram_payload['rows_total'] == 10
+    assert histogram_payload['non_null_rows'] == 10
+    assert histogram_payload['time_granularity'] == 'month'
+    assert len(histogram_payload['bins']) == 10
+    assert histogram_payload['bins'][0]['label'] == 'Feb 1, 2024 to Feb 29, 2024'
+    assert histogram_payload['bins'][-1]['label'] == 'Nov 1, 2024 to Nov 30, 2024'
     table_payload = payload['payloads']['table']
     assert table_payload['kind'] == 'table'
     assert table_payload['rows_total'] == 2

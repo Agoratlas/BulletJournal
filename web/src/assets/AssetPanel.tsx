@@ -56,7 +56,6 @@ export function AssetPanel({
     && asset.asset_type !== 'dataframe'
     && asset.asset_type !== 'bar_chart'
     && asset.asset_type !== 'histogram'
-    && asset.asset_type !== 'time_histogram'
     && asset.asset_type !== 'pie_chart'
     && asset.asset_type !== 'scatter_plot'
 
@@ -135,7 +134,7 @@ export function AssetPanel({
     )
   }
 
-  if (asset.asset_type === 'histogram' || asset.asset_type === 'time_histogram') {
+  if (asset.asset_type === 'histogram') {
     return (
       <HistogramAssetPanel
         nodeId={nodeId}

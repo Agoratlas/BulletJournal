@@ -109,7 +109,6 @@ def test_asset_packages_only_expose_canonical_asset_class_names() -> None:
         assert module.Markdown is not None
         assert module.PieChart is not None
         assert module.ScatterPlot is not None
-        assert module.TimeHistogram is not None
 
     for alias_name in (
         'BarChartAsset',
@@ -120,7 +119,6 @@ def test_asset_packages_only_expose_canonical_asset_class_names() -> None:
         'MarkdownAsset',
         'PieChartAsset',
         'ScatterPlotAsset',
-        'TimeHistogramAsset',
     ):
         assert not hasattr(assets_module, alias_name)
         assert not hasattr(asset_types_module, alias_name)
@@ -361,7 +359,7 @@ def test_temporal_histograms_reject_unused_encoding_arguments() -> None:
     frame = pd.DataFrame({'created_at': pd.date_range('2024-01-01', periods=3, freq='D')})
 
     with pytest.raises(TypeError, match='do not support `shape` arguments'):
-        runtime_assets.TimeHistogram(frame, x='created_at', shape='created_at')
+        runtime_assets.Histogram(frame, x='created_at', shape='created_at')
 
 
 def test_artifacts_pull_file_returns_none_for_optional_missing_binding(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -7,7 +7,6 @@ from bulletjournal.assets.types.iframe import Iframe
 from bulletjournal.assets.types.markdown import Markdown
 from bulletjournal.assets.types.pie_chart import PieChart
 from bulletjournal.assets.types.scatter_plot import ScatterPlot
-from bulletjournal.assets.types.time_histogram import TimeHistogram
 
 __all__ = [
     'BarChart',
@@ -19,7 +18,6 @@ __all__ = [
     'Markdown',
     'PieChart',
     'ScatterPlot',
-    'TimeHistogram',
     'asset_type_id_for_class',
     'asset_type_id_for_instance',
 ]

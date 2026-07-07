@@ -11,7 +11,6 @@ from bulletjournal.assets.types.iframe import Iframe
 from bulletjournal.assets.types.markdown import Markdown
 from bulletjournal.assets.types.pie_chart import PieChart
 from bulletjournal.assets.types.scatter_plot import ScatterPlot
-from bulletjournal.assets.types.time_histogram import TimeHistogram
 from bulletjournal.domain.artifact_names import invalid_artifact_name_message, is_valid_artifact_name
 from bulletjournal.runtime.context import current_runtime_context
 
@@ -50,6 +49,5 @@ __all__ = [
     'Markdown',
     'PieChart',
     'ScatterPlot',
-    'TimeHistogram',
     'push',
 ]

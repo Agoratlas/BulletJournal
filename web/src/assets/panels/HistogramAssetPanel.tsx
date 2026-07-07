@@ -72,7 +72,7 @@ export function HistogramAssetPanel({
   const prepareNodeId = prepareTarget?.nodeId ?? nodeId
   const prepareAssetName = prepareTarget?.assetName ?? asset.asset_name
   const preparePanelContext = prepareTarget?.panelContext ?? null
-  const isTimeHistogram = asset.asset_type === 'time_histogram'
+  const isTemporalHistogram = asset.modifier_schema.some((entry) => entry.id === 'granularity')
   const modifierColumns = useMemo(() => modifierColumnsFromSchema(asset.modifier_schema), [asset.modifier_schema])
   const chartOverrideDefaults = useMemo(
     () => defaultHistogramChartOverrides(asset.default_modifiers, asset.modifier_schema),
@@ -96,7 +96,7 @@ export function HistogramAssetPanel({
   const [filters, setFilters] = useState<AssetFilter[]>(initialState.filters)
   const [binCount, setBinCount] = useState(initialState.binCount ?? 20)
   const [binCountInput, setBinCountInput] = useState(String(initialState.binCount ?? 20))
-  const [granularity, setGranularity] = useState<TimeHistogramGranularity>(initialState.granularity ?? 'auto')
+  const [timeGranularity, setTimeGranularity] = useState<TimeHistogramGranularity>(initialState.granularity ?? 'auto')
   const [chartOverrides, setChartOverrides] = useState<HistogramChartOverrides>(initialChartOverrides)
   const [selectedBarIndexes, setSelectedBarIndexes] = useState<number[]>([])
   const [pageInput, setPageInput] = useState(String(initialState.page.index + 1))
@@ -119,8 +119,8 @@ export function HistogramAssetPanel({
     page: { index: pageIndex, size: pageSize },
     sort,
     filters,
-    binCount: isTimeHistogram ? null : binCount,
-    granularity: isTimeHistogram ? granularity : null,
+    binCount: isTemporalHistogram ? null : binCount,
+    granularity: isTemporalHistogram ? timeGranularity : null,
   })
   const localChartOverridesKey = stableValueKey(chartOverrides)
   const modifierOverrides = useMemo(
@@ -128,10 +128,10 @@ export function HistogramAssetPanel({
       page: { index: pageIndex, size: pageSize },
       sort: sort ? [sort] : [],
       filters,
-      ...(isTimeHistogram ? { granularity } : { bin_count: binCount }),
+      ...(isTemporalHistogram ? { granularity: timeGranularity } : { bin_count: binCount }),
       ...serializeHistogramChartModifierValues(chartOverrides),
     }, asset.default_modifiers),
-    [asset.default_modifiers, binCount, chartOverrides, filters, granularity, isTimeHistogram, pageIndex, pageSize, sort],
+    [asset.default_modifiers, binCount, chartOverrides, filters, isTemporalHistogram, pageIndex, pageSize, sort, timeGranularity],
   )
   const overrideValidationKey = requiresOverrideValidation ? stableValueKey(modifierOverrides) : null
 
@@ -146,7 +146,7 @@ export function HistogramAssetPanel({
     setFilters(initialState.filters)
     setBinCount(initialState.binCount ?? 20)
     setBinCountInput(String(initialState.binCount ?? 20))
-    setGranularity(initialState.granularity ?? 'auto')
+    setTimeGranularity(initialState.granularity ?? 'auto')
     setSelectedBarIndexes([])
     setPageInput(String(initialState.page.index + 1))
   }, [asset.current_asset_version_id, externalStateKey])
@@ -167,7 +167,7 @@ export function HistogramAssetPanel({
 
   useEffect(() => {
     setSelectedBarIndexes([])
-  }, [asset.current_asset_version_id, binCount, filtersKey, granularity])
+  }, [asset.current_asset_version_id, binCount, filtersKey, timeGranularity])
 
   const prepareQuery = useQuery({
     queryKey: [
@@ -180,7 +180,7 @@ export function HistogramAssetPanel({
       sort?.column ?? null,
       sort?.direction ?? null,
       filtersKey,
-      isTimeHistogram ? granularity : binCount,
+      isTemporalHistogram ? timeGranularity : binCount,
       selectionKey,
       persistedState?.override_schema_hash ?? null,
       overrideValidationKey,
@@ -213,7 +213,7 @@ export function HistogramAssetPanel({
   const resolvedSort = table?.sort?.[0] ?? null
   const resolvedFilters = Array.isArray(response?.resolved_modifiers.filters) ? response.resolved_modifiers.filters : filters
   const resolvedBinCount = typeof response?.resolved_modifiers.bin_count === 'number' ? response.resolved_modifiers.bin_count : binCount
-  const resolvedGranularity = granularityFromValue(response?.resolved_modifiers.granularity) ?? granularity
+  const resolvedTimeGranularity = granularityFromValue(response?.resolved_modifiers.granularity) ?? timeGranularity
   const availableColumns = modifierColumns.length
     ? modifierColumns
     : (table?.columns ?? []).map((column) => ({
@@ -231,9 +231,9 @@ export function HistogramAssetPanel({
   const canGoNext = resolvedPage.index + 1 < pageCount
   const resolvedPanelHeight = normalizePanelHeight(panelHeight) ?? DEFAULT_HISTOGRAM_CHART_HEIGHT
   const defaultBinCount = binCountFromValue(modifierDefaultValue(asset.default_modifiers, asset.modifier_schema, 'bin_count')) ?? initialState.binCount ?? 20
-  const defaultGranularity = granularityFromValue(modifierDefaultValue(asset.default_modifiers, asset.modifier_schema, 'granularity')) ?? initialState.granularity ?? 'auto'
+  const defaultTimeGranularity = granularityFromValue(modifierDefaultValue(asset.default_modifiers, asset.modifier_schema, 'granularity')) ?? initialState.granularity ?? 'auto'
   const hasSettingsOverrides = Object.keys(buildModifierOverridesRecord({
-    ...(isTimeHistogram ? { granularity } : { bin_count: binCount }),
+    ...(isTemporalHistogram ? { granularity: timeGranularity } : { bin_count: binCount }),
     ...serializeHistogramChartModifierValues(chartOverrides),
   }, asset.default_modifiers)).length > 0
 
@@ -268,8 +268,8 @@ export function HistogramAssetPanel({
   }, [resolvedBinCount])
 
   useEffect(() => {
-    setGranularity(resolvedGranularity)
-  }, [resolvedGranularity])
+    setTimeGranularity(resolvedTimeGranularity)
+  }, [resolvedTimeGranularity])
 
   function commitPageInput() {
     const parsed = Number(pageInput.trim())
@@ -301,7 +301,7 @@ export function HistogramAssetPanel({
     setFilters(resetState.filters)
     setBinCount(resetState.binCount ?? 20)
     setBinCountInput(String(resetState.binCount ?? 20))
-    setGranularity(resetState.granularity ?? 'auto')
+    setTimeGranularity(resetState.granularity ?? 'auto')
     setChartOverrides(chartOverrideDefaults)
     setSelectedBarIndexes([])
     setPageInput(String(resetState.page.index + 1))
@@ -315,7 +315,7 @@ export function HistogramAssetPanel({
     setPageIndex(0)
     setBinCount(defaultBinCount)
     setBinCountInput(String(defaultBinCount))
-    setGranularity(defaultGranularity)
+    setTimeGranularity(defaultTimeGranularity)
     setChartOverrides(chartOverrideDefaults)
   }
 
@@ -336,15 +336,15 @@ export function HistogramAssetPanel({
       </div>
 
       <PanelSettingsSection title="Histogram">
-        {isTimeHistogram ? (
+        {isTemporalHistogram ? (
           <label className="asset-dataviz-field">
-            <span className={modifierFieldLabelClassName(!valuesEqual(granularity, defaultGranularity))}>{modifierTitle(asset.modifier_schema, 'granularity', 'Granularity')}</span>
+            <span className={modifierFieldLabelClassName(!valuesEqual(timeGranularity, defaultTimeGranularity))}>{modifierTitle(asset.modifier_schema, 'granularity', 'Granularity')}</span>
             <select
               aria-label="Time histogram granularity"
-              value={granularity}
+              value={timeGranularity}
               onChange={(event) => {
                 setPageIndex(0)
-                setGranularity((granularityFromValue(event.target.value) ?? 'auto') as TimeHistogramGranularity)
+                setTimeGranularity((granularityFromValue(event.target.value) ?? 'auto') as TimeHistogramGranularity)
               }}
               disabled={overrideIncompatible || overrideValidationBlocked || prepareQuery.isFetching}
             >
@@ -422,7 +422,7 @@ export function HistogramAssetPanel({
         defaultOverrides={chartOverrideDefaults.xAxis}
         defaultLabel={chartOverrideDefaults.xAxis.label}
         onChange={(next) => setChartOverrides((current) => ({ ...current, xAxis: next }))}
-        allowLogScale={!isTimeHistogram}
+        allowLogScale={!isTemporalHistogram}
       />
 
       <AxisOverridesSection
@@ -867,8 +867,8 @@ function buildCenteredHistogramAxisTicks(
   histogram: PreparedHistogramPayload,
   maxTickLabels: number,
 ): { values: number[]; labelExpr: string } | null {
-  const granularity = histogram.time_granularity
-  if (!granularity || !histogram.bins.length) {
+  const timeGranularity = histogram.time_granularity
+  if (!timeGranularity || !histogram.bins.length) {
     return null
   }
   const selectedBins = selectHistogramAxisBins(histogram.bins, maxTickLabels)
@@ -876,7 +876,7 @@ function buildCenteredHistogramAxisTicks(
   const labelsByCenter = Object.fromEntries(
     selectedBins.map((bin) => [
       String((bin.start + bin.end) / 2),
-      formatHistogramAxisTickLabel(bin.start, granularity, includeYear),
+      formatHistogramAxisTickLabel(bin.start, timeGranularity, includeYear),
     ]),
   )
   return {
@@ -898,14 +898,15 @@ function formatHistogramAxisTickLabel(
   granularity: NonNullable<PreparedHistogramPayload['time_granularity']>,
   includeYear: boolean,
 ): string {
+  const timeGranularity = granularity
   const value = new Date(start)
-  if (granularity === 'year') {
+  if (timeGranularity === 'year') {
     return String(value.getUTCFullYear())
   }
-  if (granularity === 'month') {
+  if (timeGranularity === 'month') {
     return `${MONTH_LABELS[value.getUTCMonth()]} ${value.getUTCFullYear()}`
   }
-  if (granularity === 'hour') {
+  if (timeGranularity === 'hour') {
     const hourLabel = `${String(value.getUTCHours()).padStart(2, '0')}:00`
     return includeYear
       ? `${MONTH_LABELS[value.getUTCMonth()]} ${value.getUTCDate()}, ${value.getUTCFullYear()} ${hourLabel}`

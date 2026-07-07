@@ -14,7 +14,6 @@ from bulletjournal.assets.types.iframe import Iframe, serialize_iframe
 from bulletjournal.assets.types.markdown import Markdown, serialize_markdown
 from bulletjournal.assets.types.pie_chart import PieChart, prepare_pie_chart, serialize_pie_chart
 from bulletjournal.assets.types.scatter_plot import ScatterPlot, prepare_scatter_plot, serialize_scatter_plot
-from bulletjournal.assets.types.time_histogram import TimeHistogram, prepare_time_histogram, serialize_time_histogram
 
 SerializeAssetFn = Callable[..., SerializedAssetVersion]
 PrepareAssetFn = Callable[..., tuple[dict[str, Any], dict[str, Any]]]
@@ -35,9 +34,6 @@ _REGISTRATIONS = (
     AssetRegistration('collection', 'Collection', Collection, serialize_collection),
     AssetRegistration('dataframe', 'DataFrame', DataFrame, serialize_dataframe, prepare_dataframe),
     AssetRegistration('bar_chart', 'BarChart', BarChart, serialize_bar_chart, prepare_bar_chart),
-    AssetRegistration(
-        'time_histogram', 'TimeHistogram', TimeHistogram, serialize_time_histogram, prepare_time_histogram
-    ),
     AssetRegistration('histogram', 'Histogram', Histogram, serialize_histogram, prepare_histogram),
     AssetRegistration('pie_chart', 'PieChart', PieChart, serialize_pie_chart, prepare_pie_chart),
     AssetRegistration('scatter_plot', 'ScatterPlot', ScatterPlot, serialize_scatter_plot, prepare_scatter_plot),

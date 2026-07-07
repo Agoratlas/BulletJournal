@@ -199,8 +199,8 @@ def _(pd=__import__('pandas')):
     assert not any(issue.severity == ValidationSeverity.ERROR for issue in contract.issues)
 
 
-def test_parser_accepts_time_histogram_asset_type_reference(tmp_path) -> None:
-    notebook = tmp_path / 'time_histogram_asset_notebook.py'
+def test_parser_accepts_temporal_histogram_asset_type_reference(tmp_path) -> None:
+    notebook = tmp_path / 'temporal_histogram_asset_notebook.py'
     notebook.write_text(
         """
 import marimo
@@ -213,17 +213,17 @@ with app.setup:
 @app.cell
 def _(pd=__import__('pandas')):
     frame = pd.DataFrame({'created_at': pd.date_range('2024-01-01', periods=3, freq='D')})
-    assets.push(assets.TimeHistogram(frame, x='created_at'), name='created_hist', title='Created histogram', asset_type=assets.TimeHistogram)
+    assets.push(assets.Histogram(frame, x='created_at'), name='created_hist', title='Created histogram', asset_type=assets.Histogram)
     return frame
 """.strip()
         + '\n',
         encoding='utf-8',
     )
 
-    contract = parse_notebook_contract(notebook, node_id='time_histogram_asset_notebook')
+    contract = parse_notebook_contract(notebook, node_id='temporal_histogram_asset_notebook')
 
     assert [declaration.name for declaration in contract.asset_declarations] == ['created_hist']
-    assert contract.asset_declarations[0].declared_asset_type == 'time_histogram'
+    assert contract.asset_declarations[0].declared_asset_type == 'histogram'
     assert not any(issue.severity == ValidationSeverity.ERROR for issue in contract.issues)
 
 

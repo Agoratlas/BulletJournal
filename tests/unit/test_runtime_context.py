@@ -691,12 +691,12 @@ def test_runtime_context_finalize_asset_push_persists_histogram_asset(tmp_path) 
     assert head['objects'][0]['object_role'] == 'backing_dataset'
 
 
-def test_runtime_context_finalize_asset_push_persists_time_histogram_asset(tmp_path) -> None:
+def test_runtime_context_finalize_asset_push_persists_temporal_histogram_asset(tmp_path) -> None:
     project_root = init_project_root(tmp_path / 'project').root
     context = RuntimeContext(
         project_root=project_root,
         node_id='producer',
-        run_id='run-time-histogram-asset',
+        run_id='run-temporal-histogram-asset',
         source_hash='producer-source',
         lineage_mode=LineageMode.MANAGED,
         bindings={},
@@ -707,14 +707,14 @@ def test_runtime_context_finalize_asset_push_persists_time_histogram_asset(tmp_p
                 name='created_hist',
                 title='Created histogram',
                 description='Temporal distribution',
-                declared_asset_type='time_histogram',
+                declared_asset_type='histogram',
                 declaration_index=0,
             )
         },
     )
 
     pushed = context.finalize_asset_push(
-        asset=runtime_assets.TimeHistogram(
+        asset=runtime_assets.Histogram(
             pd.DataFrame(
                 {
                     'created_at': pd.date_range('2024-01-01', periods=4, freq='MS'),
@@ -729,13 +729,13 @@ def test_runtime_context_finalize_asset_push_persists_time_histogram_asset(tmp_p
         name='created_hist',
         title='Created histogram',
         description='Temporal distribution',
-        asset_type=runtime_assets.TimeHistogram,
+        asset_type=runtime_assets.Histogram,
     )
     head = context.db.get_asset_head('producer', 'created_hist')
 
     assert pushed['asset_name'] == 'created_hist'
     assert head is not None
-    assert head['asset_type'] == 'time_histogram'
+    assert head['asset_type'] == 'histogram'
     assert head['definition']['histogram_column'] == 'created_at'
     assert 'encodings' not in head['definition']
     assert 'default_granularity' not in head['definition']

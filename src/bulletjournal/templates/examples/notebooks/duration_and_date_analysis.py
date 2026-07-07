@@ -52,7 +52,7 @@ def _(movies_df):
 
 @app.cell
 def _(movies_df_cleaned_date):
-    publication_hist = assets.TimeHistogram(movies_df_cleaned_date, x='date_published')
+    publication_hist = assets.Histogram(movies_df_cleaned_date, x='date_published')
 
     assets.push(publication_hist, name='publication_hist', title='Distribution of publication date')
     return
