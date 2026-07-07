@@ -268,18 +268,12 @@ export async function uploadFile(nodeId: string, file: File) {
   return response.json() as Promise<Record<string, unknown>>
 }
 
-function encodeCsvSeparator(separator: ',' | ';' | '\t'): 'comma' | 'semicolon' | 'tab' {
-  if (separator === ';') {
-    return 'semicolon'
-  }
-  if (separator === '\t') {
-    return 'tab'
-  }
-  return 'comma'
+function encodeDataFrameUploadFormat(format: 'parquet' | 'csv_comma' | 'csv_semicolon' | 'csv_tab'): 'parquet' | 'csv_comma' | 'csv_semicolon' | 'csv_tab' {
+  return format
 }
 
-export async function uploadConstantFile(nodeId: string, file: File, csvSeparator: ',' | ';' | '\t' = ',') {
-  const response = await fetch(appUrl(`/api/v1/constants/${nodeId}/upload?csv_separator=${encodeCsvSeparator(csvSeparator)}`), {
+export async function uploadConstantFile(nodeId: string, file: File, dataframeFormat: 'parquet' | 'csv_comma' | 'csv_semicolon' | 'csv_tab' = 'parquet') {
+  const response = await fetch(appUrl(`/api/v1/constants/${nodeId}/upload?dataframe_format=${encodeDataFrameUploadFormat(dataframeFormat)}`), {
     method: 'POST',
     headers: {
       'X-Filename': file.name,

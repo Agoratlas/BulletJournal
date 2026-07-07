@@ -36,7 +36,7 @@ export type PortActionMenuState = {
 
 export type ConstantValueType = 'int' | 'float' | 'bool' | 'str' | 'list' | 'dict' | 'file' | 'pandas.DataFrame'
 
-export type CsvSeparator = ',' | ';' | '\t'
+export type DataFrameUploadFormat = 'parquet' | 'csv_comma' | 'csv_semicolon' | 'csv_tab'
 
 export type AppNotice = NoticeRecord & {
   origin: 'snapshot' | 'client'

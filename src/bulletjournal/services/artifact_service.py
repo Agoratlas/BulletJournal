@@ -38,7 +38,7 @@ class ArtifactService:
         content: bytes,
         mime_type: str | None = None,
         *,
-        csv_separator: str = ',',
+        dataframe_format: str = 'csv_comma',
     ) -> dict[str, Any]:
         node = self.project_service.get_node(node_id)
         blockers = self.project_service.frozen_block_blockers_for_stale_roots([node_id])
@@ -61,10 +61,10 @@ class ArtifactService:
         if data_type == 'file':
             persisted = self._persist_uploaded_file(filename=filename, content=content)
         elif data_type == 'pandas.DataFrame':
-            persisted = self._persist_uploaded_dataframe_csv(
+            persisted = self._persist_uploaded_dataframe(
                 filename=filename,
                 content=content,
-                separator=csv_separator,
+                dataframe_format=dataframe_format,
             )
         else:
             raise InvalidRequestError(
@@ -151,20 +151,39 @@ class ArtifactService:
             if temp_path.exists():
                 temp_path.unlink()
 
-    def _persist_uploaded_dataframe_csv(self, *, filename: str, content: bytes, separator: str = ',') -> dict[str, Any]:
+    def _persist_uploaded_dataframe(
+        self, *, filename: str, content: bytes, dataframe_format: str = 'csv_comma'
+    ) -> dict[str, Any]:
         suffix = Path(filename).suffix.lower()
-        if suffix != '.csv':
-            raise InvalidRequestError('DataFrame constants currently only support `.csv` uploads.')
-        if separator not in {',', ';', '\t'}:
-            raise InvalidRequestError('CSV separator must be a comma, semicolon, or tab.')
+        separators = {
+            'csv_comma': ',',
+            'csv_semicolon': ';',
+            'csv_tab': '\t',
+        }
         try:
-            frame = pd.read_csv(io.BytesIO(content), sep=separator, low_memory=False)
+            if dataframe_format == 'parquet':
+                if suffix != '.parquet':
+                    raise InvalidRequestError('Parquet DataFrame uploads must use a `.parquet` file.')
+                frame = pd.read_parquet(io.BytesIO(content))
+            else:
+                if suffix != '.csv':
+                    raise InvalidRequestError('CSV DataFrame uploads must use a `.csv` file.')
+                separator = separators.get(dataframe_format)
+                if separator is None:
+                    raise InvalidRequestError(
+                        'DataFrame upload format must be `parquet`, `csv_comma`, `csv_semicolon`, or `csv_tab`.'
+                    )
+                frame = pd.read_csv(io.BytesIO(content), sep=separator, low_memory=False)
+        except InvalidRequestError:
+            raise
         except Exception as exc:  # pragma: no cover - pandas error surface varies by version
-            raise InvalidRequestError(f'Failed to parse CSV upload for constant block: {exc}.') from exc
+            format_label = 'Parquet' if dataframe_format == 'parquet' else 'CSV'
+            raise InvalidRequestError(f'Failed to parse {format_label} upload for constant block: {exc}.') from exc
         try:
             return self.project_service.require_project().object_store.persist_value(frame, 'pandas.DataFrame')
         except Exception as exc:  # pragma: no cover - parquet backend error surface varies by version
-            raise InvalidRequestError(f'Failed to store CSV upload for constant block: {exc}.') from exc
+            format_label = 'Parquet' if dataframe_format == 'parquet' else 'CSV'
+            raise InvalidRequestError(f'Failed to store {format_label} upload for constant block: {exc}.') from exc
 
     def _save_managed_artifact(
         self,

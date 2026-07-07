@@ -1,7 +1,7 @@
 import type { ChangeEvent, DragEvent, FormEvent, ReactNode } from 'react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 
-import type { ConstantValueType, CsvSeparator } from '../appTypes'
+import type { ConstantValueType, DataFrameUploadFormat } from '../appTypes'
 import { AREA_COLOR_KEYS, AREA_TITLE_POSITIONS, type AreaColorKey, type AreaTitlePosition } from '../lib/area'
 import { formatType } from '../lib/helpers'
 import { X } from './Icons'
@@ -795,7 +795,7 @@ type EditConstantDialogProps = {
     jsonText: string
     uploadFile: File | null
     jsonUploadFile: File | null
-    csvSeparator: CsvSeparator
+    dataframeFormat: DataFrameUploadFormat
   }) => Promise<void>
 }
 
@@ -804,7 +804,7 @@ export function EditConstantDialog({ mode = 'create', initialDataType, allowType
   const [jsonText, setJsonText] = useState(initialJsonValue)
   const [uploadFile, setUploadFile] = useState<File | null>(null)
   const [jsonUploadFile, setJsonUploadFile] = useState<File | null>(null)
-  const [csvSeparator, setCsvSeparator] = useState<CsvSeparator>(',')
+  const [dataframeFormat, setDataframeFormat] = useState<DataFrameUploadFormat>('parquet')
   const [busy, setBusy] = useState(false)
   const [validationError, setValidationError] = useState<string | null>(null)
 
@@ -813,10 +813,14 @@ export function EditConstantDialog({ mode = 'create', initialDataType, allowType
     setJsonText(initialJsonValue)
     setUploadFile(null)
     setJsonUploadFile(null)
-    setCsvSeparator(',')
+    setDataframeFormat('parquet')
     setBusy(false)
     setValidationError(null)
   }, [initialDataType, initialJsonValue])
+
+  const dataframeAccept = dataframeFormat === 'parquet'
+    ? '.parquet,application/vnd.apache.parquet,application/octet-stream'
+    : '.csv,text/csv'
 
   const usesUpload = dataType === 'file' || dataType === 'pandas.DataFrame'
   const supportsJsonUpload = dataType === 'list' || dataType === 'dict'
@@ -832,7 +836,7 @@ export function EditConstantDialog({ mode = 'create', initialDataType, allowType
     setBusy(true)
     try {
       setValidationError(null)
-      await onSave({ dataType, jsonText, uploadFile, jsonUploadFile, csvSeparator })
+      await onSave({ dataType, jsonText, uploadFile, jsonUploadFile, dataframeFormat })
       onClose()
     } catch (error) {
       setValidationError(error instanceof Error ? error.message : 'Invalid constant value.')
@@ -879,10 +883,10 @@ export function EditConstantDialog({ mode = 'create', initialDataType, allowType
 
         {usesUpload ? (
           <label>
-            <span>{dataType === 'pandas.DataFrame' ? 'Upload CSV' : 'Upload file'}</span>
+            <span>Upload file</span>
             <input
               type="file"
-              accept={dataType === 'pandas.DataFrame' ? '.csv,text/csv' : undefined}
+              accept={dataType === 'pandas.DataFrame' ? dataframeAccept : undefined}
               disabled={Boolean(uploadDisabledMessage)}
               onChange={(event) => setUploadFile(event.target.files?.[0] ?? null)}
             />
@@ -895,11 +899,12 @@ export function EditConstantDialog({ mode = 'create', initialDataType, allowType
             )}
             {dataType === 'pandas.DataFrame' ? (
               <>
-                <span>Separator</span>
-                <select value={csvSeparator} onChange={(event) => setCsvSeparator(event.target.value as CsvSeparator)}>
-                  <option value=",">Comma (,)</option>
-                  <option value=";">Semicolon (;)</option>
-                  <option value="\t">Tab</option>
+                <span>File type</span>
+                <select value={dataframeFormat} onChange={(event) => setDataframeFormat(event.target.value as DataFrameUploadFormat)}>
+                  <option value="parquet">Parquet</option>
+                  <option value="csv_comma">CSV (comma)</option>
+                  <option value="csv_semicolon">CSV (semicolon)</option>
+                  <option value="csv_tab">CSV (tab)</option>
                 </select>
               </>
             ) : null}

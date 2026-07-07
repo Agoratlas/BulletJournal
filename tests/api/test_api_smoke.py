@@ -2211,7 +2211,7 @@ def test_uploaded_dataframe_constant_supports_semicolon_separator(tmp_path) -> N
     assert created.status_code == 200
 
     upload = client.post(
-        '/api/v1/constants/frame_source/upload?csv_separator=semicolon',
+        '/api/v1/constants/frame_source/upload?dataframe_format=csv_semicolon',
         content=b'name;value\nalpha;1\nbeta;2\n',
         headers={'X-Filename': 'frame.csv', 'Content-Type': 'text/csv'},
     )
@@ -2267,6 +2267,48 @@ def test_uploaded_dataframe_constant_handles_large_mixed_type_columns(tmp_path) 
     assert preview['rows'] == 440_001
     assert preview['column_names'] == ['year', 'value']
     assert preview['sample'][0]['year'] == '2000'
+
+
+def test_uploaded_parquet_dataframe_constant_is_parsed(tmp_path) -> None:
+    project_root = init_project_root(tmp_path / 'project').root
+    app = create_app(project_path=project_root)
+    client = TestClient(app)
+
+    opened = client.get('/api/v1/project/snapshot')
+    graph_version = opened.json()['graph']['meta']['graph_version']
+
+    created = client.patch(
+        '/api/v1/graph',
+        json={
+            'graph_version': graph_version,
+            'operations': [
+                {
+                    'type': 'add_constant_node',
+                    'node_id': 'frame_source',
+                    'title': 'Frame Source',
+                    'data_type': 'pandas.DataFrame',
+                }
+            ],
+        },
+    )
+    assert created.status_code == 200
+
+    buffer = io.BytesIO()
+    pd.DataFrame({'name': ['alpha', 'beta'], 'value': [1, 2]}).to_parquet(buffer, index=False)
+
+    upload = client.post(
+        '/api/v1/constants/frame_source/upload?dataframe_format=parquet',
+        content=buffer.getvalue(),
+        headers={'X-Filename': 'frame.parquet', 'Content-Type': 'application/vnd.apache.parquet'},
+    )
+    assert upload.status_code == 200
+
+    artifact = client.get('/api/v1/artifacts/frame_source/value')
+    assert artifact.status_code == 200
+    preview = artifact.json()['preview']
+    assert preview['kind'] == 'dataframe'
+    assert preview['rows'] == 2
+    assert preview['column_names'] == ['name', 'value']
 
 
 def test_float_constant_value_accepts_round_number_payloads(tmp_path) -> None:

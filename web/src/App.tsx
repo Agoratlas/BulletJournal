@@ -6,7 +6,7 @@ import { appBasePath, appUrl, cancelRun, clearConstantValue, createCheckpoint, c
 import { CONSTANT_NODE_HEIGHT, CONSTANT_NODE_PORT_CENTER_OFFSET, CONSTANT_NODE_WIDTH, GRID_SIZE, PORT_ROW_HEIGHT, STANDARD_NODE_PORT_CENTER_OFFSET, activeRunNodeId, artifactFor, artifactsForDisplay, currentRun, formatTimestamp, globalArtifactCounts, inputState, inputsForNode, outputsForNode, queuedRunNodeIds, templateByRef } from './lib/helpers'
 import { areaSettings, type AreaColorKey, type AreaTitlePosition } from './lib/area'
 import type { ArtifactRecord, DashboardRecord, GraphPatchOperation, LayoutRecord, NodeRecord, ProjectSnapshot, SessionRecord, TemplateRecord } from './lib/types'
-import type { AppNotice, ClipboardGraph, ClipboardNodeRecord, ConstantValueType, CsvSeparator, GraphHistoryEntry, GraphMutationPlan, NodeActionItem, OptimisticGraphState, PaletteEntry, PalettePreviewBlock, PortActionMenuState } from './appTypes'
+import type { AppNotice, ClipboardGraph, ClipboardNodeRecord, ConstantValueType, DataFrameUploadFormat, GraphHistoryEntry, GraphMutationPlan, NodeActionItem, OptimisticGraphState, PaletteEntry, PalettePreviewBlock, PortActionMenuState } from './appTypes'
 import { applyOptimisticDashboardSources, applyOptimisticGraphOperations, areaAddOperationForNode, artifactTargetForPort, blockCreateMode, clampContextMenuPosition, cloneSnapshot, constantAddOperationForNode, copiedTitle, createClientNotice, dashboardAddOperationForNode, edgeIdForPorts, edgeIdsForPort, editorSessionDetails, expandMutationPlan, fileInputAddOperationForNode, formatMarkdownCode, formatRunBlockedMessage, formatRunFailureMessage, freezeBlockMessage, frozenBlockBlockersForDelete, frozenBlockBlockersForRemovedEdges, frozenBlockBlockersForStaleRoots, isEditableTarget, isEditorOpenConflict, isFreezeConflict, isManagedRunFailure, normalizeNodeId, notebookAddOperationForNode, organizerAddOperationForNode, pipelineTemplateNodeRecords, pipelineTopLeftForCenter, SNAPSHOT_REFRESH_EVENTS, SNAPSHOT_REFRESH_THROTTLE_MS, snapToGrid, uniqueCopiedNodeId } from './lib/appHelpers'
 import { ArtifactCard } from './components/ArtifactCard'
 import { ArtifactCounts } from './components/ArtifactCounts'
@@ -3273,12 +3273,12 @@ function App() {
 
   async function saveConstantBlockValue(
     nodeId: string,
-    payload: { dataType: ConstantValueType; jsonText: string; uploadFile: File | null; jsonUploadFile: File | null; csvSeparator: CsvSeparator },
+    payload: { dataType: ConstantValueType; jsonText: string; uploadFile: File | null; jsonUploadFile: File | null; dataframeFormat: DataFrameUploadFormat },
     options: { clearBlankJsonValue?: boolean } = {},
   ) {
     if (payload.dataType === 'file' || payload.dataType === 'pandas.DataFrame') {
       if (payload.uploadFile) {
-        await uploadConstantFile(nodeId, payload.uploadFile, payload.csvSeparator)
+        await uploadConstantFile(nodeId, payload.uploadFile, payload.dataframeFormat)
       }
       return
     }
@@ -3297,7 +3297,7 @@ function App() {
     )
   }
 
-  async function resolveConstantEditorValue(payload: { dataType: ConstantValueType; jsonText: string; uploadFile: File | null; jsonUploadFile: File | null; csvSeparator: CsvSeparator }): Promise<{ value: unknown; value_json: string } | unknown | undefined> {
+  async function resolveConstantEditorValue(payload: { dataType: ConstantValueType; jsonText: string; uploadFile: File | null; jsonUploadFile: File | null; dataframeFormat: DataFrameUploadFormat }): Promise<{ value: unknown; value_json: string } | unknown | undefined> {
     if (payload.dataType === 'file' || payload.dataType === 'pandas.DataFrame') {
       return undefined
     }
@@ -3325,7 +3325,7 @@ function App() {
     jsonText: string
     uploadFile: File | null
     jsonUploadFile: File | null
-    csvSeparator: CsvSeparator
+    dataframeFormat: DataFrameUploadFormat
   }) {
     if (!pendingBlockCreation || !projectId) {
       return

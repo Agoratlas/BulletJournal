@@ -62,7 +62,7 @@ async def upload_file(node_id: str, request: Request):
 
 
 @router.post('/constants/{node_id}/upload')
-async def upload_constant(node_id: str, request: Request, csv_separator: str = 'comma'):
+async def upload_constant(node_id: str, request: Request, dataframe_format: str = 'csv_comma'):
     container = request.app.state.container
     content = await request.body()
     filename = request.headers.get('x-filename', 'upload.bin')
@@ -72,7 +72,7 @@ async def upload_constant(node_id: str, request: Request, csv_separator: str = '
         filename,
         content,
         mime_type,
-        csv_separator=_resolve_csv_separator(csv_separator),
+        dataframe_format=_resolve_dataframe_upload_format(dataframe_format),
     )
     return {
         'node_id': node_id,
@@ -188,12 +188,16 @@ def _resolve_execution_log_path(*, node_id: str, stream: str, request: Request) 
     return log_path
 
 
-def _resolve_csv_separator(value: str) -> str:
-    separators = {
-        'comma': ',',
-        'semicolon': ';',
-        'tab': '\t',
+def _resolve_dataframe_upload_format(value: str) -> str:
+    formats = {
+        'parquet': 'parquet',
+        'csv_comma': 'csv_comma',
+        'csv_semicolon': 'csv_semicolon',
+        'csv_tab': 'csv_tab',
     }
-    if value not in separators:
-        raise HTTPException(status_code=400, detail='Invalid CSV separator. Expected `comma`, `semicolon`, or `tab`.')
-    return separators[value]
+    if value not in formats:
+        raise HTTPException(
+            status_code=400,
+            detail='Invalid DataFrame upload format. Expected `parquet`, `csv_comma`, `csv_semicolon`, or `csv_tab`.',
+        )
+    return formats[value]
