@@ -68,8 +68,10 @@ def parse_notebook_contract(path: NotebookSource, node_id: str) -> ParsedNoteboo
         return _empty_contract(node_id=node_id, source_hash=source_hash, issues=issues)
 
     issues: list[ValidationIssue] = []
-    for statement in module.body:
-        unparsable_issue = _unparsable_cell_issue(statement, node_id=node_id)
+    for statement_index, statement in enumerate(module.body):
+        unparsable_issue = _unparsable_cell_issue(
+            module, statement_index=statement_index, statement=statement, node_id=node_id
+        )
         if unparsable_issue is not None:
             issues.append(unparsable_issue)
     if not _has_runtime_import(module):
@@ -213,7 +215,13 @@ def _syntax_error_message(exc: SyntaxError) -> str:
     message = exc.msg.strip() if isinstance(exc.msg, str) and exc.msg.strip() else 'invalid syntax'
     if exc.lineno is None:
         return f'Syntax error: {message}.'
-    return f'Syntax error on line {exc.lineno}: {message}.'
+    snippet = _syntax_error_snippet(exc.text)
+    location = f'line {exc.lineno}'
+    if exc.offset is not None:
+        location += f', column {exc.offset}'
+    if snippet is None:
+        return f'Syntax error on {location}: {message}.'
+    return f'Syntax error on {location}: {message}. Offending code: `{snippet}`.'
 
 
 def _syntax_error_details(exc: SyntaxError) -> dict[str, object]:
@@ -227,7 +235,20 @@ def _syntax_error_details(exc: SyntaxError) -> dict[str, object]:
     return details
 
 
-def _unparsable_cell_issue(statement: ast.stmt, *, node_id: str) -> ValidationIssue | None:
+def _syntax_error_snippet(source: str | None) -> str | None:
+    if not isinstance(source, str):
+        return None
+    snippet = source.strip()
+    return snippet or None
+
+
+def _unparsable_cell_issue(
+    module: ast.Module,
+    *,
+    statement_index: int,
+    statement: ast.stmt,
+    node_id: str,
+) -> ValidationIssue | None:
     if not isinstance(statement, ast.Expr) or not isinstance(statement.value, ast.Call):
         return None
     call = statement.value
@@ -247,7 +268,10 @@ def _unparsable_cell_issue(statement: ast.stmt, *, node_id: str) -> ValidationIs
         )
 
     cell_source = dedent(raw_source.value).strip('\n')
+    cell_number = _marimo_cell_number(module, statement_index)
     details: dict[str, object] = {'cell_line': statement.lineno, 'source': cell_source}
+    if cell_number is not None:
+        details['cell_number'] = cell_number
     try:
         ast.parse(cell_source)
     except SyntaxError as exc:
@@ -258,11 +282,14 @@ def _unparsable_cell_issue(statement: ast.stmt, *, node_id: str) -> ValidationIs
         if isinstance(exc.text, str) and exc.text.strip():
             details['source_line'] = exc.text.rstrip('\n')
         message = exc.msg.strip() if isinstance(exc.msg, str) and exc.msg.strip() else 'invalid syntax'
+        location = f'Marimo cell {cell_number}' if cell_number is not None else 'a Marimo cell'
+        snippet = _syntax_error_snippet(exc.text)
+        snippet_text = f' Offending code: `{snippet}`.' if snippet is not None else ''
         return build_issue(
             node_id=node_id,
             severity=ValidationSeverity.ERROR,
             code='invalid_syntax',
-            message=f'Syntax error in a Marimo cell: {message}.',
+            message=f'Syntax error in {location}: {message}.{snippet_text}',
             details=details,
         )
 
@@ -273,6 +300,38 @@ def _unparsable_cell_issue(statement: ast.stmt, *, node_id: str) -> ValidationIs
         message='Marimo saved a cell that could not be parsed.',
         details=details,
     )
+
+
+def _marimo_cell_number(module: ast.Module, statement_index: int) -> int | None:
+    cell_number = 1
+    for index, candidate in enumerate(module.body):
+        if _is_marimo_cell_statement(candidate):
+            cell_number += 1
+        if index == statement_index:
+            return cell_number
+    return None
+
+
+def _is_marimo_cell_statement(statement: ast.stmt) -> bool:
+    if isinstance(statement, ast.FunctionDef | ast.AsyncFunctionDef):
+        return any(_is_app_cell_decorator(decorator) for decorator in statement.decorator_list)
+    if isinstance(statement, ast.Expr) and isinstance(statement.value, ast.Call):
+        call = statement.value
+        if isinstance(call.func, ast.Attribute) and isinstance(call.func.value, ast.Name):
+            return call.func.value.id == 'app' and call.func.attr == '_unparsable_cell'
+    return False
+
+
+def _is_app_cell_decorator(decorator: ast.expr) -> bool:
+    if isinstance(decorator, ast.Attribute) and isinstance(decorator.value, ast.Name):
+        return decorator.value.id == 'app' and decorator.attr == 'cell'
+    if (
+        isinstance(decorator, ast.Call)
+        and isinstance(decorator.func, ast.Attribute)
+        and isinstance(decorator.func.value, ast.Name)
+    ):
+        return decorator.func.value.id == 'app' and decorator.func.attr == 'cell'
+    return False
 
 
 def _collect_duplicate_export_issues(

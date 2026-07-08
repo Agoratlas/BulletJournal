@@ -98,8 +98,11 @@ def test_new_notebook_is_custom_and_uses_empty_template_source(tmp_path) -> None
     assert notebook.status_code == 200
     source = notebook.text
     assert 'from bulletjournal.runtime import artifacts' in source
+    assert 'from bulletjournal.runtime import artifacts, assets' in source
     assert 'import marimo as mo' in source
     assert 'import pandas as pd' in source
+    assert 'assets.push(' in source
+    assert "name='sample_table'" in source
 
 
 def test_notebook_assets_are_listed_through_dedicated_api(tmp_path) -> None:
@@ -1347,8 +1350,18 @@ def test_warning_notice_can_be_dismissed_via_api(tmp_path) -> None:
     source = notebook_path.read_text(encoding='utf-8')
     notebook_path.write_text(
         source.replace(
-            "sample_count = artifacts.pull(name='sample_count', data_type=int, default=10)",
-            "sample_count = artifacts.pull(name='sample_count', data_type='mystery', default=10)",
+            """sample_count = artifacts.pull(
+        name='sample_count',
+        data_type=int,
+        default=10,
+        description='How many sample rows to generate',
+    )""",
+            """sample_count = artifacts.pull(
+        name='sample_count',
+        data_type='mystery',
+        default=10,
+        description='How many sample rows to generate',
+    )""",
         ),
         encoding='utf-8',
     )
@@ -1501,8 +1514,19 @@ def test_invalid_notebook_changes_keep_previous_ports_and_surface_errors(tmp_pat
     original_source = notebook_path.read_text(encoding='utf-8')
     notebook_path.write_text(
         original_source.replace(
-            "artifacts.push(frame, name='sample_df', data_type=pd.DataFrame, description='Sample output frame')",
-            "artifacts.push(frame, name='renamed_df', data_type=pd.DataFrame, description='Sample output frame')\n    broken =",
+            """    artifacts.push(
+        frame,
+        name='sample_df',
+        data_type=pd.DataFrame,
+        description='Sample output frame',
+    )""",
+            """    artifacts.push(
+        frame,
+        name='renamed_df',
+        data_type=pd.DataFrame,
+        description='Sample output frame',
+    )
+    broken =""",
         ),
         encoding='utf-8',
     )
@@ -1519,6 +1543,14 @@ def test_invalid_notebook_changes_keep_previous_ports_and_surface_errors(tmp_pat
         for issue in snapshot['validation_issues']
         if issue['node_id'] == 'sample_node'
     )
+    syntax_issue = next(
+        issue
+        for issue in snapshot['validation_issues']
+        if issue['node_id'] == 'sample_node' and issue['code'] == 'invalid_syntax'
+    )
+    assert syntax_issue['message'] == 'Syntax error on line 43, column 13: invalid syntax. Offending code: `broken =`.'
+    assert syntax_issue['details']['line'] == 43
+    assert syntax_issue['details']['source'] == '    broken ='
     assert node['state'] == 'error'
 
 
@@ -1550,7 +1582,16 @@ def test_unparsable_marimo_cell_keeps_previous_ports_and_surfaces_errors(tmp_pat
     original_source = notebook_path.read_text(encoding='utf-8')
     notebook_path.write_text(
         original_source.replace(
-            "@app.cell\ndef _(pd, sample_count):\n    frame = pd.DataFrame({'value': list(range(sample_count))})\n    artifacts.push(frame, name='sample_df', data_type=pd.DataFrame, description='Sample output frame')\n    return frame",
+            """@app.cell
+def _(pd, sample_count):
+    frame = pd.DataFrame({'value': list(range(sample_count))})
+    artifacts.push(
+        frame,
+        name='sample_df',
+        data_type=pd.DataFrame,
+        description='Sample output frame',
+    )
+    return frame""",
             'app._unparsable_cell(\n    r"""\nframe = pd.DataFrame({\'value\': list(range(sample_count))})\nartifacts.push(frame, name=\'renamed_df\', data_type=pd.DataFrame, description=\'Sample output frame\')\nbroken =\nreturn frame\n"""\n)',
         ),
         encoding='utf-8',
@@ -1568,6 +1609,14 @@ def test_unparsable_marimo_cell_keeps_previous_ports_and_surfaces_errors(tmp_pat
         for issue in snapshot['validation_issues']
         if issue['node_id'] == 'sample_node'
     )
+    syntax_issue = next(
+        issue
+        for issue in snapshot['validation_issues']
+        if issue['node_id'] == 'sample_node' and issue['code'] == 'invalid_syntax'
+    )
+    assert syntax_issue['message'] == 'Syntax error in Marimo cell 4: invalid syntax. Offending code: `broken =`.'
+    assert syntax_issue['details']['cell_number'] == 4
+    assert syntax_issue['details']['source_line'] == 'broken ='
     assert node['state'] == 'error'
 
 

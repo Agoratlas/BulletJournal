@@ -127,6 +127,11 @@ type ConnectionIntent = {
   handleType: 'source' | 'target'
 } | null
 
+
+function isOrganizerGhostHandle(handleId: string | null | undefined): boolean {
+  return Boolean(handleId && (handleId.startsWith('ghost-in:') || handleId.startsWith('ghost-out:')))
+}
+
 type FlowConnectionState = {
   connectionNodeId: string | null
   connectionHandleId: string | null
@@ -1080,9 +1085,17 @@ export function GraphCanvas({ snapshot, serverNowMs = Date.now(), serverNowClien
     if (!connectionIntent || !pointerFlowPosition) {
       return previews
     }
+    const sourceNodeId = connectionIntent.nodeId
+    const sourceHandleId = connectionIntent.handleId
+    const sourceNode = snapshot.graph.nodes.find((node) => node.id === sourceNodeId) ?? null
+    const startedFromOrganizerGhost = isOrganizerGhostHandle(sourceHandleId)
+    const startedFromOrganizer = sourceNode?.kind === 'organizer'
     let nearest: { nodeId: string; insertIndex: number; distance: number } | null = null
     for (const node of snapshot.graph.nodes) {
       if (node.kind !== 'organizer') {
+        continue
+      }
+      if ((startedFromOrganizer || startedFromOrganizerGhost) && node.id === sourceNodeId) {
         continue
       }
       const layout = snapshot.graph.layout.find((entry) => entry.node_id === node.id)

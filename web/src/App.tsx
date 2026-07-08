@@ -4573,27 +4573,29 @@ function App() {
               ? `artifact: ${portActionArtifact.nodeId}/${portActionArtifact.artifactName}`
               : 'artifact: not connected'}
           </div>
-          <button
-            className="secondary menu-item"
-            disabled={portActionMenu.side !== 'input' || supportedConstantDataType(inputsForNode(portActionMenuNode).find((port) => port.name === portActionMenu.portName)?.data_type) === null}
-            onClick={() => {
-              const dataType = supportedConstantDataType(inputsForNode(portActionMenuNode).find((port) => port.name === portActionMenu.portName)?.data_type)
-              const placement = constantPlacementForInput(portActionMenuNode.id, portActionMenu.portName)
-              if (!dataType || !placement) {
-                return
-              }
-              setPortActionMenu(null)
-              setPendingBlockCreation({
-                entry: { key: 'constant', title: 'Constant', kind: 'constant' },
-                x: placement.x,
-                y: placement.y,
-                presetConstantType: dataType,
-                connectToInput: { nodeId: portActionMenuNode.id, portName: portActionMenu.portName },
-              })
-            }}
-          >
-            Set constant
-          </button>
+          {portActionMenu.side === 'input' ? (
+            <button
+              className="secondary menu-item"
+              disabled={supportedConstantDataType(inputsForNode(portActionMenuNode).find((port) => port.name === portActionMenu.portName)?.data_type) === null}
+              onClick={() => {
+                const dataType = supportedConstantDataType(inputsForNode(portActionMenuNode).find((port) => port.name === portActionMenu.portName)?.data_type)
+                const placement = constantPlacementForInput(portActionMenuNode.id, portActionMenu.portName)
+                if (!dataType || !placement) {
+                  return
+                }
+                setPortActionMenu(null)
+                setPendingBlockCreation({
+                  entry: { key: 'constant', title: 'Constant', kind: 'constant' },
+                  x: placement.x,
+                  y: placement.y,
+                  presetConstantType: dataType,
+                  connectToInput: { nodeId: portActionMenuNode.id, portName: portActionMenu.portName },
+                })
+              }}
+            >
+              Set constant
+            </button>
+          ) : null}
           {portActionMenuNode.kind !== 'constant' ? (
             <>
               <button

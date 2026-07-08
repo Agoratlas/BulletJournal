@@ -166,6 +166,101 @@ def test_runtime_context_missing_binding_error_includes_guidance(tmp_path) -> No
         context.resolve_pull('incoming')
 
 
+def test_runtime_context_interactive_refresh_surfaces_parse_error_for_pull(tmp_path) -> None:
+    project_root = init_project_root(tmp_path / 'project').root
+    notebook_path = project_root / 'notebooks' / 'consumer.py'
+    notebook_path.write_text(
+        """import marimo
+
+app = marimo.App()
+
+with app.setup:
+    from bulletjournal.runtime import artifacts
+
+@app.cell
+def _():
+    broken =
+""",
+        encoding='utf-8',
+    )
+    graph_dir = project_root / 'graph'
+    (graph_dir / 'meta.json').write_text(
+        '{\n  "schema_version": 1,\n  "project_id": "project",\n  "graph_version": 2,\n  "updated_at": "2026-03-26T00:00:00Z"\n}\n',
+        encoding='utf-8',
+    )
+    (graph_dir / 'nodes.json').write_text(
+        '[\n  {"id": "consumer", "kind": "notebook", "title": "Consumer", "path": "notebooks/consumer.py", "template": null, "ui": {}}\n]\n',
+        encoding='utf-8',
+    )
+    (graph_dir / 'edges.json').write_text('[]\n', encoding='utf-8')
+    context = RuntimeContext(
+        project_root=project_root,
+        node_id='consumer',
+        run_id='run-interactive-parse-error',
+        source_hash='old-source-hash',
+        lineage_mode=LineageMode.INTERACTIVE_HEURISTIC,
+        bindings={},
+        outputs={},
+    )
+
+    with pytest.raises(KeyError, match='could not be reparsed') as exc_info:
+        context.resolve_pull('incoming')
+
+    assert 'Syntax error on line 10, column 13: invalid syntax.' in str(exc_info.value)
+    assert 'Offending code: `broken =`.' in str(exc_info.value)
+
+
+def test_runtime_context_interactive_refresh_surfaces_parse_error_for_asset_push(tmp_path) -> None:
+    project_root = init_project_root(tmp_path / 'project').root
+    notebook_path = project_root / 'notebooks' / 'consumer.py'
+    notebook_path.write_text(
+        """import marimo
+
+app = marimo.App()
+
+with app.setup:
+    from bulletjournal.runtime import assets
+
+@app.cell
+def _():
+    broken =
+""",
+        encoding='utf-8',
+    )
+    graph_dir = project_root / 'graph'
+    (graph_dir / 'meta.json').write_text(
+        '{\n  "schema_version": 1,\n  "project_id": "project",\n  "graph_version": 2,\n  "updated_at": "2026-03-26T00:00:00Z"\n}\n',
+        encoding='utf-8',
+    )
+    (graph_dir / 'nodes.json').write_text(
+        '[\n  {"id": "consumer", "kind": "notebook", "title": "Consumer", "path": "notebooks/consumer.py", "template": null, "ui": {}}\n]\n',
+        encoding='utf-8',
+    )
+    (graph_dir / 'edges.json').write_text('[]\n', encoding='utf-8')
+    context = RuntimeContext(
+        project_root=project_root,
+        node_id='consumer',
+        run_id='run-interactive-asset-error',
+        source_hash='old-source-hash',
+        lineage_mode=LineageMode.INTERACTIVE_HEURISTIC,
+        bindings={},
+        outputs={},
+        asset_declarations={},
+    )
+
+    with pytest.raises(KeyError, match='could not be reparsed') as exc_info:
+        context.finalize_asset_push(
+            asset=runtime_assets.Markdown('hello'),
+            name='notes',
+            title='Notes',
+            description=None,
+            asset_type=runtime_assets.Markdown,
+        )
+
+    assert 'Syntax error on line 10, column 13: invalid syntax.' in str(exc_info.value)
+    assert 'Offending code: `broken =`.' in str(exc_info.value)
+
+
 def test_runtime_context_resolves_stale_upstream_with_warning_and_hashes(tmp_path) -> None:
     project_root = init_project_root(tmp_path / 'project').root
     context = RuntimeContext(

@@ -499,11 +499,21 @@ def test_parser_reports_syntax_errors() -> None:
     notebook = FIXTURES / 'bad_notebook_syntax.py'
     interface = parse_notebook_interface(notebook, node_id='bad_notebook_syntax')
 
-    assert any(issue.code == 'invalid_syntax' for issue in interface.issues)
+    issue = next(issue for issue in interface.issues if issue.code == 'invalid_syntax')
+    assert issue.message == "Syntax error on line 16, column 6: '(' was never closed. Offending code: `def _(`."
+    assert issue.details['line'] == 16
+    assert issue.details['column'] == 6
+    assert issue.details['source'] == 'def _('
 
 
 def test_parser_reports_unparsable_marimo_cells() -> None:
     notebook = FIXTURES / 'bad_notebook_unparsable_cell.py'
     interface = parse_notebook_interface(notebook, node_id='bad_notebook_unparsable_cell')
 
-    assert any(issue.code == 'invalid_syntax' for issue in interface.issues)
+    issue = next(issue for issue in interface.issues if issue.code == 'invalid_syntax')
+    assert issue.message == 'Syntax error in Marimo cell 2: invalid syntax. Offending code: `broken =`.'
+    assert issue.details['cell_number'] == 2
+    assert issue.details['line_in_cell'] == 2
+    assert issue.details['column'] == 9
+    assert issue.details['source_line'] == 'broken ='
+    assert issue.details['source_line'] == 'broken ='

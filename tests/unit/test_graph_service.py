@@ -308,6 +308,32 @@ def test_snapshot_keeps_new_template_notebook_as_template_until_edited(tmp_path)
     assert updated_notebook['template_status'] == 'modified'
 
 
+def test_default_new_notebook_includes_assets_example(tmp_path) -> None:
+    project_root = init_project_root(tmp_path / 'project').root
+    project_service = ProjectService(_FakeEventService(), TemplateService())
+    project_service.open_project(project_root)
+    graph_service = GraphService(project_service)
+
+    graph_service.apply_operations(
+        int(project_service.graph().meta['graph_version']),
+        [
+            {
+                'type': 'add_notebook_node',
+                'node_id': 'sample_node',
+                'title': 'Sample Node',
+            }
+        ],
+    )
+
+    notebook_path = project_root / 'notebooks' / 'sample_node.py'
+    source = notebook_path.read_text(encoding='utf-8')
+
+    assert 'from bulletjournal.runtime import artifacts, assets' in source
+    assert "description='How many sample rows to generate'" in source
+    assert 'assets.DataFrame(frame)' in source
+    assert "name='sample_table'" in source
+
+
 def test_graph_service_blocks_notebook_id_change_while_editor_is_open(tmp_path) -> None:
     project_root = init_project_root(tmp_path / 'project').root
     project_service = ProjectService(_FakeEventService(), TemplateService())

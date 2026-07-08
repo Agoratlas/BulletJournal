@@ -518,9 +518,7 @@ class GraphService:
             if source_text is not None
             else template.source_text
             if template is not None
-            else self.project_service.template_service.resolve_template_source(
-                'builtin/test_starter_notebook'
-            ).source_text
+            else self.project_service.template_service.resolve_template_source('builtin/empty_notebook').source_text
         )
         source = self.project_service.template_service.render_notebook_template_source(source, node_id=node_id)
         interface = self._inline_notebook_interface(source_text=source, node_id=node_id)

@@ -3168,6 +3168,7 @@ label span,
   line-height: 1.45;
   white-space: pre-wrap;
   word-break: break-word;
+  overflow-wrap: anywhere;
 }
 
 :root[data-theme='dark'] .warning-details {
@@ -3563,6 +3564,15 @@ input.invalid {
   box-shadow: var(--shadow);
   backdrop-filter: blur(14px);
   pointer-events: auto;
+  min-width: 0;
+}
+
+.notice-card pre,
+.notice-card code,
+.notice-message,
+.notice-message * {
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .notice-card.linked-to-node {

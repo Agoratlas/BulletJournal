@@ -912,6 +912,27 @@ export function formatIssueDetails(details: Record<string, unknown>): string | n
       })
       .join('\n\n')
   }
+  const parts: string[] = []
+  if (typeof details.cell_number === 'number') {
+    parts.push(`Cell: ${details.cell_number}`)
+  }
+  if (typeof details.line === 'number') {
+    parts.push(`Line: ${details.line}`)
+  }
+  if (typeof details.line_in_cell === 'number') {
+    parts.push(`Line in cell: ${details.line_in_cell}`)
+  }
+  if (typeof details.column === 'number') {
+    parts.push(`Column: ${details.column}`)
+  }
+  if (typeof details.source_line === 'string' && details.source_line.trim()) {
+    parts.push(`Code: ${details.source_line}`)
+  } else if (typeof details.source === 'string' && details.source.trim()) {
+    parts.push(`Code: ${details.source}`)
+  }
+  if (parts.length > 0) {
+    return parts.join('\n')
+  }
   const entries = Object.entries(details)
   if (!entries.length) {
     return null

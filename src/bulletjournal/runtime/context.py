@@ -31,6 +31,42 @@ from bulletjournal.storage.state_db import StateDB
 MISSING_BINDING_HELP = 'Please ensure you have connected an input or set a default value.'
 
 
+def _format_contract_error_details(issues: list[object]) -> str | None:
+    for issue in issues:
+        if getattr(issue, 'severity', None) != ValidationSeverity.ERROR:
+            continue
+        message = str(getattr(issue, 'message', '') or '').strip()
+        details = getattr(issue, 'details', {}) or {}
+        if not message:
+            continue
+        location_bits: list[str] = []
+        cell_number = details.get('cell_number')
+        line = details.get('line')
+        line_in_cell = details.get('line_in_cell')
+        if isinstance(cell_number, int):
+            location_bits.append(f'cell {cell_number}')
+        if isinstance(line, int):
+            location_bits.append(f'line {line}')
+        elif isinstance(line_in_cell, int):
+            location_bits.append(f'line {line_in_cell}')
+        location = f' ({", ".join(location_bits)})' if location_bits and 'line ' not in message.lower() else ''
+        snippet = details.get('source_line') or details.get('source')
+        if 'offending code:' in message.lower():
+            return f'{message}{location}'
+        if isinstance(snippet, str) and snippet.strip():
+            return f'{message}{location} Offending code: `{snippet.strip()}`.'
+        return f'{message}{location}'
+    return None
+
+
+def _contract_refresh_error(action: str, *, node_id: str, issues: list[object]) -> KeyError:
+    details = _format_contract_error_details(issues)
+    message = f'Cannot {action} because notebook `{node_id}` currently has validation errors and could not be reparsed.'
+    if details:
+        message = f'{message} {details}'
+    return KeyError(message)
+
+
 @dataclass(slots=True)
 class Binding:
     source_node: str
@@ -58,6 +94,7 @@ class RuntimeContext:
     pushed_outputs: list[dict[str, Any]] = field(default_factory=list)
     pushed_assets: list[dict[str, Any]] = field(default_factory=list)
     interactive_contract_key: tuple[float | None, str] | None = None
+    interactive_contract_error: KeyError | None = None
 
     def __post_init__(self) -> None:
         self.paths = ProjectPaths(self.project_root)
@@ -70,6 +107,8 @@ class RuntimeContext:
         self._refresh_interactive_contracts()
         binding = self.bindings.get(name)
         if binding is None:
+            if self.interactive_contract_error is not None:
+                raise self.interactive_contract_error
             raise KeyError(f'No binding configured for input `{name}`.')
         if not binding.source_node:
             if binding.has_default:
@@ -111,6 +150,8 @@ class RuntimeContext:
         self._refresh_interactive_contracts()
         binding = self.bindings.get(name)
         if binding is None:
+            if self.interactive_contract_error is not None:
+                raise self.interactive_contract_error
             raise KeyError(f'No binding configured for input `{name}`.')
         if binding.data_type != data_type:
             raise TypeError(f'Input contract mismatch for `{name}`: expected {binding.data_type}, got {data_type}.')
@@ -119,6 +160,8 @@ class RuntimeContext:
         self._refresh_interactive_contracts()
         binding = self.bindings.get(name)
         if binding is None:
+            if self.interactive_contract_error is not None:
+                raise self.interactive_contract_error
             raise KeyError(f'No binding configured for file input `{name}`.')
         if binding.data_type != 'file':
             raise TypeError(f'Input contract mismatch for `{name}`: expected {binding.data_type}, got file.')
@@ -159,6 +202,8 @@ class RuntimeContext:
 
     def finalize_value_push(self, *, name: str, value: Any, data_type: str, role: ArtifactRole) -> dict[str, Any]:
         self._refresh_interactive_contracts()
+        if self.interactive_contract_error is not None:
+            raise self.interactive_contract_error
         self._validate_output_contract(name=name, data_type=data_type, role=role, kind='value')
         persisted = self.object_store.persist_value(value, data_type)
         self.db.upsert_artifact_object(
@@ -174,6 +219,8 @@ class RuntimeContext:
 
     def finalize_file_push(self, *, name: str, temp_path: Path, role: ArtifactRole) -> dict[str, Any]:
         self._refresh_interactive_contracts()
+        if self.interactive_contract_error is not None:
+            raise self.interactive_contract_error
         self._validate_output_contract(name=name, data_type='file', role=role, kind='file')
         persisted = self.object_store.persist_file(temp_path)
         self.db.upsert_artifact_object(
@@ -197,6 +244,8 @@ class RuntimeContext:
         asset_type: type[BaseAsset] | None,
     ) -> dict[str, Any]:
         self._refresh_interactive_contracts()
+        if self.interactive_contract_error is not None:
+            raise self.interactive_contract_error
         declaration = self.asset_declarations.get(name)
         if declaration is None:
             raise KeyError(f'Asset `{name}` is not declared in the parsed notebook contract.')
@@ -394,12 +443,19 @@ class RuntimeContext:
             return
         contract = parse_notebook_contract(notebook_path, node_id=self.node_id)
         if any(issue.severity == ValidationSeverity.ERROR for issue in contract.issues):
+            self.interactive_contract_key = current_key
+            self.interactive_contract_error = _contract_refresh_error(
+                'refresh runtime bindings',
+                node_id=self.node_id,
+                issues=contract.issues,
+            )
             return
         self.source_hash = contract.source_hash
         self.bindings = _live_bindings_for_node(graph, contract.interface.inputs, node_id=self.node_id)
         self.outputs = {port.name: port for port in contract.interface.outputs}
         self.asset_declarations = {declaration.name: declaration for declaration in contract.asset_declarations}
         self.interactive_contract_key = current_key
+        self.interactive_contract_error = None
 
     def _interactive_contract_key_for_current_state(self) -> tuple[float | None, str]:
         notebook_path = self.paths.notebook_path(self.node_id)
