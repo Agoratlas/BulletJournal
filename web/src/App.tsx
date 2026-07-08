@@ -4099,6 +4099,7 @@ function App() {
       return
     }
     await stopSession(details.session_id)
+    removeEditorSession(details.session_id)
     dismissClientNotice(notice.issue_id)
     await refreshSnapshot()
   }
@@ -4120,6 +4121,7 @@ function App() {
       return
     }
     await stopSession(session.session_id)
+    removeEditorSession(session.session_id)
     await refreshSnapshot()
   }
 

@@ -117,6 +117,7 @@ type BulletJournalNodeData = {
   connectionIntent: ConnectionIntent
   onNodeResizePreview: (nodeId: string, x: number, y: number, w: number, h: number) => void
   onNodeResize: (nodeId: string, x: number, y: number, w: number, h: number) => void
+  onMenuOpenChange: (nodeId: string, open: boolean) => void
   activeNoticeSeverity: 'error' | 'warning' | null
   hoveredNotice: boolean
 }
@@ -587,6 +588,7 @@ const BulletJournalNodeCard = memo(({ data, selected }: NodeProps<BulletJournalN
   const [editorMenuOpen, setEditorMenuOpen] = useState(false)
   const [runMenuOpen, setRunMenuOpen] = useState(false)
   const menuRef = useRef<HTMLDivElement | null>(null)
+  const hasOpenMenu = editorMenuOpen || runMenuOpen
   const connectionIntent = data.connectionIntent
   const noticeClassName = data.activeNoticeSeverity ? `has-active-notice-${data.activeNoticeSeverity}` : ''
   const hoveredNoticeClassName = data.hoveredNotice ? 'notice-hovered' : ''
@@ -601,6 +603,13 @@ const BulletJournalNodeCard = memo(({ data, selected }: NodeProps<BulletJournalN
     const interval = window.setInterval(() => setNow(Date.now()), 100)
     return () => window.clearInterval(interval)
   }, [isExecutionActive])
+
+  useEffect(() => {
+    data.onMenuOpenChange(node.id, hasOpenMenu)
+    return () => {
+      data.onMenuOpenChange(node.id, false)
+    }
+  }, [data, hasOpenMenu, node.id])
 
   useEffect(() => {
     if (!editorMenuOpen && !runMenuOpen) {
@@ -847,7 +856,7 @@ const BulletJournalNodeCard = memo(({ data, selected }: NodeProps<BulletJournalN
 
   return (
     <div
-      className={`rf-node state-${node.state} ${node.ui?.frozen ? 'is-frozen' : ''} ${selected ? 'is-selected' : ''} ${hasBlockingValidationIssues ? 'has-validation-error' : ''} ${isExecutionActive ? 'execution-active' : ''} ${isExecutionQueued ? 'execution-queued' : ''} ${isExecutionComplete ? 'execution-complete' : ''} ${noticeClassName} ${hoveredNoticeClassName}`}
+      className={`rf-node state-${node.state} ${node.ui?.frozen ? 'is-frozen' : ''} ${selected ? 'is-selected' : ''} ${hasBlockingValidationIssues ? 'has-validation-error' : ''} ${isExecutionActive ? 'execution-active' : ''} ${isExecutionQueued ? 'execution-queued' : ''} ${isExecutionComplete ? 'execution-complete' : ''} ${hasOpenMenu ? 'has-open-menu' : ''} ${noticeClassName} ${hoveredNoticeClassName}`}
       title={validationSummary || undefined}
       onDoubleClick={(event) => {
         event.stopPropagation()
@@ -1067,9 +1076,19 @@ export function GraphCanvas({ snapshot, serverNowMs = Date.now(), serverNowClien
   const [connectionDragActive, setConnectionDragActive] = useState(false)
   const [pendingLayoutVersion, setPendingLayoutVersion] = useState(0)
   const [nodeDimensions, setNodeDimensions] = useState<Record<string, { width: number; height: number }>>({})
+  const [menuOpenNodeId, setMenuOpenNodeId] = useState<string | null>(null)
   const lastHandleSignatureRef = useRef<Record<string, string>>({})
   const lastFocusedNoticeTokenRef = useRef<number | null>(null)
   const connectionIntent = connectionDragActive ? rawConnectionIntent : null
+
+  function handleMenuOpenChange(nodeId: string, open: boolean) {
+    setMenuOpenNodeId((current) => {
+      if (open) {
+        return nodeId
+      }
+      return current === nodeId ? null : current
+    })
+  }
 
   useEffect(() => {
     if (rawConnectionIntent) {
@@ -1180,6 +1199,7 @@ export function GraphCanvas({ snapshot, serverNowMs = Date.now(), serverNowClien
           connectionIntent,
           onNodeResizePreview: previewNodeResize,
           onNodeResize,
+          onMenuOpenChange: handleMenuOpenChange,
           activeNoticeSeverity: nodeNoticeSeverityById[node.id] ?? null,
           hoveredNotice: hoveredNoticeNodeId === node.id,
         },
@@ -1193,10 +1213,10 @@ export function GraphCanvas({ snapshot, serverNowMs = Date.now(), serverNowClien
         selected: selectedNodeIds.includes(node.id),
         draggable: node.kind !== 'area' || selectedNodeIds.includes(node.id),
         connectable: node.kind !== 'area',
-        zIndex: node.kind === 'area' ? -1 : 0,
+        zIndex: node.kind === 'area' ? -1 : menuOpenNodeId === node.id ? 200 : 0,
       }
     })
-  }, [snapshot, serverNowMs, serverNowClientAnchorMs, selectedNodeIds, activeRunNodeId, queuedRunNodeIds, completedRunNodeIds, activeEditorNodeIds, onNodeContextMenu, onPortContextMenu, onEditConstantNode, onEditFileNode, onEditOrganizerNode, onEditAreaNode, onKillEditor, onNodeResize, onNodeSelect, onOpenArtifacts, onOpenDashboard, onOpenEditor, onRunNode, onToggleDashboardSource, selectedDashboardId, selectedDashboardSourceNodeIds, selectedDashboardPseudoEdgeNotebookIds, selectedDashboardPseudoEdgeDashboardIds, nodeDimensions, organizerGhostByNodeId, connectionIntent, pendingLayoutVersion, nodeNoticeSeverityById, hoveredNoticeNodeId])
+  }, [snapshot, serverNowMs, serverNowClientAnchorMs, selectedNodeIds, activeRunNodeId, queuedRunNodeIds, completedRunNodeIds, activeEditorNodeIds, onNodeContextMenu, onPortContextMenu, onEditConstantNode, onEditFileNode, onEditOrganizerNode, onEditAreaNode, onKillEditor, onNodeResize, onNodeSelect, onOpenArtifacts, onOpenDashboard, onOpenEditor, onRunNode, onToggleDashboardSource, selectedDashboardId, selectedDashboardSourceNodeIds, selectedDashboardPseudoEdgeNotebookIds, selectedDashboardPseudoEdgeDashboardIds, nodeDimensions, organizerGhostByNodeId, connectionIntent, pendingLayoutVersion, menuOpenNodeId, nodeNoticeSeverityById, hoveredNoticeNodeId])
 
   useEffect(() => {
     const currentNodeIds = new Set(snapshot.graph.nodes.map((node) => node.id))

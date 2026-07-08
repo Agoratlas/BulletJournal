@@ -362,7 +362,7 @@ class RunService:
         )
 
     def list_sessions(self) -> list[dict[str, Any]]:
-        self._publish_stopped_session_events()
+        self.publish_pending_session_events()
         return [
             {
                 'session_id': session.session_id,
@@ -373,6 +373,10 @@ class RunService:
             }
             for session in self.session_manager.list()
         ]
+
+    def publish_pending_session_events(self) -> None:
+        self.session_manager.list()
+        self._publish_stopped_session_events()
 
     def stop_session(self, session_id: str) -> dict[str, Any]:
         session = self.session_manager.get(session_id)

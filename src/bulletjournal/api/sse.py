@@ -25,6 +25,10 @@ def sse_response(
         while True:
             if await request.is_disconnected():
                 break
+            run_service = getattr(container, 'run_service', None)
+            publish_pending_session_events = getattr(run_service, 'publish_pending_session_events', None)
+            if callable(publish_pending_session_events):
+                publish_pending_session_events()
             batch = container.event_service.events_after(current_last_event_id)
             if batch['reset_required']:
                 payload = json.dumps(

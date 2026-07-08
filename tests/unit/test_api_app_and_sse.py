@@ -859,6 +859,78 @@ def test_sse_response_starts_new_connections_from_latest_event_id(monkeypatch) -
     assert chunks[1] == ': keepalive\n\n'
 
 
+def test_sse_response_flushes_pending_session_events_before_polling(monkeypatch) -> None:
+    calls: list[str] = []
+
+    class FakeEventService:
+        def events_after(self, last_event_id: int):
+            calls.append(f'events:{last_event_id}')
+            return {
+                'reset_required': False,
+                'earliest_available_id': 1,
+                'events': [
+                    {
+                        'id': 3,
+                        'event_type': 'session.stopped',
+                        'project_id': 'demo',
+                        'graph_version': 7,
+                        'payload': {'session_id': 'session-1', 'node_id': 'node-a', 'status': 'stopped'},
+                    }
+                ],
+            }
+
+    class FakeRunService:
+        def publish_pending_session_events(self) -> None:
+            calls.append('flush')
+
+    async def fake_sleep(seconds: float) -> None:
+        return None
+
+    monkeypatch.setattr(sse_module.asyncio, 'sleep', fake_sleep)
+    request: Any = FakeRequest([False, True])
+    response = sse_module.sse_response(
+        SimpleNamespace(event_service=FakeEventService(), run_service=FakeRunService()),
+        'demo',
+        request,
+        last_event_id=0,
+    )
+
+    chunks = asyncio.run(_collect_chunks(response))
+
+    assert calls == ['flush', 'events:0']
+    assert chunks[0] == 'retry: 1000\n\n'
+    assert 'event: session.stopped' in chunks[1]
+    assert '"session_id": "session-1"' in chunks[1]
+
+
+def test_run_service_publish_pending_session_events_detects_exited_sessions() -> None:
+    event_service = FakePublishedEventService()
+    project_service = SimpleNamespace(
+        event_service=event_service,
+        require_project=lambda: SimpleNamespace(metadata=SimpleNamespace(project_id='demo')),
+        graph=lambda: SimpleNamespace(meta={'graph_version': 7}),
+    )
+    run_service = RunService(project_service)
+    session = MarimoSession(
+        session_id='session-2',
+        node_id='node-b',
+        run_id='run-2',
+        notebook_path='/tmp/demo.py',
+        host='127.0.0.1',
+        port=1234,
+        base_url='/api/v1/edit/sessions/session-2',
+        public_url='http://example.test/api/v1/edit/sessions/session-2',
+        process=cast(Any, SimpleNamespace(poll=lambda: 0, terminate=lambda: None)),
+    )
+    run_service.session_manager._sessions[session.session_id] = session
+
+    run_service.publish_pending_session_events()
+
+    assert event_service.published[-1]['event_type'] == 'session.stopped'
+    assert event_service.published[-1]['payload']['session_id'] == 'session-2'
+    assert run_service.session_manager.get(session.session_id) is None
+
+
 def test_run_service_publishes_session_stopped_event_when_session_exits() -> None:
     event_service = FakePublishedEventService()
     project_service = SimpleNamespace(
