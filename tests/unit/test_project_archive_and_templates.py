@@ -80,6 +80,44 @@ def test_project_archive_import_rejects_schema_version_1(tmp_path: Path) -> None
         import_project_archive(invalid_archive_path, tmp_path / 'imported-invalid')
 
 
+def test_project_archive_full_export_falls_back_for_incompatible_project_schema(tmp_path: Path) -> None:
+    project_root = init_project_root(tmp_path / 'project', project_id='study-a').root
+    paths = ProjectPaths(project_root)
+    project_json = json.loads(paths.project_json_path.read_text(encoding='utf-8'))
+    project_json['schema_version'] = 1
+    paths.project_json_path.write_text(json.dumps(project_json), encoding='utf-8')
+    pulled_file = paths.pulled_files_dir / 'raw.csv'
+    pulled_file.parent.mkdir(parents=True, exist_ok=True)
+    pulled_file.write_text('a,b\n1,2\n', encoding='utf-8')
+    archive_path = tmp_path / 'study-a-full.zip'
+
+    exported = export_project_archive(project_root, archive_path, mode=ProjectExportMode.FULL)
+
+    assert exported['project_id'] == 'study-a'
+    assert exported['mode'] == ProjectExportMode.FULL.value
+    with zipfile.ZipFile(archive_path) as zf:
+        names = set(zf.namelist())
+        assert 'temp/pulled_files/raw.csv' in names
+        archived_project_json = json.loads(zf.read('metadata/project.json').decode('utf-8'))
+    assert archived_project_json['schema_version'] == 1
+
+
+@pytest.mark.parametrize('mode', [ProjectExportMode.CODE_ONLY, ProjectExportMode.CODE_AND_DATA])
+def test_project_archive_non_full_exports_reject_incompatible_project_schema(
+    tmp_path: Path,
+    mode: ProjectExportMode,
+) -> None:
+    project_root = init_project_root(tmp_path / 'project', project_id='study-a').root
+    paths = ProjectPaths(project_root)
+    project_json = json.loads(paths.project_json_path.read_text(encoding='utf-8'))
+    project_json['schema_version'] = 1
+    paths.project_json_path.write_text(json.dumps(project_json), encoding='utf-8')
+    archive_path = tmp_path / f'{mode.value}.zip'
+
+    with pytest.raises(ProjectValidationError, match='Schema version 1 projects are no longer supported'):
+        export_project_archive(project_root, archive_path, mode=mode)
+
+
 def test_project_archive_export_uses_root_level_layout_without_manifest(tmp_path: Path) -> None:
     project_root = init_project_root(tmp_path / 'project', project_id='study-a').root
     archive_path = tmp_path / 'study-a.zip'

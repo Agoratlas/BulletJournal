@@ -9,11 +9,12 @@ from contextlib import suppress
 from enum import StrEnum
 from pathlib import Path, PurePosixPath
 
-from bulletjournal.config import GRAPH_SCHEMA_VERSION
+from bulletjournal.config import GRAPH_SCHEMA_VERSION, PROJECT_SCHEMA_VERSION
 from bulletjournal.domain.enums import ArtifactState
 from bulletjournal.domain.errors import ProjectValidationError
 from bulletjournal.storage.project_fs import (
     ProjectPaths,
+    is_project_root,
     load_project_json,
     require_project_root,
     validate_project_id,
@@ -54,11 +55,17 @@ def export_project_archive(
     *,
     mode: ProjectExportMode = ProjectExportMode.FULL,
 ) -> dict[str, object]:
-    paths = require_project_root(project_root)
     archive = archive_path.resolve()
     archive.parent.mkdir(parents=True, exist_ok=True)
     resolved_mode = ProjectExportMode(mode)
-    project_json = load_project_json(paths)
+    paths, project_json, use_full_export_fallback = _resolve_project_for_export(project_root, mode=resolved_mode)
+    if use_full_export_fallback:
+        _write_archive_from_root(paths.root, archive)
+        return {
+            'archive_path': str(archive),
+            'project_id': str(project_json['project_id']),
+            'mode': resolved_mode.value,
+        }
     with tempfile.TemporaryDirectory(prefix='bulletjournal-export-') as temp_dir:
         staged_root = Path(temp_dir) / 'project'
         _stage_project_for_export(paths, staged_root, mode=resolved_mode)
@@ -70,6 +77,38 @@ def export_project_archive(
         'project_id': str(project_json['project_id']),
         'mode': resolved_mode.value,
     }
+
+
+def _resolve_project_for_export(
+    project_root: Path,
+    *,
+    mode: ProjectExportMode,
+) -> tuple[ProjectPaths, dict[str, object], bool]:
+    resolved_root = project_root.resolve()
+    if mode == ProjectExportMode.FULL:
+        paths = ProjectPaths(resolved_root)
+        if is_project_root(paths.root):
+            project_json = load_project_json(paths)
+            validate_project_id(str(project_json.get('project_id') or ''))
+            if not _project_schema_supports_staged_export(project_json, source=str(paths.project_json_path)):
+                return paths, project_json, True
+    paths = require_project_root(resolved_root)
+    return paths, load_project_json(paths), False
+
+
+def _project_schema_supports_staged_export(project_json: dict[str, object], *, source: str) -> bool:
+    raw_version = project_json.get('schema_version')
+    try:
+        version = int(raw_version)
+    except (TypeError, ValueError) as exc:
+        raise ProjectValidationError(f'{source} is missing a valid `schema_version`.') from exc
+    if version != PROJECT_SCHEMA_VERSION:
+        return False
+    try:
+        validate_project_schema_version(project_json, source=source)
+    except ProjectValidationError:
+        raise
+    return True
 
 
 def import_project_archive(archive_path: Path, destination_root: Path) -> dict[str, object]:
@@ -216,7 +255,7 @@ def _write_archive_from_root(root: Path, archive_path: Path) -> None:
 def _iter_directory_members(root: Path) -> set[str]:
     members = set(REQUIRED_EXPORT_DIRECTORIES)
     for path in root.rglob('*'):
-        if path.is_dir():
+        if path.is_dir() and not _should_exclude_path(path):
             members.add(path.relative_to(root).as_posix())
     return members
 
