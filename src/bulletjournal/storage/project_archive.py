@@ -14,7 +14,6 @@ from bulletjournal.domain.enums import ArtifactState
 from bulletjournal.domain.errors import ProjectValidationError
 from bulletjournal.storage.project_fs import (
     ProjectPaths,
-    is_project_root,
     load_project_json,
     require_project_root,
     validate_project_id,
@@ -60,7 +59,7 @@ def export_project_archive(
     resolved_mode = ProjectExportMode(mode)
     paths, project_json, use_full_export_fallback = _resolve_project_for_export(project_root, mode=resolved_mode)
     if use_full_export_fallback:
-        _write_archive_from_root(paths.root, archive)
+        _write_archive_from_root(paths.root, archive, include_required_directories=False)
         return {
             'archive_path': str(archive),
             'project_id': str(project_json['project_id']),
@@ -85,15 +84,27 @@ def _resolve_project_for_export(
     mode: ProjectExportMode,
 ) -> tuple[ProjectPaths, dict[str, object], bool]:
     resolved_root = project_root.resolve()
+    paths = ProjectPaths(resolved_root)
     if mode == ProjectExportMode.FULL:
-        paths = ProjectPaths(resolved_root)
-        if is_project_root(paths.root):
-            project_json = load_project_json(paths)
+        project_json = _load_project_json_for_full_export(paths)
+        if project_json is not None:
             validate_project_id(str(project_json.get('project_id') or ''))
             if not _project_schema_supports_staged_export(project_json, source=str(paths.project_json_path)):
                 return paths, project_json, True
     paths = require_project_root(resolved_root)
     return paths, load_project_json(paths), False
+
+
+def _load_project_json_for_full_export(paths: ProjectPaths) -> dict[str, object] | None:
+    try:
+        payload = json.loads(paths.project_json_path.read_text(encoding='utf-8'))
+    except FileNotFoundError:
+        return None
+    except json.JSONDecodeError as exc:
+        raise ProjectValidationError(f'{paths.project_json_path} is not valid JSON.') from exc
+    if not isinstance(payload, dict):
+        raise ProjectValidationError(f'{paths.project_json_path} must be a JSON object.')
+    return payload
 
 
 def _project_schema_supports_staged_export(project_json: dict[str, object], *, source: str) -> bool:
@@ -244,16 +255,18 @@ def _reconcile_staged_state_db(paths: ProjectPaths, *, mode: ProjectExportMode) 
         _checkpoint_sqlite_database(connection)
 
 
-def _write_archive_from_root(root: Path, archive_path: Path) -> None:
+def _write_archive_from_root(root: Path, archive_path: Path, *, include_required_directories: bool = True) -> None:
     with zipfile.ZipFile(archive_path, 'w', compression=zipfile.ZIP_DEFLATED) as zf:
-        for directory in sorted(_iter_directory_members(root)):
+        for directory in sorted(
+            _iter_directory_members(root, include_required_directories=include_required_directories)
+        ):
             zf.writestr(f'{directory}/', b'')
         for file_path in sorted(path for path in root.rglob('*') if path.is_file() and not _should_exclude_path(path)):
             zf.write(file_path, arcname=file_path.relative_to(root).as_posix())
 
 
-def _iter_directory_members(root: Path) -> set[str]:
-    members = set(REQUIRED_EXPORT_DIRECTORIES)
+def _iter_directory_members(root: Path, *, include_required_directories: bool) -> set[str]:
+    members = set(REQUIRED_EXPORT_DIRECTORIES) if include_required_directories else set()
     for path in root.rglob('*'):
         if path.is_dir() and not _should_exclude_path(path):
             members.add(path.relative_to(root).as_posix())

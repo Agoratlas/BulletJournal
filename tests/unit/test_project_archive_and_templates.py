@@ -86,6 +86,8 @@ def test_project_archive_full_export_falls_back_for_incompatible_project_schema(
     project_json = json.loads(paths.project_json_path.read_text(encoding='utf-8'))
     project_json['schema_version'] = 1
     paths.project_json_path.write_text(json.dumps(project_json), encoding='utf-8')
+    paths.uv_lock_path.unlink()
+    paths.checkpoints_dir.rmdir()
     pulled_file = paths.pulled_files_dir / 'raw.csv'
     pulled_file.parent.mkdir(parents=True, exist_ok=True)
     pulled_file.write_text('a,b\n1,2\n', encoding='utf-8')
@@ -98,6 +100,8 @@ def test_project_archive_full_export_falls_back_for_incompatible_project_schema(
     with zipfile.ZipFile(archive_path) as zf:
         names = set(zf.namelist())
         assert 'temp/pulled_files/raw.csv' in names
+        assert 'uv.lock' not in names
+        assert 'checkpoints/' not in names
         archived_project_json = json.loads(zf.read('metadata/project.json').decode('utf-8'))
     assert archived_project_json['schema_version'] == 1
 
