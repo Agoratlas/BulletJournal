@@ -3353,8 +3353,9 @@ label span,
   display: grid;
   gap: 6px;
   width: min(280px, calc(100vw - 24px));
-  min-width: 220px;
+  min-width: min(220px, calc(100vw - 24px));
   max-width: calc(100vw - 24px);
+  box-sizing: border-box;
   padding: 8px;
   border-radius: 16px;
   background: rgba(255, 250, 242, 0.94);
@@ -3364,6 +3365,7 @@ label span,
 }
 
 .node-action-menu .menu-item {
+  min-width: 0;
   width: 100%;
   display: flex;
   align-items: center;
@@ -3400,10 +3402,12 @@ label span,
 }
 
 .context-menu-label {
+  min-width: 0;
   padding: 4px 6px 8px;
   color: var(--muted);
   font-size: 11px;
   line-height: 1.35;
+  overflow-wrap: anywhere;
 }
 
 .warning-chip.error {
@@ -3516,6 +3520,8 @@ label span,
 
 .session-splash-card {
   width: min(540px, 100%);
+  box-sizing: border-box;
+  overflow: hidden;
   padding: 28px;
   border-radius: var(--radius);
   background: var(--panel);
@@ -3524,6 +3530,12 @@ label span,
   display: grid;
   gap: 16px;
   text-align: center;
+}
+
+.session-splash-card .subhead,
+.session-splash-card strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .spinner {

@@ -62,9 +62,9 @@ export function isEditableTarget(target: EventTarget | null): boolean {
   return target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName)
 }
 
-function prefixedNodeId(nodeIdPrefix: string | null | undefined, templateNodeId: string): string {
-  const normalizedPrefix = normalizeNodeId(nodeIdPrefix ?? '')
-  return normalizedPrefix ? `${normalizedPrefix}_${templateNodeId}` : templateNodeId
+function suffixedNodeId(nodeIdSuffix: string | null | undefined, templateNodeId: string): string {
+  const normalizedSuffix = normalizeNodeId(nodeIdSuffix ?? '')
+  return normalizedSuffix ? `${templateNodeId}_${normalizedSuffix}` : templateNodeId
 }
 
 function nextAvailableNodeIdForSet(existingNodeIds: Set<string>, base: string): string {
@@ -447,20 +447,20 @@ export function clampContextMenuPosition(position: { x: number; y: number }, est
 export function pipelineTemplateNodeRecords(
   snapshot: ProjectSnapshot,
   templateRef: string,
-  nodeIdPrefix?: string | null,
+  nodeIdSuffix?: string | null,
 ): Array<{ nodeId: string; title: string }> {
   const template = snapshot.templates.find((entry) => entry.ref === templateRef && entry.kind === 'pipeline')
   const existingNodeIds = new Set(snapshot.graph.nodes.map((node) => node.id))
-  const normalizedPrefix = normalizeNodeId(nodeIdPrefix ?? '')
+  const normalizedSuffix = normalizeNodeId(nodeIdSuffix ?? '')
   return (template?.definition?.nodes ?? []).map((node) => {
     const kind = String(node.kind ?? '')
     const nodeId = kind === 'constant'
-      ? nextAvailableNodeIdForSet(existingNodeIds, normalizedPrefix ? `${normalizedPrefix}_constant` : 'constant')
-      : prefixedNodeId(nodeIdPrefix, node.id)
+      ? nextAvailableNodeIdForSet(existingNodeIds, normalizedSuffix ? `constant_${normalizedSuffix}` : 'constant')
+      : suffixedNodeId(nodeIdSuffix, node.id)
     existingNodeIds.add(nodeId)
     return {
       nodeId,
-      title: nodeIdPrefix?.trim() ? `${nodeIdPrefix.trim()} ${node.title}` : node.title,
+      title: node.title,
     }
   })
 }

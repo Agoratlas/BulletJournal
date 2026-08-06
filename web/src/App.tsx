@@ -83,8 +83,8 @@ type PendingPipelineCreation = {
   x: number
   y: number
   template: TemplateRecord
-  suggestedPrefix: string
-  requirePrefix: boolean
+  suggestedSuffix: string
+  requireSuffix: boolean
 }
 
 type PendingOrganizerConnection = {
@@ -2910,11 +2910,11 @@ function App() {
     })
   }
 
-  async function handleCreatePipelineTemplate(templateRef: string, placement: { x: number; y: number }, nodeIdPrefix?: string | null) {
+  async function handleCreatePipelineTemplate(templateRef: string, placement: { x: number; y: number }, nodeIdSuffix?: string | null) {
     if (!liveSnapshot) {
       return
     }
-    const createdNodes = pipelineTemplateNodeRecords(liveSnapshot, templateRef, nodeIdPrefix)
+    const createdNodes = pipelineTemplateNodeRecords(liveSnapshot, templateRef, nodeIdSuffix)
     const redo: GraphMutationPlan = {
       operations: [
         {
@@ -2922,7 +2922,7 @@ function App() {
           template_ref: templateRef,
           x: snapToGrid(placement.x),
           y: snapToGrid(placement.y),
-          node_id_prefix: nodeIdPrefix ?? null,
+          node_id_suffix: nodeIdSuffix ?? null,
         },
       ],
     }
@@ -3070,22 +3070,21 @@ function App() {
       .map((node) => node.id)
   }
 
-  function pipelinePrefixRequirements(template: TemplateRecord) {
+  function pipelineSuffixRequirements(template: TemplateRecord) {
     const templateNodeIds = pipelineTemplateNodeIds(template)
     const colliding = templateNodeIds.filter((nodeId) => existingNodeIdSet.has(nodeId))
-    const suggestedPrefixBase = normalizeNodeId(template.title)
-    let suggestedPrefix = suggestedPrefixBase
+    let suggestedSuffix = 'copy'
     if (colliding.length) {
       let index = 2
-      while (!suggestedPrefix || templateNodeIds.some((nodeId) => existingNodeIdSet.has(`${suggestedPrefix}_${nodeId}`))) {
-        suggestedPrefix = `${suggestedPrefixBase || 'pipeline'}_${index}`
+      while (templateNodeIds.some((nodeId) => existingNodeIdSet.has(`${nodeId}_${suggestedSuffix}`))) {
+        suggestedSuffix = `copy_${index}`
         index += 1
       }
     }
     return {
       templateNodeIds,
-      requirePrefix: colliding.length > 0,
-      suggestedPrefix: colliding.length > 0 ? suggestedPrefix : '',
+      requireSuffix: colliding.length > 0,
+      suggestedSuffix: colliding.length > 0 ? suggestedSuffix : '',
     }
   }
 
@@ -3128,15 +3127,15 @@ function App() {
       }
       setPendingBlockCreation(null)
       const pipelinePlacement = pipelineTopLeftForCenter(template, { x, y })
-      const { templateNodeIds, requirePrefix, suggestedPrefix } = pipelinePrefixRequirements(template)
-      if (!requirePrefix) {
+      const { templateNodeIds, requireSuffix, suggestedSuffix } = pipelineSuffixRequirements(template)
+      if (!requireSuffix) {
         await handleCreatePipelineTemplate(entry.templateRef, pipelinePlacement, null)
         return
       }
       if (!templateNodeIds.length) {
         return
       }
-      setPendingPipelineCreation({ entry, x: pipelinePlacement.x, y: pipelinePlacement.y, template, suggestedPrefix, requirePrefix })
+      setPendingPipelineCreation({ entry, x: pipelinePlacement.x, y: pipelinePlacement.y, template, suggestedSuffix, requireSuffix })
       return
     }
     if (entry.kind === 'organizer') {
@@ -3184,14 +3183,14 @@ function App() {
     await openCreateBlockDialog(entry)
   }
 
-  async function handleConfirmCreatePipeline(payload: { nodeIdPrefix: string | null }) {
+  async function handleConfirmCreatePipeline(payload: { nodeIdSuffix: string | null }) {
     if (!pendingPipelineCreation || !pendingPipelineCreation.entry.templateRef) {
       return
     }
     const { entry, x, y } = pendingPipelineCreation
     const templateRef = entry.templateRef!
     setPendingPipelineCreation(null)
-    await handleCreatePipelineTemplate(templateRef, { x, y }, payload.nodeIdPrefix)
+    await handleCreatePipelineTemplate(templateRef, { x, y }, payload.nodeIdSuffix)
   }
 
   async function handleConfirmCreateBlock(payload: { nodeId: string; title: string }) {
@@ -4799,8 +4798,8 @@ function App() {
           pipelineLabel={pendingPipelineCreation.entry.title}
           existingIds={existingNodeIds}
           templateNodeIds={pipelineTemplateNodeIds(pendingPipelineCreation.template)}
-          suggestedPrefix={pendingPipelineCreation.suggestedPrefix}
-          requirePrefix={pendingPipelineCreation.requirePrefix}
+          suggestedSuffix={pendingPipelineCreation.suggestedSuffix}
+          requireSuffix={pendingPipelineCreation.requireSuffix}
           onClose={() => setPendingPipelineCreation(null)}
           onCreate={handleConfirmCreatePipeline}
         />

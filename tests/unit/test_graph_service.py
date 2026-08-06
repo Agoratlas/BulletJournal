@@ -875,18 +875,22 @@ def _():
                 'template_ref': 'builtin/pipeline_with_dashboard',
                 'x': 80,
                 'y': 80,
-                'node_id_prefix': 'demo',
+                'node_id_suffix': 'copy',
             }
         ],
     )
 
     assert any(
-        node['id'] == 'demo_dashboard_view' and node['kind'] == 'dashboard' for node in created['graph']['nodes']
+        node['id'] == 'dashboard_view_copy' and node['kind'] == 'dashboard' for node in created['graph']['nodes']
     )
-    dashboard_payload = project_service.dashboard_service.get_dashboard('demo_dashboard_view')
-    assert dashboard_payload['sources'] == [{'node_id': 'demo_analysis'}]
-    assert dashboard_payload['panels'][0]['node_id'] == 'demo_analysis'
-    assert dashboard_payload['panels'][0]['panel_id'] == 'demo_analysis/notes'
+    assert any(node['id'] == 'analysis_copy' and node['title'] == 'Analysis' for node in created['graph']['nodes'])
+    assert any(
+        node['id'] == 'dashboard_view_copy' and node['title'] == 'Dashboard View' for node in created['graph']['nodes']
+    )
+    dashboard_payload = project_service.dashboard_service.get_dashboard('dashboard_view_copy')
+    assert dashboard_payload['sources'] == [{'node_id': 'analysis_copy'}]
+    assert dashboard_payload['panels'][0]['node_id'] == 'analysis_copy'
+    assert dashboard_payload['panels'][0]['panel_id'] == 'analysis_copy/notes'
 
 
 def test_graph_changes_create_automatic_checkpoint_when_last_is_older_than_ten_minutes(

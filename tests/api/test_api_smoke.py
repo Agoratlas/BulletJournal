@@ -1921,7 +1921,7 @@ def test_graph_patch_can_add_pipeline_template(tmp_path) -> None:
     assert layout_by_node['analysis_dashboard']['y'] == 320
 
 
-def test_graph_patch_requires_prefix_when_pipeline_template_collides(tmp_path) -> None:
+def test_graph_patch_requires_suffix_when_pipeline_template_collides(tmp_path) -> None:
     project_root = init_project_root(tmp_path / 'project').root
     app = create_app(project_path=project_root)
     client = TestClient(app)
@@ -1958,10 +1958,10 @@ def test_graph_patch_requires_prefix_when_pipeline_template_collides(tmp_path) -
     )
 
     assert duplicate.status_code == 409
-    assert 'Use a prefix to instantiate it' in duplicate.json()['detail']
+    assert 'Use a suffix to instantiate it' in duplicate.json()['detail']
 
 
-def test_graph_patch_accepts_prefixed_pipeline_template(tmp_path) -> None:
+def test_graph_patch_accepts_suffixed_pipeline_template(tmp_path) -> None:
     project_root = init_project_root(tmp_path / 'project').root
     app = create_app(project_path=project_root)
     client = TestClient(app)
@@ -1992,7 +1992,7 @@ def test_graph_patch_accepts_prefixed_pipeline_template(tmp_path) -> None:
                 {
                     'type': 'add_pipeline_template',
                     'template_ref': 'builtin/example_movie_pipeline',
-                    'node_id_prefix': 'study_b',
+                    'node_id_suffix': 'copy',
                 }
             ],
         },
@@ -2002,19 +2002,19 @@ def test_graph_patch_accepts_prefixed_pipeline_template(tmp_path) -> None:
     snapshot = client.get('/api/v1/project/snapshot').json()
     node_ids = {node['id'] for node in snapshot['graph']['nodes']}
     assert {
-        'study_b_constant',
-        'study_b_constant_2',
-        'study_b_movie_dataset_download',
-        'study_b_duration_and_date_analysis',
-        'study_b_advanced_rating_analysis',
-        'study_b_movie_genre_analysis',
-        'study_b_movie_recommendation',
-        'study_b_analysis_dashboard',
-        'study_b_area',
+        'constant_copy',
+        'constant_copy_2',
+        'movie_dataset_download_copy',
+        'duration_and_date_analysis_copy',
+        'advanced_rating_analysis_copy',
+        'movie_genre_analysis_copy',
+        'movie_recommendation_copy',
+        'analysis_dashboard_copy',
+        'area_copy',
     } <= node_ids
 
 
-def test_pipeline_constants_do_not_force_prefix_collisions(tmp_path, monkeypatch) -> None:
+def test_pipeline_constants_do_not_force_suffix_collisions(tmp_path, monkeypatch) -> None:
     pipeline_source = json.dumps(
         {
             'title': 'Constant Only',

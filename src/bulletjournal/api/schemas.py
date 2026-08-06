@@ -89,7 +89,7 @@ class AddPipelineTemplateOperation(StrictModel):
     template_ref: str
     x: int = 80
     y: int = 80
-    node_id_prefix: str | None = None
+    node_id_suffix: str | None = None
 
 
 class AddEdgeOperation(StrictModel):

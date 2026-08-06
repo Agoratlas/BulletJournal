@@ -721,8 +721,7 @@ class GraphService:
         min_y = min((int(item.get('y', 0)) for item in layout_rows if isinstance(item, dict)), default=0)
         offset_x = int(operation.get('x', 80)) - min_x
         offset_y = int(operation.get('y', 80)) - min_y
-        node_id_prefix = _normalize_node_id_prefix(operation.get('node_id_prefix'))
-        title_prefix = _normalize_title_prefix(operation.get('node_id_prefix'))
+        node_id_suffix = _normalize_node_id_suffix(operation.get('node_id_suffix'))
 
         notebook_creates: list[tuple[str, str]] = []
         input_heads: list[tuple[str, str]] = []
@@ -747,10 +746,10 @@ class GraphService:
                 )
             kind = str(raw_node.get('kind') or '')
             resolved_node_id = (
-                _next_available_node_id(graph, f'{node_id_prefix}constant' if node_id_prefix else 'constant')
+                _next_available_node_id(graph, f'constant{node_id_suffix}' if node_id_suffix else 'constant')
                 if kind == NodeKind.CONSTANT.value
-                else f'{node_id_prefix}{template_node_id}'
-                if node_id_prefix
+                else f'{template_node_id}{node_id_suffix}'
+                if node_id_suffix
                 else template_node_id
             )
             if kind != NodeKind.CONSTANT.value and (
@@ -758,9 +757,9 @@ class GraphService:
             ):
                 raise GraphValidationError(
                     f'Pipeline template `{template_ref}` would create duplicate node `{resolved_node_id}`. '
-                    'Use a prefix to instantiate it.'
+                    'Use a suffix to instantiate it.'
                 )
-            resolved_title = _apply_title_prefix(str(raw_node.get('title') or template_node_id), title_prefix)
+            resolved_title = str(raw_node.get('title') or template_node_id)
             if kind == NodeKind.NOTEBOOK.value:
                 add_operation = {
                     'node_id': resolved_node_id,
@@ -1536,12 +1535,12 @@ def _port_data_type(ports: list[dict[str, Any]], name: str) -> str | None:
     return None
 
 
-def _normalize_node_id_prefix(value: Any) -> str:
+def _normalize_node_id_suffix(value: Any) -> str:
     if value is None:
         return ''
     normalized = re.sub(r'[^a-z0-9_]+', '_', str(value).strip().lower())
     normalized = re.sub(r'_+', '_', normalized).strip('_')
-    return f'{normalized}_' if normalized else ''
+    return f'_{normalized}' if normalized else ''
 
 
 def _pipeline_constant_artifact_name(raw_node: dict[str, Any]) -> str:
@@ -1581,17 +1580,6 @@ def _next_available_node_id(graph: GraphData, base: str) -> str:
     while f'{normalized_base}_{index}' in existing_ids:
         index += 1
     return f'{normalized_base}_{index}'
-
-
-def _normalize_title_prefix(value: Any) -> str:
-    if value is None:
-        return ''
-    normalized = str(value).strip()
-    return f'{normalized} ' if normalized else ''
-
-
-def _apply_title_prefix(title: str, prefix: str) -> str:
-    return f'{prefix}{title}' if prefix else title
 
 
 def _coerce_organizer_ports(raw_ports: Any) -> list[dict[str, str]]:

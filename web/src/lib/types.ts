@@ -524,7 +524,7 @@ export type GraphPatchOperation =
   | { type: 'add_organizer_node'; node_id: string; title?: string; ui?: { frozen?: boolean; organizer_ports?: Array<{ key: string; name: string; data_type: string }> }; x?: number; y?: number; w?: number; h?: number }
   | { type: 'add_area_node'; node_id: string; title?: string; ui?: { frozen?: boolean; title_position?: string; area_color?: string; area_filled?: boolean }; x?: number; y?: number; w?: number; h?: number }
   | { type: 'add_dashboard_node'; node_id: string; title?: string; ui?: { source_count?: number; panel_count?: number }; x?: number; y?: number; w?: number; h?: number }
-  | { type: 'add_pipeline_template'; template_ref: string; x?: number; y?: number; node_id_prefix?: string | null }
+  | { type: 'add_pipeline_template'; template_ref: string; x?: number; y?: number; node_id_suffix?: string | null }
   | { type: 'add_edge'; source_node: string; source_port: string; target_node: string; target_port: string }
   | { type: 'remove_edge'; edge_id: string }
   | { type: 'update_node_layout'; node_id: string; x: number; y: number; w?: number; h?: number }

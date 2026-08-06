@@ -335,36 +335,36 @@ type CreatePipelineDialogProps = {
   pipelineLabel: string
   existingIds: string[]
   templateNodeIds: string[]
-  suggestedPrefix: string
-  requirePrefix: boolean
+  suggestedSuffix: string
+  requireSuffix: boolean
   onClose: () => void
-  onCreate: (payload: { nodeIdPrefix: string | null }) => Promise<void>
+  onCreate: (payload: { nodeIdSuffix: string | null }) => Promise<void>
 }
 
 export function CreatePipelineDialog({
   pipelineLabel,
   existingIds,
   templateNodeIds,
-  suggestedPrefix,
-  requirePrefix,
+  suggestedSuffix,
+  requireSuffix,
   onClose,
   onCreate,
 }: CreatePipelineDialogProps) {
-  const [prefix, setPrefix] = useState(suggestedPrefix)
+  const [suffix, setSuffix] = useState(suggestedSuffix)
   const [busy, setBusy] = useState(false)
 
   useEffect(() => {
-    setPrefix(suggestedPrefix)
+    setSuffix(suggestedSuffix)
     setBusy(false)
-  }, [suggestedPrefix])
+  }, [suggestedSuffix])
 
-  const resolvedPrefix = useMemo(() => normalizeNodeId(prefix), [prefix])
-  const prefixedNodeIds = useMemo(() => {
-    return templateNodeIds.map((nodeId) => (resolvedPrefix ? `${resolvedPrefix}_${nodeId}` : nodeId))
-  }, [resolvedPrefix, templateNodeIds])
-  const duplicateIds = prefixedNodeIds.filter((nodeId) => existingIds.includes(nodeId))
-  const missingRequiredPrefix = requirePrefix && !resolvedPrefix
-  const invalid = missingRequiredPrefix || duplicateIds.length > 0
+  const resolvedSuffix = useMemo(() => normalizeNodeId(suffix), [suffix])
+  const suffixedNodeIds = useMemo(() => {
+    return templateNodeIds.map((nodeId) => (resolvedSuffix ? `${nodeId}_${resolvedSuffix}` : nodeId))
+  }, [resolvedSuffix, templateNodeIds])
+  const duplicateIds = suffixedNodeIds.filter((nodeId) => existingIds.includes(nodeId))
+  const missingRequiredSuffix = requireSuffix && !resolvedSuffix
+  const invalid = missingRequiredSuffix || duplicateIds.length > 0
 
   async function submit() {
     if (invalid) {
@@ -372,7 +372,7 @@ export function CreatePipelineDialog({
     }
     setBusy(true)
     try {
-      await onCreate({ nodeIdPrefix: resolvedPrefix || null })
+      await onCreate({ nodeIdSuffix: resolvedSuffix || null })
       onClose()
     } finally {
       setBusy(false)
@@ -388,27 +388,27 @@ export function CreatePipelineDialog({
     <Modal title={`Create ${pipelineLabel}`} onClose={onClose}>
       <form className="form-grid" onSubmit={handleSubmit}>
         <label>
-          <span>Node ID prefix</span>
+          <span>Node ID suffix</span>
           <input
             className={invalid ? 'invalid' : ''}
-            value={prefix}
-            onChange={(event) => setPrefix(event.target.value)}
-            placeholder="study_a"
+            value={suffix}
+            onChange={(event) => setSuffix(event.target.value)}
+            placeholder="copy"
             spellCheck={false}
           />
-          {missingRequiredPrefix ? (
-            <span className="field-note error">A prefix is required because this pipeline would reuse existing node IDs.</span>
+          {missingRequiredSuffix ? (
+            <span className="field-note error">A suffix is required because this pipeline would reuse existing node IDs.</span>
           ) : duplicateIds.length ? (
             <span className="field-note error">These node IDs are still taken: {duplicateIds.join(', ')}</span>
-          ) : requirePrefix ? (
-            <span className="field-note">The prefix is added to every node in this pipeline.</span>
+          ) : requireSuffix ? (
+            <span className="field-note">The suffix is added to every node ID in this pipeline.</span>
           ) : (
             <span className="field-note">Optional. Leave blank to keep the template node IDs as-is.</span>
           )}
         </label>
         <label>
           <span>Resulting node IDs</span>
-          <input value={prefixedNodeIds.join(', ')} readOnly spellCheck={false} />
+          <input value={suffixedNodeIds.join(', ')} readOnly spellCheck={false} />
           <span className="field-note">Preview of the nodes created from this pipeline template.</span>
         </label>
         <div className="dialog-actions">
