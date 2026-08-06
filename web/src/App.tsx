@@ -2,7 +2,7 @@ import { Suspense, lazy, useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import type { Connection, EdgeChange, Node } from 'reactflow'
 
-import { appBasePath, appUrl, cancelRun, clearConstantValue, createCheckpoint, currentProject, dashboardUrl, dismissNotice, downloadNotebookSource, getDashboard, getSnapshot, listNodeAssets, listSessions, notebookAssetsUrl, notebookDownloadUrl, patchDashboard, patchGraph, redoGraphTombstone, restoreCheckpoint, restoreGraphTombstone, runAll, runNode, runSelection, setArtifactState, setConstantValue, setNodeOutputsState, stopSession, uploadConstantFile, uploadFile } from './lib/api'
+import { appBasePath, appUrl, cancelRun, clearConstantValue, createCheckpoint, currentProject, dashboardUrl, dismissNotice, downloadNotebookSource, getConstantValue, getDashboard, getSnapshot, listNodeAssets, listSessions, notebookAssetsUrl, notebookDownloadUrl, patchDashboard, patchGraph, redoGraphTombstone, restoreCheckpoint, restoreGraphTombstone, runAll, runNode, runSelection, setArtifactState, setConstantValue, setNodeOutputsState, stopSession, uploadConstantFile, uploadFile } from './lib/api'
 import { CONSTANT_NODE_HEIGHT, CONSTANT_NODE_PORT_CENTER_OFFSET, CONSTANT_NODE_WIDTH, GRID_SIZE, PORT_ROW_HEIGHT, STANDARD_NODE_PORT_CENTER_OFFSET, activeRunNodeId, artifactFor, artifactsForDisplay, currentRun, formatTimestamp, globalArtifactCounts, inputState, inputsForNode, outputsForNode, queuedRunNodeIds, templateByRef } from './lib/helpers'
 import { areaSettings, type AreaColorKey, type AreaTitlePosition } from './lib/area'
 import { useDocumentMetadata } from './lib/documentMetadata'
@@ -571,9 +571,16 @@ function App() {
     if (Number.isNaN(parsedServerTime)) {
       return
     }
-    setServerClock({
-      serverNowMs: parsedServerTime,
-      clientAnchorMs: Date.now(),
+    const receivedAt = Date.now()
+    setServerClock((current) => {
+      const estimatedServerNow = current.serverNowMs + receivedAt - current.clientAnchorMs
+      if (Math.abs(parsedServerTime - estimatedServerNow) <= 10_000) {
+        return current
+      }
+      return {
+        serverNowMs: parsedServerTime,
+        clientAnchorMs: receivedAt,
+      }
     })
   }, [liveSnapshot?.server_time])
 
@@ -1161,6 +1168,18 @@ function App() {
       index += 1
     }
     return `${normalizedBase}_${index}`
+  }
+
+  function nextAvailableConstantNodeId(portName: string): string {
+    const base = normalizeNodeId(`constant_${portName}`) || 'constant'
+    if (!existingNodeIdSet.has(base)) {
+      return base
+    }
+    let index = 1
+    while (existingNodeIdSet.has(`${base}_${index}`)) {
+      index += 1
+    }
+    return `${base}_${index}`
   }
 
   function supportedConstantDataType(value: string | null | undefined): ConstantValueType | null {
@@ -2403,20 +2422,27 @@ function App() {
     }
     const selectedNodeIdSet = new Set(nodeIds)
     const sourceByNodeId = await notebookSourceByNodeIds(nodeIds)
-    const nodes = nodeIds
-      .map((nodeId) => {
+    const nodes = (await Promise.all(
+      nodeIds.map(async (nodeId) => {
         const node = liveSnapshot.graph.nodes.find((entry) => entry.id === nodeId)
         const layout = liveSnapshot.graph.layout.find((entry) => entry.node_id === nodeId)
         if (!node || !layout) {
           return null
         }
+        const artifactName = node.ui?.artifact_name ?? 'value'
+        const artifact = artifactFor(liveSnapshot, nodeId, artifactName)
+        const canCopyConstantValue = node.kind === 'constant'
+          && artifact?.state === 'ready'
+          && node.ui?.data_type !== 'file'
+          && node.ui?.data_type !== 'pandas.DataFrame'
         return {
           node,
           layout,
           sourceText: sourceByNodeId.get(nodeId) ?? null,
+          constantValue: canCopyConstantValue ? await getConstantValue(nodeId) : undefined,
         } satisfies ClipboardNodeRecord
-      })
-      .filter((entry): entry is ClipboardNodeRecord => entry !== null)
+      }),
+    )).filter((entry): entry is ClipboardNodeRecord => entry !== null)
     if (nodes.length !== nodeIds.length) {
       return null
     }
@@ -3371,7 +3397,7 @@ function App() {
     }
     const { x, y, presetConstantType, connectToInput } = pendingBlockCreation
     setPendingBlockCreation(null)
-    const nodeId = nextAvailableNodeId('constant')
+    const nodeId = connectToInput ? nextAvailableConstantNodeId(connectToInput.portName) : nextAvailableNodeId('constant')
     const initialValue = await resolveConstantEditorValue(payload)
     const layoutX = connectToInput ? x : snapToGrid(x - CONSTANT_NODE_WIDTH / 2)
     const layoutY = connectToInput ? y : snapToGrid(y - CONSTANT_NODE_HEIGHT / 2)
@@ -3390,17 +3416,23 @@ function App() {
       w: CONSTANT_NODE_WIDTH,
       h: CONSTANT_NODE_HEIGHT,
     }
-    const success = await mutateGraph([addOperation], {
+    const connectOperation: GraphPatchOperation | null = connectToInput
+      ? { type: 'add_edge', source_node: nodeId, source_port: 'value', target_node: connectToInput.nodeId, target_port: connectToInput.portName }
+      : null
+    const success = await mutateGraph(connectOperation ? [addOperation, connectOperation] : [addOperation], {
       onSuccess: () => selectCreatedNodes([nodeId]),
     })
     if (!success) {
       return
     }
     if (payload.dataType === 'file' || payload.dataType === 'pandas.DataFrame') {
-      await saveConstantBlockValue(nodeId, payload)
-    }
-    if (connectToInput) {
-      await attachConstantToInput(nodeId, connectToInput.nodeId, connectToInput.portName)
+      try {
+        await saveConstantBlockValue(nodeId, payload)
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Constant upload failed.'
+        reportClientError(`constant-upload:${nodeId}`, 'constant_upload_failed', message, { nodeId })
+        throw error
+      }
     }
     await refreshSnapshot()
   }
@@ -4199,7 +4231,7 @@ function App() {
       if (item.node.kind === 'notebook') {
         nodeOperations.push(notebookAddOperationForNode(item.node, nextLayout, item.sourceText, nextNodeId, nextTitle))
       } else if (item.node.kind === 'constant') {
-        nodeOperations.push(constantAddOperationForNode(item.node, nextLayout, nextNodeId, nextTitle))
+        nodeOperations.push(constantAddOperationForNode(item.node, nextLayout, nextNodeId, nextTitle, item.constantValue))
       } else if (item.node.kind === 'organizer') {
         nodeOperations.push(organizerAddOperationForNode(item.node, nextLayout, nextNodeId, nextTitle))
       } else if (item.node.kind === 'area') {
@@ -4459,7 +4491,7 @@ function App() {
             >
               <Plus width={32} height={32} />
             </button>
-            <div id="blocks-panel-content" className="template-sidebar-inner" aria-hidden={templatesCollapsed}>
+            {!templatesCollapsed ? <div id="blocks-panel-content" className="template-sidebar-inner">
               <div className="panel-header-row">
                 <h2>Blocks</h2>
               </div>
@@ -4486,7 +4518,7 @@ function App() {
                 onDragEnd={handlePaletteDragEnd}
                 previewScale={paletteViewport?.zoom ?? 1}
               />
-            </div>
+            </div> : null}
           </div>
         </aside>
 
@@ -4847,12 +4879,18 @@ function App() {
           onClose={() => setConstantNodeEdit(null)}
           onSave={async (payload) => {
             const editing = constantNodeEdit
-            setConstantNodeEdit(null)
             if (!editing || !projectId) {
               return
             }
-            await saveConstantBlockValue(editing.nodeId, payload, { clearBlankJsonValue: true })
+            try {
+              await saveConstantBlockValue(editing.nodeId, payload, { clearBlankJsonValue: true })
+            } catch (error) {
+              const message = error instanceof Error ? error.message : 'Constant upload failed.'
+              reportClientError(`constant-upload:${editing.nodeId}`, 'constant_upload_failed', message, { nodeId: editing.nodeId })
+              throw error
+            }
             await refreshSnapshot()
+            setConstantNodeEdit(null)
           }}
         />
       ) : null}

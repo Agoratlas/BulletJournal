@@ -27,6 +27,11 @@ def get_artifact(node_id: str, artifact_name: str, request: Request):
     return container.artifact_service.get_artifact(node_id, artifact_name)
 
 
+@router.get('/constants/{node_id}/value')
+def get_constant_value(node_id: str, request: Request):
+    return {'value': request.app.state.container.artifact_service.get_constant_value(node_id)}
+
+
 @router.get('/artifacts/{node_id}/{artifact_name}/download')
 def download_artifact(node_id: str, artifact_name: str, request: Request, format: str | None = None):
     container = request.app.state.container

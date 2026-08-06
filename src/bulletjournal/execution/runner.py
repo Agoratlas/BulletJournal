@@ -57,13 +57,19 @@ class WorkerRunner:
             if on_process_started is not None:
                 on_process_started(process)
             progress_state: dict[str, object] | None = None
+            published_progress_state: dict[str, object] | None = None
             cancelled = False
             while process.poll() is None:
                 if progress_path.exists():
                     try:
                         progress_state = json.loads(progress_path.read_text(encoding='utf-8'))
-                        if on_progress is not None and progress_state is not None:
+                        if (
+                            on_progress is not None
+                            and progress_state is not None
+                            and progress_state != published_progress_state
+                        ):
                             on_progress(progress_state)
+                            published_progress_state = progress_state
                     except json.JSONDecodeError:
                         pass
                 if cancel_event is not None and cancel_event.is_set():

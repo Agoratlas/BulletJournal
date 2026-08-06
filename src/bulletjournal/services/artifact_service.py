@@ -34,6 +34,19 @@ class ArtifactService:
             raise NotFoundError(f'Unknown artifact `{node_id}/{artifact_name}`.')
         return head
 
+    def get_constant_value(self, node_id: str) -> Any:
+        node = self.project_service.get_node(node_id)
+        if node.kind != NodeKind.CONSTANT:
+            raise InvalidRequestError(f'Node `{node_id}` is not a constant block.')
+        data_type = constant_data_type(node)
+        if data_type in {'file', 'pandas.DataFrame'}:
+            raise InvalidRequestError(f'Constant block `{node_id}` does not have a JSON-copyable value.')
+        head = self.get_artifact(node_id, constant_artifact_name(node))
+        artifact_hash = head.get('artifact_hash')
+        if artifact_hash is None:
+            raise InvalidRequestError(f'Constant block `{node_id}` has no value.')
+        return self.project_service.require_project().object_store.load_value(str(artifact_hash), data_type)
+
     def upload_file(
         self,
         node_id: str,

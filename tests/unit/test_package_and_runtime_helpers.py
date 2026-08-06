@@ -627,6 +627,17 @@ def test_execute_notebook_requires_app(monkeypatch: pytest.MonkeyPatch, tmp_path
         marimo_adapter.execute_notebook(notebook)
 
 
+def test_execute_notebook_fails_when_marimo_stop_is_called(tmp_path: Path) -> None:
+    notebook = tmp_path / 'stopped.py'
+    notebook.write_text(
+        'import marimo\n\napp = marimo.App()\n\nwith app.setup:\n    import marimo as mo\n\n@app.cell\ndef _(mo):\n    mo.stop(True)\n',
+        encoding='utf-8',
+    )
+
+    with pytest.raises(RuntimeError, match=r'Notebook execution stopped by mo\.stop\(\)'):
+        marimo_adapter.execute_notebook(notebook)
+
+
 def test_execute_notebook_sets_progress_environment(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     notebook = tmp_path / 'sample_notebook.py'
     progress_path = tmp_path / 'progress.json'

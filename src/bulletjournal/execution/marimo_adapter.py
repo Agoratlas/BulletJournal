@@ -28,9 +28,27 @@ def execute_notebook(
         raise RuntimeError(f'Notebook {path} does not define `app`.')
     if progress_path is not None:
         os.environ['BULLETJOURNAL_PROGRESS_PATH'] = str(progress_path)
-    result = app.run()
-    if progress_path is not None:
-        os.environ.pop('BULLETJOURNAL_PROGRESS_PATH', None)
+    from marimo._runtime.app.script_runner import AppScriptRunner
+    from marimo._runtime.control_flow import MarimoStopError
+    from marimo._runtime.exceptions import MarimoRuntimeException, unwrap_user_exception
+
+    original_handle_run_result = AppScriptRunner._handle_run_result
+
+    def fail_on_stop(self, cell_id, result, outputs) -> None:
+        exception = result.exception
+        if isinstance(exception, MarimoRuntimeException):
+            unwrapped = unwrap_user_exception(exception, self.app.graph)
+            if isinstance(unwrapped, MarimoStopError):
+                raise RuntimeError('Notebook execution stopped by mo.stop().') from unwrapped
+        original_handle_run_result(self, cell_id, result, outputs)
+
+    AppScriptRunner._handle_run_result = fail_on_stop
+    try:
+        result = app.run()
+    finally:
+        AppScriptRunner._handle_run_result = original_handle_run_result
+        if progress_path is not None:
+            os.environ.pop('BULLETJOURNAL_PROGRESS_PATH', None)
     return {'result': result}
 
 

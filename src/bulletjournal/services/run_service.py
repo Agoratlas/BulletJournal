@@ -382,6 +382,8 @@ class RunService:
     def stop_session(self, session_id: str) -> dict[str, Any]:
         session = self.session_manager.get(session_id)
         if session is None:
+            if self.session_manager.was_stopped(session_id):
+                return {'session_id': session_id, 'status': 'stopped'}
             raise NotFoundError(f'Unknown editor session `{session_id}`.')
         result = {'session_id': session_id, 'node_id': session.node_id, 'status': 'stopped'}
         self.session_manager.stop(session_id, record_stop=False)

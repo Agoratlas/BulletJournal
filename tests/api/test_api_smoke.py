@@ -1454,6 +1454,10 @@ def test_run_session_can_be_stopped_via_api(tmp_path) -> None:
     assert stopped.json()['status'] == 'stopped'
     assert container.run_service.session_manager.get(session_id) is None
 
+    stopped_again = client.post(f'/api/v1/sessions/{session_id}/stop')
+    assert stopped_again.status_code == 200
+    assert stopped_again.json()['status'] == 'stopped'
+
 
 def test_file_input_artifact_name_round_trips_in_snapshot(tmp_path) -> None:
     project_root = init_project_root(tmp_path / 'project').root

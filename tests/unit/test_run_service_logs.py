@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from types import SimpleNamespace
 from typing import cast
 
 from bulletjournal.domain.enums import NodeKind, ValidationSeverity
 from bulletjournal.domain.models import Node
+from bulletjournal.execution import worker_main
 from bulletjournal.execution.runner import WorkerRunner
 from bulletjournal.services.project_service import ProjectService
 from bulletjournal.services.run_service import RunService
@@ -246,6 +248,78 @@ def test_managed_run_fails_if_execution_log_file_goes_missing(tmp_path) -> None:
     assert result['status'] == 'running'
     run = _wait_for_run_status(project_service, str(result['run_id']), 'failed')
     assert run['failure_json']['error'] == 'Managed run log file(s) missing for node `sample_node`: stdout.'
+
+
+def test_worker_runner_only_publishes_changed_progress(tmp_path, monkeypatch) -> None:
+    manifest = SimpleNamespace(
+        run_id='run-1',
+        node_id='sample_node',
+        stdout_path=None,
+        stderr_path=None,
+        progress_path=None,
+        result_path=None,
+        to_dict=lambda: {},
+    )
+    progress_path = tmp_path / 'run-1_sample_node.progress.json'
+    progress_path.write_text(json.dumps({'cell_number': 1}), encoding='utf-8')
+    result_path = tmp_path / 'run-1_sample_node.result.json'
+    result_path.write_text(json.dumps({'status': 'ok', 'outputs': []}), encoding='utf-8')
+    polls = 0
+
+    class FakeProcess:
+        returncode = 0
+
+        def poll(self):
+            nonlocal polls
+            polls += 1
+            return None if polls < 4 else 0
+
+        def wait(self, timeout=None):
+            _ = timeout
+            return 0
+
+    monkeypatch.setattr('bulletjournal.execution.runner.subprocess.Popen', lambda *args, **kwargs: FakeProcess())
+    monkeypatch.setattr('bulletjournal.execution.runner.time.sleep', lambda seconds: None)
+    progress_updates: list[dict[str, object]] = []
+
+    WorkerRunner().run(manifest, temp_dir=tmp_path, on_progress=progress_updates.append)
+
+    assert progress_updates == [{'cell_number': 1}]
+
+
+def test_worker_reports_marimo_stop_as_an_error(tmp_path, monkeypatch) -> None:
+    project_root = init_project_root(tmp_path / 'project').root
+    manifest_path = project_root / 'manifest.json'
+    result_path = project_root / 'result.json'
+    manifest_path.write_text(
+        json.dumps(
+            {
+                'project_root': str(project_root),
+                'node_id': 'sample_node',
+                'notebook_path': str(project_root / 'notebooks' / 'sample_node.py'),
+                'run_id': 'run-1',
+                'source_hash': 'source',
+                'lineage_mode': 'managed',
+                'bindings': {},
+                'outputs': {},
+                'assets': {},
+                'result_path': str(result_path),
+            }
+        ),
+        encoding='utf-8',
+    )
+
+    def stop_notebook(*args, **kwargs) -> None:
+        _ = (args, kwargs)
+        from marimo._runtime.control_flow import MarimoStopError
+
+        raise MarimoStopError(None)
+
+    monkeypatch.setattr(worker_main, 'execute_notebook', stop_notebook)
+
+    assert worker_main.main([str(manifest_path)]) == 1
+    assert json.loads(result_path.read_text(encoding='utf-8'))['status'] == 'error'
+    assert json.loads(result_path.read_text(encoding='utf-8'))['error'] == 'MarimoStopError'
 
 
 def test_record_notice_wraps_markdown_sensitive_values(tmp_path) -> None:

@@ -165,12 +165,12 @@ def main(argv: list[str] | None = None) -> int:
                 }
                 for item in runtime_warnings
             ]
-    except Exception as exc:
+    except BaseException as exc:
         if context is not None:
             context.abandon_publication()
         payload = {
             'status': 'error',
-            'error': str(exc),
+            'error': str(exc) if str(exc) and str(exc) != 'None' else type(exc).__name__,
             'traceback': traceback.format_exc(),
             'outputs': [] if context is None else context.pushed_outputs,
             'assets': [] if context is None else context.pushed_assets,

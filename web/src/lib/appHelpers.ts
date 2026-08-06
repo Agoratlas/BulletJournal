@@ -510,12 +510,19 @@ export function fileInputAddOperationForNode(node: NodeRecord, layout: LayoutRec
   }
 }
 
-export function constantAddOperationForNode(node: NodeRecord, layout: LayoutRecord, nodeId: string, title = 'Constant'): GraphPatchOperation {
+export function constantAddOperationForNode(
+  node: NodeRecord,
+  layout: LayoutRecord,
+  nodeId: string,
+  title = 'Constant',
+  value?: unknown,
+): GraphPatchOperation {
   return {
     type: 'add_constant_node',
     node_id: nodeId,
     title,
     data_type: node.ui?.data_type ?? 'object',
+    ...(value === undefined ? {} : { value }),
     ui: {
       artifact_name: node.ui?.artifact_name ?? 'value',
       data_type: node.ui?.data_type ?? 'object',

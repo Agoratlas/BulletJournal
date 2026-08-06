@@ -86,6 +86,11 @@ export async function downloadNotebookSource(nodeId: string): Promise<string> {
   return response.text()
 }
 
+export async function getConstantValue(nodeId: string): Promise<unknown> {
+  const response = await request<{ value: unknown }>(`/api/v1/constants/${encodeURIComponent(nodeId)}/value`)
+  return response.value
+}
+
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(appUrl(url), {
     ...init,

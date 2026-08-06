@@ -57,6 +57,7 @@ export type ClipboardNodeRecord = {
   node: NodeRecord
   layout: LayoutRecord
   sourceText: string | null
+  constantValue: unknown
 }
 
 export type ClipboardGraph = {

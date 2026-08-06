@@ -108,6 +108,21 @@ def test_constant_delete_restores_exact_ready_version_and_expiry_is_controlled(t
         graph_service.restore_tombstone(expired['tombstone_id'])
 
 
+def test_constant_value_can_be_loaded_for_copying(tmp_path) -> None:
+    project_root = init_project_root(tmp_path / 'project').root
+    project_service = ProjectService(_FakeEventService(), TemplateService())
+    project_service.open_project(project_root)
+    graph_service = GraphService(project_service)
+    graph_service.apply_operations(
+        int(project_service.graph().meta['graph_version']),
+        [{'type': 'add_constant_node', 'node_id': 'value', 'data_type': 'dict', 'value': {'count': 42}}],
+    )
+
+    from bulletjournal.services.artifact_service import ArtifactService
+
+    assert ArtifactService(project_service).get_constant_value('value') == {'count': 42}
+
+
 def _attach_checkpoint_service(project_service: ProjectService) -> CheckpointService:
     checkpoint_service = CheckpointService(project_service)
     project_service.checkpoint_service = checkpoint_service
