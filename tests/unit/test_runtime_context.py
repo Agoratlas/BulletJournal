@@ -1,15 +1,46 @@
+import time
 from pathlib import Path
 
 import pandas as pd
 import pytest
 
 import bulletjournal.runtime.assets as runtime_assets
+import bulletjournal.runtime.context as runtime_context
 from bulletjournal.assets.types.scatter_plot import MAX_SCATTER_PLOT_POINTS
 from bulletjournal.domain.enums import ArtifactRole, ArtifactState, LineageMode
 from bulletjournal.domain.hashing import combine_hashes, hash_json
 from bulletjournal.domain.models import AssetDeclaration, Port
 from bulletjournal.runtime.context import _RUNTIME_CONTEXT, Binding, RuntimeContext, current_runtime_context
 from bulletjournal.storage.project_fs import init_project_root
+
+
+@pytest.fixture(autouse=True)
+def skip_interactive_stabilization(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(runtime_context, 'EDIT_STABILIZATION_SECONDS', 0)
+
+
+def test_runtime_context_interactive_stabilization_waits_for_stable_notebook(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    project_root = init_project_root(tmp_path / 'project').root
+    notebook_path = project_root / 'notebooks' / 'consumer.py'
+    notebook_path.write_text('print("stable")\n', encoding='utf-8')
+    context = RuntimeContext(
+        project_root=project_root,
+        node_id='consumer',
+        run_id='run-interactive-stabilization',
+        source_hash='stale-source-hash',
+        lineage_mode=LineageMode.INTERACTIVE_HEURISTIC,
+        bindings={},
+        outputs={},
+    )
+    monkeypatch.setattr(runtime_context, 'EDIT_STABILIZATION_SECONDS', 0.2)
+
+    started_at = time.monotonic()
+    context._stabilize_if_interactive()
+
+    assert time.monotonic() - started_at >= 0.2
+    assert context.source_hash != 'stale-source-hash'
 
 
 def test_runtime_context_uses_defaults_without_recording_stale_warning(tmp_path) -> None:

@@ -72,7 +72,8 @@ Exports omit local virtual environments and other transient runtime files.
 - check `metadata/state.db` for persisted run, artifact, and validation state
 - inspect `graph/*.json` if graph operations behave unexpectedly
 - inspect notebook source hashes and validation issues through `/api/v1/project/snapshot`
-- rerun with `PYTHONPATH=src python -m pytest` for reproducible failures in this repo
+- rerun with `PYTHONPATH=src python -m pytest` for reproducible failures in this repo; this uses four workers and randomized seed `42`
+- add `-n 0` to rerun serially when diagnosing timing-sensitive failures
 
 ## Notes
 

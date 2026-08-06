@@ -28,5 +28,5 @@ jobs:
       - name: Run pre-commit hooks
         run: pre-commit run --all-files
 
-      - name: Run unit tests
+      - name: Run unit tests in parallel
         run: PYTHONPATH=src python -m pytest tests/unit

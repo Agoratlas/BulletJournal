@@ -92,6 +92,10 @@ pip install -e ".[dev]"
 PYTHONPATH=src python -m pytest
 ```
 
+The default pytest configuration runs four workers with a fixed randomized order
+(`--randomly-seed=42`). Override these defaults with additional pytest options
+when diagnosing a failure, for example `-n 0` for serial execution.
+
 ## Pre-commit
 
 `ruff.toml` is consumed by `ruff` automatically from the repo root. To enable the git hook:
