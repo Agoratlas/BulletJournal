@@ -217,6 +217,7 @@ class RuntimeContext:
 
     def record_pull(self, name: str, metadata: dict[str, Any]) -> None:
         self.loaded_inputs[name] = metadata
+        self._ensure_publication()
         source_node = str(metadata.get('source_node') or '')
         source_artifact = str(metadata.get('source_artifact') or '')
         self.db.record_run_input(
@@ -227,6 +228,7 @@ class RuntimeContext:
             producer_incarnation_id=metadata.get('producer_incarnation_id'),
             producer_artifact_name=source_artifact or None,
             version_id=metadata.get('loaded_version_id'),
+            publication_id=self.publication_id,
         )
 
     def _lease_for_run(self, artifact_hash: str) -> None:

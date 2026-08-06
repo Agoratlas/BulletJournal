@@ -4,8 +4,8 @@ from pathlib import Path
 
 import pytest
 
-from bulletjournal.domain.enums import ArtifactRole, ArtifactState, LineageMode, RunStatus, ValidationSeverity
-from bulletjournal.domain.models import AssetDeclaration, ValidationIssue
+from bulletjournal.domain.enums import ArtifactRole, ArtifactState, LineageMode, NodeKind, RunStatus, ValidationSeverity
+from bulletjournal.domain.models import AssetDeclaration, Node, ValidationIssue
 from bulletjournal.parser.validation import build_issue_id
 from bulletjournal.storage.project_fs import init_project_root
 from bulletjournal.storage.state_db import StateDB, _database_journal_mode
@@ -395,6 +395,84 @@ def test_state_db_delete_node_state_removes_all_visible_node_records(tmp_path) -
     with db._connection() as connection:
         assert connection.execute('SELECT COUNT(*) FROM run_inputs WHERE run_id = ?', ('run-1',)).fetchone()[0] == 0
         assert connection.execute('SELECT COUNT(*) FROM run_outputs WHERE run_id = ?', ('run-1',)).fetchone()[0] == 0
+
+
+def test_publication_checks_only_its_own_input_snapshot(tmp_path) -> None:
+    db = StateDB(tmp_path / 'state.db')
+    db.reconcile_node_incarnations(
+        [
+            Node(id='producer', title='Producer', kind=NodeKind.CONSTANT, incarnation_id='producer-incarnation'),
+            Node(id='consumer', title='Consumer', kind=NodeKind.NOTEBOOK, incarnation_id='consumer-incarnation'),
+        ]
+    )
+    db.upsert_artifact_object('hash-1', 'json', 'int', 1, None, None, None)
+    db.upsert_artifact_object('hash-2', 'json', 'int', 1, None, None, None)
+
+    def publish_producer(artifact_hash: str, source_hash: str) -> int:
+        publication = db.begin_publication(
+            run_id=f'producer-{artifact_hash}',
+            node_id='producer',
+            source_hash=source_hash,
+            graph_version=1,
+        )
+        version_id = db.create_artifact_version(
+            node_id='producer',
+            artifact_name='value',
+            role=ArtifactRole.OUTPUT,
+            artifact_hash=artifact_hash,
+            source_hash=source_hash,
+            upstream_code_hash=artifact_hash,
+            upstream_data_hash=artifact_hash,
+            run_id=f'producer-{artifact_hash}',
+            lineage_mode=LineageMode.MANAGED,
+            warnings=[],
+            publication_id=str(publication['publication_id']),
+        )
+        assert db.commit_publication(str(publication['publication_id']), current_source_hash=source_hash)
+        return version_id
+
+    first_version = publish_producer('hash-1', 'producer-source-1')
+    first_consumer_publication = db.begin_publication(
+        run_id='one-marimo-session',
+        node_id='consumer',
+        source_hash='consumer-source',
+        graph_version=1,
+    )
+    db.record_run_input(
+        'one-marimo-session',
+        'producer/value',
+        'hash-1',
+        ArtifactState.READY.value,
+        producer_incarnation_id='producer-incarnation',
+        producer_artifact_name='value',
+        version_id=first_version,
+        publication_id=str(first_consumer_publication['publication_id']),
+    )
+    assert db.commit_publication(
+        str(first_consumer_publication['publication_id']), current_source_hash='consumer-source'
+    )
+
+    second_version = publish_producer('hash-2', 'producer-source-2')
+    second_consumer_publication = db.begin_publication(
+        run_id='one-marimo-session',
+        node_id='consumer',
+        source_hash='consumer-source',
+        graph_version=1,
+    )
+    db.record_run_input(
+        'one-marimo-session',
+        'producer/value',
+        'hash-2',
+        ArtifactState.READY.value,
+        producer_incarnation_id='producer-incarnation',
+        producer_artifact_name='value',
+        version_id=second_version,
+        publication_id=str(second_consumer_publication['publication_id']),
+    )
+
+    assert db.commit_publication(
+        str(second_consumer_publication['publication_id']), current_source_hash='consumer-source'
+    )
 
 
 def test_state_db_hides_dismissed_warning_but_keeps_active_errors(tmp_path) -> None:

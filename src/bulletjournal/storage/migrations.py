@@ -479,4 +479,12 @@ MIGRATIONS: list[tuple[str, str | MigrationCallable]] = [
         ON run_inputs (run_id);
         """,
     ),
+    (
+        '011_publication_scoped_run_inputs',
+        """
+        ALTER TABLE run_inputs ADD COLUMN publication_id TEXT NULL;
+        CREATE INDEX IF NOT EXISTS idx_run_inputs_publication
+        ON run_inputs (publication_id);
+        """,
+    ),
 ]

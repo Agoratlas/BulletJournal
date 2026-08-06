@@ -353,8 +353,8 @@ class StateDB:
                 and str(batch['source_hash']) == current_source_hash
             )
             inputs = connection.execute(
-                'SELECT * FROM run_inputs WHERE run_id = ? AND producer_incarnation_id IS NOT NULL',
-                (batch['run_id'],),
+                'SELECT * FROM run_inputs WHERE publication_id = ? AND producer_incarnation_id IS NOT NULL',
+                (publication_id,),
             ).fetchall()
             for item in inputs:
                 head = connection.execute(
@@ -1664,12 +1664,14 @@ class StateDB:
         producer_incarnation_id: str | None = None,
         producer_artifact_name: str | None = None,
         version_id: int | None = None,
+        publication_id: str | None = None,
     ) -> None:
         with self._connection() as connection:
             connection.execute(
                 'INSERT INTO run_inputs '
                 '(run_id, logical_artifact_id, artifact_hash_at_load, state_at_load, loaded_at, '
-                'producer_incarnation_id, producer_artifact_name, version_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+                'producer_incarnation_id, producer_artifact_name, version_id, publication_id) '
+                'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
                 (
                     run_id,
                     logical_artifact_id,
@@ -1679,6 +1681,7 @@ class StateDB:
                     producer_incarnation_id,
                     producer_artifact_name,
                     version_id,
+                    publication_id,
                 ),
             )
             connection.commit()
