@@ -4496,21 +4496,14 @@ function App() {
             </button>
             {!templatesCollapsed ? <div id="blocks-panel-content" className="template-sidebar-inner">
               <div className="panel-header-row">
-                <h2>Blocks</h2>
+                <h2>New block/pipeline</h2>
               </div>
-              <label>
-                <span>Search blocks</span>
-                <input value={paletteSearch} onChange={(event) => setPaletteSearch(event.target.value)} placeholder="Search blocks or templates" />
-              </label>
-              <label className="toggle-row toggle-switch-row">
-                <input
-                  type="checkbox"
-                  checked={showHiddenTemplates}
-                  onChange={(event) => setShowHiddenTemplates(event.target.checked)}
-                />
-                <span className="toggle-switch" aria-hidden="true"><span /></span>
-                <span>Show hidden templates</span>
-              </label>
+              <input
+                value={paletteSearch}
+                onChange={(event) => setPaletteSearch(event.target.value)}
+                placeholder="Search blocks or templates"
+                aria-label="Search blocks or templates"
+              />
               <BlockPalette
                 entries={paletteEntries}
                 groupTemplatesByProvider={groupTemplatesByProvider}
@@ -4521,6 +4514,15 @@ function App() {
                 onDragEnd={handlePaletteDragEnd}
                 previewScale={paletteViewport?.zoom ?? 1}
               />
+              <label className="toggle-row toggle-switch-row">
+                <input
+                  type="checkbox"
+                  checked={showHiddenTemplates}
+                  onChange={(event) => setShowHiddenTemplates(event.target.checked)}
+                />
+                <span className="toggle-switch" aria-hidden="true"><span /></span>
+                <span>Show hidden templates</span>
+              </label>
             </div> : null}
           </div>
         </aside>

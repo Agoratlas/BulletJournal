@@ -382,18 +382,12 @@ label span,
   position: fixed;
   inset: 0;
   pointer-events: none;
-  background:
-    radial-gradient(circle at top left, rgba(15, 118, 110, 0.12), transparent 28%),
-    radial-gradient(circle at bottom right, rgba(183, 121, 31, 0.12), transparent 28%),
-    linear-gradient(180deg, #faf6ed 0%, var(--bg) 100%);
+  background: linear-gradient(180deg, #faf6ed 0%, var(--bg) 100%);
   z-index: 0;
 }
 
 :root[data-theme='dark'] .canvas-underlay {
-  background:
-    radial-gradient(circle at top left, rgba(92, 189, 180, 0.12), transparent 28%),
-    radial-gradient(circle at bottom right, rgba(208, 163, 92, 0.1), transparent 28%),
-    linear-gradient(180deg, #1f1d1a 0%, var(--bg) 100%);
+  background: linear-gradient(180deg, #1f1d1a 0%, var(--bg) 100%);
 }
 
 .panel,
@@ -538,8 +532,7 @@ label span,
   background: color-mix(in srgb, var(--accent) 10%, var(--panel-2));
 }
 
-.palette-directory-toggle:hover,
-.palette-entry-action:hover {
+.palette-directory-toggle:hover {
   border-color: color-mix(in srgb, var(--line) 82%, transparent);
   background: color-mix(in srgb, var(--accent) 8%, var(--panel-2));
 }
@@ -580,6 +573,11 @@ label span,
   display: block;
 }
 
+.palette-entry-action:hover {
+  background: rgba(98, 108, 108, 0.12);
+  border-color: rgba(98, 108, 108, 0.28);
+}
+
 .palette-entry-label {
   display: block;
   overflow: hidden;
@@ -600,6 +598,15 @@ label span,
   justify-content: center;
   font-size: 12px;
   line-height: 1;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 140ms ease, background 140ms ease, border-color 140ms ease;
+}
+
+.palette-entry-row:hover .palette-entry-info,
+.palette-entry-row:focus-within .palette-entry-info {
+  opacity: 1;
+  pointer-events: auto;
 }
 
 .palette-entry-info em {
@@ -619,10 +626,14 @@ label span,
   border-color: color-mix(in srgb, var(--accent) 22%, var(--line));
 }
 
-:root[data-theme='dark'] .palette-directory-toggle:hover,
-:root[data-theme='dark'] .palette-entry-action:hover {
+:root[data-theme='dark'] .palette-directory-toggle:hover {
   background: color-mix(in srgb, var(--accent) 14%, rgba(255, 255, 255, 0.04));
   border-color: color-mix(in srgb, var(--accent) 22%, var(--line));
+}
+
+:root[data-theme='dark'] .palette-entry-action:hover {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.16);
 }
 
 .draggable-block {
@@ -917,7 +928,7 @@ label span,
   min-height: 56px;
   background: linear-gradient(180deg, rgba(37, 99, 235, 0.98), rgba(29, 78, 216, 0.98));
   color: white;
-  box-shadow: 0 10px 24px rgba(37, 99, 235, 0.24);
+  box-shadow: none;
   backdrop-filter: none;
 }
 
@@ -1243,9 +1254,7 @@ label span,
   width: 100vw;
   height: 100vh;
   min-height: 100vh;
-  background:
-    radial-gradient(circle at top left, rgba(15, 118, 110, 0.08), transparent 32%),
-    linear-gradient(180deg, rgba(255, 255, 255, 0.08), rgba(245, 239, 225, 0.12));
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.08), rgba(245, 239, 225, 0.12));
   border-radius: 0;
 }
 
@@ -1267,9 +1276,7 @@ label span,
 }
 
 :root[data-theme='dark'] .graph-canvas-shell {
-  background:
-    radial-gradient(circle at top left, rgba(92, 189, 180, 0.06), transparent 32%),
-    linear-gradient(180deg, rgba(34, 32, 29, 0.2), rgba(20, 19, 17, 0.3));
+  background: linear-gradient(180deg, rgba(34, 32, 29, 0.2), rgba(20, 19, 17, 0.3));
 }
 
 .graph-panel-note {
@@ -3564,6 +3571,15 @@ label span,
   width: min(720px, calc(100vw - 20px));
 }
 
+.template-info-dialog-card .modal-header {
+  padding-bottom: 18px;
+  border-bottom: 1px solid var(--line);
+}
+
+.template-info-dialog-card .template-info-stack {
+  padding-top: 18px;
+}
+
 .template-info-stack,
 .template-reference-section {
   display: grid;
@@ -4128,16 +4144,12 @@ input.invalid {
 .dashboard-page-shell .canvas-underlay {
   background:
     radial-gradient(circle, rgba(24, 53, 43, 0.24) 1.1px, transparent 1.3px) 0 0 / var(--editor-grid) var(--editor-grid),
-    radial-gradient(circle at top left, rgba(15, 118, 110, 0.12), transparent 28%),
-    radial-gradient(circle at bottom right, rgba(183, 121, 31, 0.12), transparent 28%),
     linear-gradient(180deg, #faf6ed 0%, var(--bg) 100%);
 }
 
 :root[data-theme='dark'] .dashboard-page-shell .canvas-underlay {
   background:
     radial-gradient(circle, rgba(236, 229, 213, 0.16) 1.1px, transparent 1.3px) 0 0 / var(--editor-grid) var(--editor-grid),
-    radial-gradient(circle at top left, rgba(92, 189, 180, 0.12), transparent 28%),
-    radial-gradient(circle at bottom right, rgba(208, 163, 92, 0.1), transparent 28%),
     linear-gradient(180deg, #1f1d1a 0%, var(--bg) 100%);
 }
 

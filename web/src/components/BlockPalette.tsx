@@ -164,7 +164,24 @@ function buildPaletteSections(entries: PaletteEntry[], groupTemplatesByProvider:
       entries.filter((entry) => entry.kind === 'template'),
       groupTemplatesByProvider,
     ),
-  ]
+  ].map(sortPaletteDirectory)
+}
+
+function sortPaletteDirectory(directory: PaletteDirectoryNode): PaletteDirectoryNode {
+  directory.children.sort((left, right) => {
+    if (left.kind !== right.kind) {
+      return left.kind === 'directory' ? -1 : 1
+    }
+    const leftLabel = left.kind === 'directory' ? left.label : left.entry.title
+    const rightLabel = right.kind === 'directory' ? right.label : right.entry.title
+    return leftLabel.localeCompare(rightLabel)
+  })
+  for (const child of directory.children) {
+    if (child.kind === 'directory') {
+      sortPaletteDirectory(child)
+    }
+  }
+  return directory
 }
 
 function createSection(key: string, label: string, entries: PaletteEntry[]): PaletteDirectoryNode {
