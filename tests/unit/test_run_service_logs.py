@@ -7,7 +7,6 @@ from typing import cast
 from bulletjournal.domain.enums import NodeKind, ValidationSeverity
 from bulletjournal.domain.models import Node
 from bulletjournal.execution.runner import WorkerRunner
-from bulletjournal.execution.worker_main import _TeeWriter
 from bulletjournal.services.project_service import ProjectService
 from bulletjournal.services.run_service import RunService
 from bulletjournal.services.template_service import TemplateService
@@ -20,19 +19,6 @@ class _FakeEventService:
 
     def publish(self, *args, **kwargs) -> None:
         self.events.append((args, kwargs))
-
-
-class _FlushTrackingTarget:
-    def __init__(self) -> None:
-        self.writes: list[str] = []
-        self.flush_count = 0
-
-    def write(self, value: str) -> int:
-        self.writes.append(value)
-        return len(value)
-
-    def flush(self) -> None:
-        self.flush_count += 1
 
 
 def _wait_for_run_status(
@@ -107,20 +93,6 @@ def _write_asset_notebook(project_root: Path) -> Path:
         encoding='utf-8',
     )
     return notebook_path
-
-
-def test_worker_tee_writer_flushes_every_write() -> None:
-    first = _FlushTrackingTarget()
-    second = _FlushTrackingTarget()
-
-    writer = _TeeWriter(first, second)
-    written = writer.write('hello\n')
-
-    assert written == len('hello\n')
-    assert first.writes == ['hello\n']
-    assert second.writes == ['hello\n']
-    assert first.flush_count == 1
-    assert second.flush_count == 1
 
 
 def test_running_execution_metadata_retains_log_paths_for_live_snapshot(tmp_path) -> None:

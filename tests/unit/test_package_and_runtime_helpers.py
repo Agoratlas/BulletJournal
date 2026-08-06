@@ -790,7 +790,7 @@ def test_launch_editor_invokes_marimo_with_expected_command(monkeypatch: pytest.
     assert env['EXTRA_FLAG'] == '1'
 
 
-def test_worker_runner_returns_structured_error_when_worker_stdout_is_not_json(
+def test_worker_runner_returns_structured_error_when_worker_result_is_missing(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     class FakeProcess:
@@ -799,9 +799,9 @@ def test_worker_runner_returns_structured_error_when_worker_stdout_is_not_json(
         def poll(self):
             return 1
 
-        def communicate(self, timeout=None):
+        def wait(self, timeout=None):
             _ = timeout
-            return '', 'RuntimeError: hook setup failed\n'
+            return self.returncode
 
     monkeypatch.setattr(runner_module.subprocess, 'Popen', lambda *args, **kwargs: FakeProcess())
 
@@ -819,10 +819,10 @@ def test_worker_runner_returns_structured_error_when_worker_stdout_is_not_json(
     result = runner_module.WorkerRunner().run(manifest, temp_dir=tmp_path)
 
     assert result['status'] == 'error'
-    assert result['error'] == 'RuntimeError: hook setup failed'
+    assert result['error'] == 'Worker exited with code 1 without producing a valid result file.'
     assert result['outputs'] == []
     assert result['stdout'] == ''
-    assert result['stderr'] == 'RuntimeError: hook setup failed\n'
+    assert result['stderr'] == ''
     assert result['returncode'] == 1
 
 
@@ -865,11 +865,56 @@ def test_worker_runner_respects_manifest_execution_log_paths(tmp_path: Path) -> 
     assert stderr_log.read_text(encoding='utf-8') == ''
 
 
-def test_worker_main_reports_setup_failures_as_json(
+def test_worker_runner_completes_when_notebook_subprocess_writes_large_output(tmp_path: Path) -> None:
+    project_root = init_project_root(tmp_path / 'project').root
+    notebook_path = project_root / 'notebooks' / 'noisy_subprocess.py'
+    notebook_path.write_text(
+        (
+            'import marimo\n\n'
+            'app = marimo.App()\n\n'
+            'with app.setup:\n'
+            '    from bulletjournal.runtime import artifacts\n\n'
+            '@app.cell\n'
+            'def _():\n'
+            '    import subprocess\n'
+            '    import sys\n\n'
+            '    _ = artifacts\n'
+            "    code = \"import sys; sys.stdout.write('o' * 1_000_000); sys.stdout.flush(); sys.stderr.write('e' * 1_000_000); sys.stderr.flush()\"\n"
+            '    subprocess.run([sys.executable, "-c", code], check=True)\n'
+            '    return\n'
+        ),
+        encoding='utf-8',
+    )
+    stdout_log = project_root / 'temp' / 'execution_logs' / 'run-123_noisy_subprocess.stdout.log'
+    stderr_log = project_root / 'temp' / 'execution_logs' / 'run-123_noisy_subprocess.stderr.log'
+    manifest = RunManifest(
+        project_root=str(project_root),
+        node_id='noisy_subprocess',
+        notebook_path=str(notebook_path),
+        run_id='run-123',
+        source_hash='hash',
+        lineage_mode=LineageMode.MANAGED.value,
+        bindings={},
+        outputs={},
+        stdout_path=str(stdout_log),
+        stderr_path=str(stderr_log),
+    )
+
+    result = runner_module.WorkerRunner().run(manifest, temp_dir=project_root / 'temp' / 'worker')
+
+    assert result['status'] == 'ok'
+    assert len(result['stdout']) == 1_000_000
+    assert len(result['stderr']) == 1_000_000
+    assert stdout_log.read_text(encoding='utf-8') == result['stdout']
+    assert stderr_log.read_text(encoding='utf-8') == result['stderr']
+
+
+def test_worker_main_reports_setup_failures_in_result_file(
     capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     project_root = init_project_root(tmp_path / 'project').root
     manifest_path = tmp_path / 'manifest.json'
+    result_path = tmp_path / 'result.json'
     manifest_path.write_text(
         json.dumps(
             {
@@ -882,6 +927,7 @@ def test_worker_main_reports_setup_failures_as_json(
                 'bindings': {},
                 'outputs': {},
                 'progress_path': None,
+                'result_path': str(result_path),
             }
         ),
         encoding='utf-8',
@@ -893,7 +939,8 @@ def test_worker_main_reports_setup_failures_as_json(
     )
 
     exit_code = worker_main.main([str(manifest_path)])
-    payload = json.loads(capsys.readouterr().out)
+    assert capsys.readouterr().out == ''
+    payload = json.loads(result_path.read_text(encoding='utf-8'))
 
     assert exit_code == 1
     assert payload['status'] == 'error'
@@ -902,11 +949,12 @@ def test_worker_main_reports_setup_failures_as_json(
     assert 'RuntimeError: hook setup failed' in payload['traceback']
 
 
-def test_worker_main_captures_notebook_stdout_without_corrupting_json(
+def test_worker_main_writes_notebook_output_to_inherited_streams_and_result_file(
     capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     project_root = init_project_root(tmp_path / 'project').root
     manifest_path = tmp_path / 'manifest.json'
+    result_path = tmp_path / 'result.json'
     manifest_path.write_text(
         json.dumps(
             {
@@ -919,6 +967,7 @@ def test_worker_main_captures_notebook_stdout_without_corrupting_json(
                 'bindings': {},
                 'outputs': {},
                 'progress_path': None,
+                'result_path': str(result_path),
             }
         ),
         encoding='utf-8',
@@ -933,21 +982,21 @@ def test_worker_main_captures_notebook_stdout_without_corrupting_json(
     monkeypatch.setattr(worker_main, 'execute_notebook', fake_execute_notebook)
 
     exit_code = worker_main.main([str(manifest_path)])
-    payload = json.loads(capsys.readouterr().out)
+    captured = capsys.readouterr()
+    payload = json.loads(result_path.read_text(encoding='utf-8'))
 
     assert exit_code == 0
     assert payload['status'] == 'ok'
     assert payload['outputs'] == []
-    assert payload['stdout'] == 'worker-side notebook output\n'
+    assert captured.out == 'worker-side notebook output\n'
 
 
-def test_worker_main_writes_stdout_and_stderr_logs_to_files(
+def test_worker_main_writes_result_file(
     capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     project_root = init_project_root(tmp_path / 'project').root
     manifest_path = tmp_path / 'manifest.json'
-    stdout_log = tmp_path / 'worker.stdout.log'
-    stderr_log = tmp_path / 'worker.stderr.log'
+    result_path = tmp_path / 'result.json'
     manifest_path.write_text(
         json.dumps(
             {
@@ -960,8 +1009,7 @@ def test_worker_main_writes_stdout_and_stderr_logs_to_files(
                 'bindings': {},
                 'outputs': {},
                 'progress_path': None,
-                'stdout_path': str(stdout_log),
-                'stderr_path': str(stderr_log),
+                'result_path': str(result_path),
             }
         ),
         encoding='utf-8',
@@ -977,11 +1025,10 @@ def test_worker_main_writes_stdout_and_stderr_logs_to_files(
     monkeypatch.setattr(worker_main, 'execute_notebook', fake_execute_notebook)
 
     exit_code = worker_main.main([str(manifest_path)])
-    payload = json.loads(capsys.readouterr().out)
+    captured = capsys.readouterr()
+    payload = json.loads(result_path.read_text(encoding='utf-8'))
 
     assert exit_code == 0
     assert payload['status'] == 'ok'
-    assert payload['stdout'] == 'worker-side stdout output\n'
-    assert payload['stderr'] == 'worker-side stderr output\n'
-    assert stdout_log.read_text(encoding='utf-8') == 'worker-side stdout output\n'
-    assert stderr_log.read_text(encoding='utf-8') == 'worker-side stderr output\n'
+    assert captured.out == 'worker-side stdout output\n'
+    assert captured.err == 'worker-side stderr output\n'
