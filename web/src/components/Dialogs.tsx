@@ -804,7 +804,7 @@ export function EditConstantDialog({ mode = 'create', initialDataType, allowType
   const [jsonText, setJsonText] = useState(initialJsonValue)
   const [uploadFile, setUploadFile] = useState<File | null>(null)
   const [jsonUploadFile, setJsonUploadFile] = useState<File | null>(null)
-  const [dataframeFormat, setDataframeFormat] = useState<DataFrameUploadFormat>('parquet')
+  const [dataframeFormat, setDataframeFormat] = useState<DataFrameUploadFormat>('csv_comma')
   const [busy, setBusy] = useState(false)
   const [validationError, setValidationError] = useState<string | null>(null)
 
@@ -813,14 +813,16 @@ export function EditConstantDialog({ mode = 'create', initialDataType, allowType
     setJsonText(initialJsonValue)
     setUploadFile(null)
     setJsonUploadFile(null)
-    setDataframeFormat('parquet')
+    setDataframeFormat('csv_comma')
     setBusy(false)
     setValidationError(null)
   }, [initialDataType, initialJsonValue])
 
   const dataframeAccept = dataframeFormat === 'parquet'
     ? '.parquet,application/vnd.apache.parquet,application/octet-stream'
-    : '.csv,text/csv'
+    : dataframeFormat === 'xlsx'
+      ? '.xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+      : '.csv,text/csv'
 
   const usesUpload = dataType === 'file' || dataType === 'pandas.DataFrame'
   const supportsJsonUpload = dataType === 'list' || dataType === 'dict'
@@ -869,7 +871,14 @@ export function EditConstantDialog({ mode = 'create', initialDataType, allowType
       <form className="form-grid" onSubmit={handleSubmit}>
         <label>
           <span>Type</span>
-          <select value={dataType} onChange={(event) => setDataType(event.target.value as ConstantValueType)} disabled={!allowTypeChange}>
+          <select value={dataType} onChange={(event) => {
+            const nextDataType = event.target.value as ConstantValueType
+            setDataType(nextDataType)
+            if (nextDataType !== 'list' && nextDataType !== 'dict') {
+              setJsonUploadFile(null)
+            }
+            setValidationError(null)
+          }} disabled={!allowTypeChange}>
             <option value="pandas.DataFrame">DataFrame</option>
             <option value="file">file</option>
             <option value="int">int</option>
@@ -901,10 +910,11 @@ export function EditConstantDialog({ mode = 'create', initialDataType, allowType
               <>
                 <span>File type</span>
                 <select value={dataframeFormat} onChange={(event) => setDataframeFormat(event.target.value as DataFrameUploadFormat)}>
-                  <option value="parquet">Parquet</option>
                   <option value="csv_comma">CSV (comma)</option>
                   <option value="csv_semicolon">CSV (semicolon)</option>
                   <option value="csv_tab">CSV (tab)</option>
+                  <option value="parquet">Parquet</option>
+                  <option value="xlsx">XLSX</option>
                 </select>
               </>
             ) : null}
@@ -977,9 +987,10 @@ async function validateConstantInput(payload: { dataType: ConstantValueType; jso
   if (payload.dataType === 'file' || payload.dataType === 'pandas.DataFrame') {
     return null
   }
-  const sourceText = payload.jsonUploadFile
-    ? await payload.jsonUploadFile.text()
-    : payload.jsonText
+  if (payload.jsonUploadFile && payload.jsonText.trim()) {
+    return 'Provide either a JSON file or a typed value, not both.'
+  }
+  const sourceText = payload.jsonUploadFile ? await payload.jsonUploadFile.text() : payload.jsonText
   const trimmed = sourceText.trim()
   if (!trimmed) {
     return null
@@ -987,7 +998,11 @@ async function validateConstantInput(payload: { dataType: ConstantValueType; jso
   let parsed: unknown
   try {
     parsed = JSON.parse(trimmed)
-  } catch {
+  } catch (error) {
+    if (error instanceof SyntaxError) {
+      const position = error.message.match(/position (\d+)/)?.[1]
+      return position ? `Invalid JSON at character ${position}: ${error.message}` : `Invalid JSON: ${error.message}`
+    }
     return 'Value must be valid JSON for the selected type.'
   }
   switch (payload.dataType) {

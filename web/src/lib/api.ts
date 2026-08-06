@@ -285,11 +285,11 @@ export async function uploadFile(nodeId: string, file: File) {
   return response.json() as Promise<Record<string, unknown>>
 }
 
-function encodeDataFrameUploadFormat(format: 'parquet' | 'csv_comma' | 'csv_semicolon' | 'csv_tab'): 'parquet' | 'csv_comma' | 'csv_semicolon' | 'csv_tab' {
+function encodeDataFrameUploadFormat(format: 'parquet' | 'csv_comma' | 'csv_semicolon' | 'csv_tab' | 'xlsx'): 'parquet' | 'csv_comma' | 'csv_semicolon' | 'csv_tab' | 'xlsx' {
   return format
 }
 
-export async function uploadConstantFile(nodeId: string, file: File, dataframeFormat: 'parquet' | 'csv_comma' | 'csv_semicolon' | 'csv_tab' = 'parquet') {
+export async function uploadConstantFile(nodeId: string, file: File, dataframeFormat: 'parquet' | 'csv_comma' | 'csv_semicolon' | 'csv_tab' | 'xlsx' = 'csv_comma') {
   const response = await fetch(appUrl(`/api/v1/constants/${nodeId}/upload?dataframe_format=${encodeDataFrameUploadFormat(dataframeFormat)}`), {
     method: 'POST',
     headers: {
@@ -300,9 +300,18 @@ export async function uploadConstantFile(nodeId: string, file: File, dataframeFo
   })
   if (!response.ok) {
     const text = await response.text()
-    throw new Error(text)
+    throw new Error(errorMessageFromResponse(text, response.status))
   }
-  return response.json() as Promise<Record<string, unknown>>
+  return response.json() as Promise<{ warning?: string } & Record<string, unknown>>
+}
+
+function errorMessageFromResponse(text: string, status: number): string {
+  try {
+    const payload = JSON.parse(text)
+    return formatErrorDetail(payload.detail ?? payload) || `HTTP ${status}`
+  } catch {
+    return text || `HTTP ${status}`
+  }
 }
 
 export async function setConstantValue(nodeId: string, payload: { value?: unknown; value_json?: string }) {

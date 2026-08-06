@@ -4,6 +4,7 @@ import io
 import json
 import mimetypes
 import uuid
+from csv import reader
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -86,7 +87,8 @@ class ArtifactService:
             raise InvalidRequestError(
                 f'Constant block `{node_id}` expects `{data_type}` and cannot accept uploaded files.'
             )
-        return self._save_managed_artifact(
+        upload_warning = persisted.pop('upload_warning', None)
+        result = self._save_managed_artifact(
             node_id=node_id,
             artifact_name=constant_artifact_name(node),
             persisted=persisted,
@@ -94,6 +96,9 @@ class ArtifactService:
             mime_type=mime_type,
             original_filename=filename,
         )
+        if upload_warning:
+            result['upload_warning'] = upload_warning
+        return result
 
     def set_constant_value(
         self,
@@ -185,24 +190,44 @@ class ArtifactService:
                 if suffix != '.parquet':
                     raise InvalidRequestError('Parquet DataFrame uploads must use a `.parquet` file.')
                 frame = pd.read_parquet(io.BytesIO(content))
+            elif dataframe_format == 'xlsx':
+                if suffix != '.xlsx':
+                    raise InvalidRequestError('XLSX DataFrame uploads must use a `.xlsx` file.')
+                workbook = pd.ExcelFile(io.BytesIO(content))
+                if len(workbook.sheet_names) > 1:
+                    # The first worksheet is the only one that can become a DataFrame.
+                    first_sheet = workbook.sheet_names[0]
+                else:
+                    first_sheet = 0
+                raw_rows = _xlsx_rows(content, first_sheet)
+                header, rows = _validated_tabular_rows(raw_rows)
+                frame = pd.DataFrame(rows, columns=header)
             else:
                 if suffix != '.csv':
                     raise InvalidRequestError('CSV DataFrame uploads must use a `.csv` file.')
                 separator = separators.get(dataframe_format)
                 if separator is None:
                     raise InvalidRequestError(
-                        'DataFrame upload format must be `parquet`, `csv_comma`, `csv_semicolon`, or `csv_tab`.'
+                        'DataFrame upload format must be `parquet`, `csv_comma`, `csv_semicolon`, `csv_tab`, or `xlsx`.'
                     )
-                frame = pd.read_csv(io.BytesIO(content), sep=separator, low_memory=False)
+                raw_rows = list(reader(io.StringIO(content.decode('utf-8-sig')), delimiter=separator))
+                header, rows = _validated_tabular_rows(raw_rows)
+                frame = pd.DataFrame(rows, columns=header)
         except InvalidRequestError:
             raise
         except Exception as exc:  # pragma: no cover - pandas error surface varies by version
-            format_label = 'Parquet' if dataframe_format == 'parquet' else 'CSV'
+            format_label = {'parquet': 'Parquet', 'xlsx': 'XLSX'}.get(dataframe_format, 'CSV')
             raise InvalidRequestError(f'Failed to parse {format_label} upload for constant block: {exc}.') from exc
         try:
-            return self.project_service.require_project().object_store.persist_value(frame, 'pandas.DataFrame')
+            persisted = self.project_service.require_project().object_store.persist_value(frame, 'pandas.DataFrame')
+            if dataframe_format == 'xlsx' and len(workbook.sheet_names) > 1:
+                persisted['upload_warning'] = (
+                    f'Only the first worksheet (`{workbook.sheet_names[0]}`) was imported; '
+                    f'{len(workbook.sheet_names) - 1} additional worksheet(s) were ignored.'
+                )
+            return persisted
         except Exception as exc:  # pragma: no cover - parquet backend error surface varies by version
-            format_label = 'Parquet' if dataframe_format == 'parquet' else 'CSV'
+            format_label = {'parquet': 'Parquet', 'xlsx': 'XLSX'}.get(dataframe_format, 'CSV')
             raise InvalidRequestError(f'Failed to store {format_label} upload for constant block: {exc}.') from exc
 
     def _save_managed_artifact(
@@ -526,3 +551,66 @@ def _resolve_constant_value(*, data_type: str, value: Any, value_json: str | Non
     if data_type == 'float' and isinstance(value, int) and not isinstance(value, bool):
         return float(value)
     return value
+
+
+def _xlsx_rows(content: bytes, sheet_name: str | int) -> list[list[Any]]:
+    workbook = pd.ExcelFile(io.BytesIO(content))
+    frame = pd.read_excel(workbook, sheet_name=sheet_name, header=None, dtype=object)
+    return frame.where(frame.notna(), None).values.tolist()
+
+
+def _validated_tabular_rows(raw_rows: list[list[Any]]) -> tuple[list[str], list[list[Any]]]:
+    if not raw_rows:
+        raise InvalidRequestError('DataFrame upload must include a header row.')
+    header_row = raw_rows[0]
+    rightmost_header = max((index for index, value in enumerate(header_row) if _cell_is_nonempty(value)), default=-1)
+    if rightmost_header < 0:
+        raise InvalidRequestError('DataFrame upload must include a header with column names.')
+    header = header_row[: rightmost_header + 1]
+    index_column = not _cell_is_nonempty(header[0])
+    column_names = [str(value).strip() for value in header[index_column:]]
+    if any(not name for name in column_names):
+        empty_column = next(index for index, name in enumerate(column_names, start=int(index_column)) if not name)
+        raise InvalidRequestError(
+            f'DataFrame header cell {_cell_name(1, empty_column + 1)} must have a nonempty column name.'
+        )
+    if len(set(column_names)) != len(column_names):
+        duplicate = next(name for name in column_names if column_names.count(name) > 1)
+        raise InvalidRequestError(f'DataFrame header has duplicate column name `{duplicate}`.')
+
+    rows: list[list[Any]] = []
+    for row_number, row in enumerate(raw_rows[1:], start=2):
+        values = list(row)
+        if not any(_cell_is_nonempty(value) for value in values):
+            for remaining_row_number, remaining in enumerate(raw_rows[row_number:], start=row_number + 1):
+                cell = _first_nonempty_cell(remaining)
+                if cell is not None:
+                    cell_name = _cell_name(remaining_row_number, cell + 1)
+                    raise InvalidRequestError(
+                        f'DataFrame upload contains data after its first empty row at {cell_name}.'
+                    )
+            break
+        extra_cell = _first_nonempty_cell(values[rightmost_header + 1 :])
+        if extra_cell is not None:
+            cell_name = _cell_name(row_number, rightmost_header + extra_cell + 2)
+            raise InvalidRequestError(f'DataFrame upload contains data to the right of its header at {cell_name}.')
+        rows.append((values[: rightmost_header + 1] + [None] * (rightmost_header + 1))[: rightmost_header + 1])
+    if index_column:
+        rows = [row[1:] for row in rows]
+    return column_names, rows
+
+
+def _cell_is_nonempty(value: Any) -> bool:
+    return value is not None and (not isinstance(value, str) or value != '')
+
+
+def _first_nonempty_cell(values: list[Any], offset: int = 0) -> int | None:
+    return next((offset + index for index, value in enumerate(values) if _cell_is_nonempty(value)), None)
+
+
+def _cell_name(row: int, column: int) -> str:
+    letters = ''
+    while column:
+        column, remainder = divmod(column - 1, 26)
+        letters = chr(ord('A') + remainder) + letters
+    return f'{letters}{row}'

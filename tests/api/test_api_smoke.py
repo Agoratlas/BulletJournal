@@ -2278,6 +2278,128 @@ def test_uploaded_dataframe_constant_supports_semicolon_separator(tmp_path) -> N
     assert preview['column_names'] == ['name', 'value']
 
 
+def test_uploaded_dataframe_constant_rejects_csv_data_outside_headers(tmp_path) -> None:
+    project_root = init_project_root(tmp_path / 'project').root
+    client = TestClient(create_app(project_path=project_root))
+    graph_version = client.get('/api/v1/project/snapshot').json()['graph']['meta']['graph_version']
+    created = client.patch(
+        '/api/v1/graph',
+        json={
+            'graph_version': graph_version,
+            'operations': [
+                {
+                    'type': 'add_constant_node',
+                    'node_id': 'frame_source',
+                    'title': 'Frame Source',
+                    'data_type': 'pandas.DataFrame',
+                }
+            ],
+        },
+    )
+    assert created.status_code == 200
+
+    extra_column = client.post(
+        '/api/v1/constants/frame_source/upload',
+        content=b'name,value\nalpha,1,unexpected\n',
+        headers={'X-Filename': 'frame.csv', 'Content-Type': 'text/csv'},
+    )
+    after_empty_row = client.post(
+        '/api/v1/constants/frame_source/upload',
+        content=b'name,value\nalpha,1\n\nbeta,2\n',
+        headers={'X-Filename': 'frame.csv', 'Content-Type': 'text/csv'},
+    )
+
+    assert extra_column.status_code == 400
+    assert extra_column.json()['detail'] == 'DataFrame upload contains data to the right of its header at C2.'
+    assert after_empty_row.status_code == 400
+    assert after_empty_row.json()['detail'] == 'DataFrame upload contains data after its first empty row at A4.'
+
+
+def test_uploaded_dataframe_constant_validates_csv_headers(tmp_path) -> None:
+    project_root = init_project_root(tmp_path / 'project').root
+    client = TestClient(create_app(project_path=project_root))
+    graph_version = client.get('/api/v1/project/snapshot').json()['graph']['meta']['graph_version']
+    created = client.patch(
+        '/api/v1/graph',
+        json={
+            'graph_version': graph_version,
+            'operations': [
+                {
+                    'type': 'add_constant_node',
+                    'node_id': 'frame_source',
+                    'title': 'Frame Source',
+                    'data_type': 'pandas.DataFrame',
+                }
+            ],
+        },
+    )
+    assert created.status_code == 200
+
+    empty_header = client.post(
+        '/api/v1/constants/frame_source/upload',
+        content=b'name,,value\nalpha,x,1\n',
+        headers={'X-Filename': 'frame.csv', 'Content-Type': 'text/csv'},
+    )
+    duplicate_header = client.post(
+        '/api/v1/constants/frame_source/upload',
+        content=b'name,name\nalpha,beta\n',
+        headers={'X-Filename': 'frame.csv', 'Content-Type': 'text/csv'},
+    )
+    index_header = client.post(
+        '/api/v1/constants/frame_source/upload',
+        content=b',name\n0,alpha\n',
+        headers={'X-Filename': 'frame.csv', 'Content-Type': 'text/csv'},
+    )
+
+    assert empty_header.status_code == 400
+    assert empty_header.json()['detail'] == 'DataFrame header cell B1 must have a nonempty column name.'
+    assert duplicate_header.status_code == 400
+    assert duplicate_header.json()['detail'] == 'DataFrame header has duplicate column name `name`.'
+    assert index_header.status_code == 200
+    assert client.get('/api/v1/artifacts/frame_source/value').json()['preview']['column_names'] == ['name']
+
+
+def test_uploaded_xlsx_dataframe_constant_uses_first_worksheet_and_warns(tmp_path) -> None:
+    project_root = init_project_root(tmp_path / 'project').root
+    client = TestClient(create_app(project_path=project_root))
+    graph_version = client.get('/api/v1/project/snapshot').json()['graph']['meta']['graph_version']
+    created = client.patch(
+        '/api/v1/graph',
+        json={
+            'graph_version': graph_version,
+            'operations': [
+                {
+                    'type': 'add_constant_node',
+                    'node_id': 'frame_source',
+                    'title': 'Frame Source',
+                    'data_type': 'pandas.DataFrame',
+                }
+            ],
+        },
+    )
+    assert created.status_code == 200
+    workbook = io.BytesIO()
+    with pd.ExcelWriter(workbook) as writer:
+        pd.DataFrame({'name': ['alpha'], 'value': [1]}).to_excel(writer, index=False, sheet_name='First')
+        pd.DataFrame({'ignored': ['value']}).to_excel(writer, index=False, sheet_name='Second')
+
+    upload = client.post(
+        '/api/v1/constants/frame_source/upload?dataframe_format=xlsx',
+        content=workbook.getvalue(),
+        headers={
+            'X-Filename': 'frame.xlsx',
+            'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        },
+    )
+
+    assert upload.status_code == 200
+    assert (
+        upload.json()['warning']
+        == 'Only the first worksheet (`First`) was imported; 1 additional worksheet(s) were ignored.'
+    )
+    assert client.get('/api/v1/artifacts/frame_source/value').json()['preview']['column_names'] == ['name', 'value']
+
+
 def test_uploaded_dataframe_constant_handles_large_mixed_type_columns(tmp_path) -> None:
     project_root = init_project_root(tmp_path / 'project').root
     app = create_app(project_path=project_root)

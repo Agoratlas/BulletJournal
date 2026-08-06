@@ -139,6 +139,18 @@ def test_object_store_persists_dataframe(tmp_path) -> None:
     assert loaded.equals(frame)
 
 
+def test_object_store_preserves_unicode_in_json_artifacts(tmp_path) -> None:
+    paths = init_project_root(tmp_path / 'project')
+    store = ObjectStore(paths)
+
+    persisted = store.persist_value({'label': 'cafe', 'accent': 'é'}, 'dict')
+    stored_json = store.object_path(persisted['artifact_hash']).read_text(encoding='utf-8')
+
+    assert 'é' in stored_json
+    assert '\\u00e9' not in stored_json
+    assert persisted['preview']['editor_text'] == '{\n  "label": "cafe",\n  "accent": "é"\n}'
+
+
 def test_object_store_allows_empty_optional_artifacts(tmp_path) -> None:
     paths = init_project_root(tmp_path / 'project')
     store = ObjectStore(paths)

@@ -96,6 +96,7 @@ async def upload_constant(node_id: str, request: Request, dataframe_format: str 
         'artifact_name': result['artifact_name'],
         'state': result['state'],
         'artifact_hash': result['artifact_hash'],
+        **({'warning': result['upload_warning']} if result.get('upload_warning') else {}),
     }
 
 
@@ -211,10 +212,14 @@ def _resolve_dataframe_upload_format(value: str) -> str:
         'csv_comma': 'csv_comma',
         'csv_semicolon': 'csv_semicolon',
         'csv_tab': 'csv_tab',
+        'xlsx': 'xlsx',
     }
     if value not in formats:
         raise HTTPException(
             status_code=400,
-            detail='Invalid DataFrame upload format. Expected `parquet`, `csv_comma`, `csv_semicolon`, or `csv_tab`.',
+            detail=(
+                'Invalid DataFrame upload format. Expected `parquet`, `csv_comma`, '
+                '`csv_semicolon`, `csv_tab`, or `xlsx`.'
+            ),
         )
     return formats[value]

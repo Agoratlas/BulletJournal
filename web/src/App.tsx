@@ -3343,7 +3343,10 @@ function App() {
   ) {
     if (payload.dataType === 'file' || payload.dataType === 'pandas.DataFrame') {
       if (payload.uploadFile) {
-        await uploadConstantFile(nodeId, payload.uploadFile, payload.dataframeFormat)
+        const result = await uploadConstantFile(nodeId, payload.uploadFile, payload.dataframeFormat)
+        if (result.warning) {
+          reportClientWarning(`constant-upload:${nodeId}:warning`, 'constant_upload_warning', result.warning, { nodeId })
+        }
       }
       return
     }

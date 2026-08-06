@@ -29,13 +29,13 @@ def serialize_value(value: Any, data_type: str) -> dict[str, Any]:
         }
     validate_runtime_value_type(value, data_type, operation='export')
     if data_type in {'int', 'float', 'bool', 'str', 'list', 'dict'}:
-        payload = json.dumps(value, ensure_ascii=True).encode('utf-8')
+        payload = json.dumps(value, ensure_ascii=False).encode('utf-8')
         preview = {
             **_simple_preview(value),
             **_json_preview_metadata(value),
         }
         if data_type in {'list', 'dict'}:
-            preview['compact_repr'] = json.dumps(value, ensure_ascii=True, separators=(',', ':'))
+            preview['compact_repr'] = json.dumps(value, ensure_ascii=False, separators=(',', ':'))
         return {
             'bytes': payload,
             'storage_kind': StorageKind.JSON.value,
@@ -157,7 +157,7 @@ def _series_preview(series: pd.Series) -> dict[str, Any]:
 
 
 def _json_preview_metadata(value: Any) -> dict[str, Any]:
-    inspector_text = json.dumps(value, ensure_ascii=True, indent=2)
+    inspector_text = json.dumps(value, ensure_ascii=False, indent=2)
     metadata = _preview_text_metadata(inspector_text)
     if len(inspector_text.encode('utf-8')) <= 10_000:
         metadata['editor_text'] = inspector_text
