@@ -5,6 +5,7 @@ import type { Connection, EdgeChange, Node } from 'reactflow'
 import { appBasePath, appUrl, cancelRun, clearConstantValue, createCheckpoint, currentProject, dashboardUrl, dismissNotice, downloadNotebookSource, getDashboard, getSnapshot, listNodeAssets, listSessions, notebookAssetsUrl, notebookDownloadUrl, patchDashboard, patchGraph, restoreCheckpoint, runAll, runNode, runSelection, setArtifactState, setConstantValue, setNodeOutputsState, stopSession, uploadConstantFile, uploadFile } from './lib/api'
 import { CONSTANT_NODE_HEIGHT, CONSTANT_NODE_PORT_CENTER_OFFSET, CONSTANT_NODE_WIDTH, GRID_SIZE, PORT_ROW_HEIGHT, STANDARD_NODE_PORT_CENTER_OFFSET, activeRunNodeId, artifactFor, artifactsForDisplay, currentRun, formatTimestamp, globalArtifactCounts, inputState, inputsForNode, outputsForNode, queuedRunNodeIds, templateByRef } from './lib/helpers'
 import { areaSettings, type AreaColorKey, type AreaTitlePosition } from './lib/area'
+import { useDocumentMetadata } from './lib/documentMetadata'
 import type { ArtifactRecord, DashboardRecord, GraphPatchOperation, LayoutRecord, NodeRecord, ProjectSnapshot, SessionRecord, TemplateRecord } from './lib/types'
 import type { AppNotice, ClipboardGraph, ClipboardNodeRecord, ConstantValueType, DataFrameUploadFormat, GraphHistoryEntry, GraphMutationPlan, NodeActionItem, OptimisticGraphState, PaletteEntry, PalettePreviewBlock, PortActionMenuState } from './appTypes'
 import { applyOptimisticDashboardSources, applyOptimisticGraphOperations, areaAddOperationForNode, artifactTargetForPort, blockCreateMode, clampContextMenuPosition, cloneSnapshot, constantAddOperationForNode, copiedTitle, createClientNotice, dashboardAddOperationForNode, edgeIdForPorts, edgeIdsForPort, editorSessionDetails, expandMutationPlan, fileInputAddOperationForNode, formatMarkdownCode, formatRunBlockedMessage, formatRunFailureMessage, freezeBlockMessage, frozenBlockBlockersForDelete, frozenBlockBlockersForRemovedEdges, frozenBlockBlockersForStaleRoots, isEditableTarget, isEditorOpenConflict, isFreezeConflict, isManagedRunFailure, normalizeNodeId, notebookAddOperationForNode, organizerAddOperationForNode, pipelineTemplateNodeRecords, pipelineTopLeftForCenter, SNAPSHOT_REFRESH_EVENTS, SNAPSHOT_REFRESH_THROTTLE_MS, snapToGrid, uniqueCopiedNodeId } from './lib/appHelpers'
@@ -347,6 +348,11 @@ function App() {
 
   const snapshot = projectQuery.data ?? null
   const projectId = snapshot?.project.project_id ?? null
+  const viewerId = savedDashboardId ?? notebookAssetsNodeId
+  useDocumentMetadata(
+    viewerId ? null : projectId ?? 'BulletJournal',
+    viewerId ? 'dashboard' : 'default',
+  )
 
   const snapshotQuery = useQuery({
     queryKey: ['snapshot'],

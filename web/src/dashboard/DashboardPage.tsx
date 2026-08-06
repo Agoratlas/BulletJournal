@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState, type DragEvent, type MouseEvent }
 import { useQueries, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query'
 
 import { ApiError, appUrl, getDashboard, listNodeAssets, patchDashboard } from '../lib/api'
+import { useDocumentMetadata } from '../lib/documentMetadata'
 import type { AssetRecord, DashboardPanelRecord, DashboardRecord } from '../lib/types'
 import { AssetPanel, type PersistedAssetPanelState } from '../assets/AssetPanel'
 
@@ -66,6 +67,7 @@ export function DashboardPage({
   }, [])
 
   const dashboard = draftDashboard ?? dashboardQuery.data ?? null
+  useDocumentMetadata(dashboard?.title ?? dashboardId, 'dashboard')
   const sources = dashboard?.sources ?? []
   const sourceAssetQueries = useQueries({
     queries: sources.map((source) => ({
