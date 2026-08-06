@@ -163,6 +163,7 @@ MIGRATIONS: list[tuple[str, str]] = [
             last_completed_cell_number INTEGER NULL,
             stdout_path TEXT NULL,
             stderr_path TEXT NULL,
+            error TEXT NULL,
             updated_at TEXT NOT NULL
         );
         """,

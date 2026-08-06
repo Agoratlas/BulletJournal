@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 
 import { saveNotebookDashboard, listNodeAssets } from '../lib/api'
+import { useDocumentMetadata } from '../lib/documentMetadata'
 import { SaveDashboardDialog } from '../components/Dialogs'
 import type { PersistedAssetPanelState } from './AssetPanel'
 import { AssetPanel } from './AssetPanel'
@@ -19,6 +20,7 @@ export function NotebookAssetsPage({
   existingNodeIds: string[]
   onOpenDashboard?: (dashboardId: string) => void
 }) {
+  useDocumentMetadata(nodeTitle || nodeId, 'dashboard')
   const [panelStates, setPanelStates] = useState<Record<string, PersistedAssetPanelState>>({})
   const [saveBusy, setSaveBusy] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)

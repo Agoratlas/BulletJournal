@@ -567,12 +567,14 @@ def test_state_db_persists_execution_logs(tmp_path) -> None:
         last_completed_cell_number=3,
         stdout_path=str(stdout_log),
         stderr_path=str(stderr_log),
+        error='Traceback: boom',
     )
 
     records = db.list_orchestrator_execution_meta()
 
     assert records['node_a']['stdout'] == {'text': 'hello stdout\n', 'truncated': False, 'size_bytes': 13}
     assert records['node_a']['stderr'] == {'text': 'warning on stderr\n', 'truncated': False, 'size_bytes': 18}
+    assert records['node_a']['error'] == 'Traceback: boom'
 
 
 def test_state_db_truncates_execution_log_previews(tmp_path) -> None:

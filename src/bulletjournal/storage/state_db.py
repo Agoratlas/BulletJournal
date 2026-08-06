@@ -99,6 +99,8 @@ class StateDB:
             connection.execute('ALTER TABLE orchestrator_execution_meta ADD COLUMN stdout_path TEXT NULL')
         if 'stderr_path' not in columns:
             connection.execute('ALTER TABLE orchestrator_execution_meta ADD COLUMN stderr_path TEXT NULL')
+        if 'error' not in columns:
+            connection.execute('ALTER TABLE orchestrator_execution_meta ADD COLUMN error TEXT NULL')
 
     def set_project_meta(self, key: str, value: str) -> None:
         with self._connection() as connection:
@@ -972,13 +974,15 @@ class StateDB:
         last_completed_cell_number: int | None = None,
         stdout_path: str | None = None,
         stderr_path: str | None = None,
+        error: str | None = None,
     ) -> None:
         with self._connection() as connection:
             connection.execute(
                 'INSERT INTO orchestrator_execution_meta '
                 '(node_id, run_id, status, started_at, ended_at, duration_seconds, '
-                'current_cell_json, total_cells, last_completed_cell_number, stdout_path, stderr_path, updated_at) '
-                'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) '
+                'current_cell_json, total_cells, last_completed_cell_number, '
+                'stdout_path, stderr_path, error, updated_at) '
+                'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) '
                 'ON CONFLICT(node_id) DO UPDATE SET '
                 'run_id = excluded.run_id, '
                 'status = excluded.status, '
@@ -990,6 +994,7 @@ class StateDB:
                 'last_completed_cell_number = excluded.last_completed_cell_number, '
                 'stdout_path = excluded.stdout_path, '
                 'stderr_path = excluded.stderr_path, '
+                'error = excluded.error, '
                 'updated_at = excluded.updated_at',
                 (
                     node_id,
@@ -1003,6 +1008,7 @@ class StateDB:
                     last_completed_cell_number,
                     stdout_path,
                     stderr_path,
+                    error,
                     utc_now_iso(),
                 ),
             )

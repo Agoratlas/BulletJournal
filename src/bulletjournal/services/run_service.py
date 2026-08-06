@@ -772,6 +772,7 @@ class RunService:
                         else None,
                         stdout_path=str(stdout_path),
                         stderr_path=str(stderr_path),
+                        error=str(result.get('traceback') or result.get('error') or 'Run failed.'),
                     )
                     self._record_run_failure_notice(run_id=run_id, result=result)
                     project.state_db.update_run_status(run_id, RunStatus.FAILED, failure_json=result)

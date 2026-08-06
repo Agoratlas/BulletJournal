@@ -1,15 +1,35 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 
 import { executionLogDownloadUrl, getExecutionLogs } from '../lib/api'
-import { artifactCounts, artifactFor, artifactIsEmpty, badgeForNode, formatBytes, formatDurationSeconds, formatTimestamp, inputBindingSource, inputState, templateByRef } from '../lib/helpers'
-import { formatIssueDetails, frozenFileBlockMessage, normalizeNodeId, validationIssuesForNode } from '../lib/appHelpers'
+import { artifactFor, artifactIsEmpty, formatBytes, formatDurationSeconds, formatType, inputBindingSource, inputState, templateByRef } from '../lib/helpers'
+import { frozenFileBlockMessage, normalizeNodeId } from '../lib/appHelpers'
 import type { NodeActionItem } from '../appTypes'
 import type { ExecutionLogSummary, NodeRecord, ProjectSnapshot } from '../lib/types'
-import { ArtifactCounts } from './ArtifactCounts'
 import { ActionButtons } from './ActionButtons'
-import { Check, Download, Pencil } from './Icons'
-import { PortPill } from './PortPill'
+import { Download, Pencil } from './Icons'
+import { TYPE_COLORS } from './PortLabel'
 import { SimpleMarkdown } from './SimpleMarkdown'
+
+function formatExecutionTimestamp(value: string): string {
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) {
+    return value
+  }
+  const parts = [date.getFullYear(), date.getMonth() + 1, date.getDate(), date.getHours(), date.getMinutes(), date.getSeconds()]
+    .map((part) => String(part).padStart(2, '0'))
+  return `${parts[0]}-${parts[1]}-${parts[2]} ${parts[3]}:${parts[4]}:${parts[5]}`
+}
+
+function formatRelativeTimestamp(value: string, nowMs: number): string {
+  const elapsedSeconds = Math.max(0, Math.floor((nowMs - Date.parse(value)) / 1000))
+  if (!Number.isFinite(elapsedSeconds)) {
+    return ''
+  }
+  if (elapsedSeconds < 60) return `${elapsedSeconds}s ago`
+  if (elapsedSeconds < 3600) return `${Math.floor(elapsedSeconds / 60)}m ago`
+  if (elapsedSeconds < 86400) return `${Math.floor(elapsedSeconds / 3600)}h ago`
+  return `${Math.floor(elapsedSeconds / 86400)}d ago`
+}
 
 function ExecutionLogPanel({
   title,
@@ -86,12 +106,9 @@ export function NodeInspector({
   node,
   serverNowMs,
   serverNowClientAnchorMs,
-  activeRunNodeId,
-  queuedRunNodeIds,
-  completedRunNodeIds,
   nodeActions,
+  assetCounts,
   onUploadFile,
-  onOpenTemplate,
   existingNodeIds,
   onRenameNode,
   nodeIdEditDisabledReason = null,
@@ -100,28 +117,25 @@ export function NodeInspector({
   node: NodeRecord
   serverNowMs: number
   serverNowClientAnchorMs: number
-  activeRunNodeId: string | null
-  queuedRunNodeIds: string[]
-  completedRunNodeIds: string[]
   nodeActions: NodeActionItem[]
+  assetCounts: { pending: number; stale: number; ready: number }
   onUploadFile: (nodeId: string, file: File) => Promise<void>
-  onOpenTemplate: (templateRef: string) => void
   existingNodeIds: string[]
   onRenameNode: (nodeId: string, payload: { nodeId: string; title: string }) => Promise<void>
   nodeIdEditDisabledReason?: string | null
 }) {
-  const badge = badgeForNode(snapshot, node)
-  const counts = artifactCounts(snapshot, node.id)
   const constantArtifact = node.kind === 'constant' ? artifactFor(snapshot, node.id, node.ui?.artifact_name ?? 'value') ?? null : null
   const template = templateByRef(snapshot, node.template?.ref)
-  const validationIssues = validationIssuesForNode(snapshot, node.id)
-  const blockingValidationIssues = validationIssues.filter((issue) => issue.severity === 'error')
+  const assetCount = assetCounts.pending + assetCounts.stale + assetCounts.ready
+  const assetState = assetCount > 0 && assetCounts.ready === assetCount ? 'ready' : assetCounts.stale > 0 ? 'stale' : 'pending'
+  const viewAssetsAction = nodeActions.find((action) => action.key === 'view-assets')
   const [now, setNow] = useState(() => Date.now())
   const [stdoutLog, setStdoutLog] = useState<ExecutionLogSummary | null>(() => node.execution_meta?.stdout ?? null)
   const [stderrLog, setStderrLog] = useState<ExecutionLogSummary | null>(() => node.execution_meta?.stderr ?? null)
-  const [activeIdentityField, setActiveIdentityField] = useState<'title' | 'nodeId' | null>(null)
+  const [editingIdentity, setEditingIdentity] = useState(false)
   const [draftTitle, setDraftTitle] = useState(node.title)
   const [draftNodeId, setDraftNodeId] = useState(node.id)
+  const [nodeIdTouched, setNodeIdTouched] = useState(false)
   const [renameBusy, setRenameBusy] = useState(false)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   const isExecutionRunning = node.execution_meta?.status === 'running'
@@ -143,9 +157,10 @@ export function NodeInspector({
   }, [node.execution_meta?.stderr, node.execution_meta?.stdout, node.id])
 
   useEffect(() => {
-    setActiveIdentityField(null)
+    setEditingIdentity(false)
     setDraftTitle(node.title)
     setDraftNodeId(node.id)
+    setNodeIdTouched(false)
     setRenameBusy(false)
   }, [node.id, node.title])
 
@@ -194,172 +209,92 @@ export function NodeInspector({
         cell_code: node.execution_meta.current_cell.cell_code,
       }
     : null
-  const displayedState = useMemo(() => {
-    if (node.orchestrator_state?.status === 'running' || activeRunNodeId === node.id) {
-      return 'running'
-    }
-    if (node.orchestrator_state?.status === 'queued' || queuedRunNodeIds.includes(node.id)) {
-      return 'queued'
-    }
-    if (node.orchestrator_state?.status === 'succeeded' || completedRunNodeIds.includes(node.id)) {
-      return 'ready'
-    }
-    return node.state
-  }, [activeRunNodeId, queuedRunNodeIds, completedRunNodeIds, node.id, node.state, node.orchestrator_state])
-
-  async function commitRename(field: 'title' | 'nodeId') {
-    if (renameBusy || (field === 'nodeId' && nodeIdEditDisabledReason)) {
+  const executionCellNumber = node.execution_meta?.current_cell?.cell_number ?? node.execution_meta?.last_completed_cell_number ?? 0
+  async function commitRename() {
+    if (renameBusy) {
       return
     }
-    if (field === 'title' && titleError) {
+    if (titleError || !resolvedNodeId || duplicateId) {
       return
     }
-    if (field === 'nodeId' && (!resolvedNodeId || duplicateId)) {
-      return
-    }
-    const nextTitle = field === 'title' ? draftTitle.trim() : node.title
-    const nextNodeId = field === 'nodeId' ? resolvedNodeId : node.id
+    const nextTitle = draftTitle.trim()
+    const nextNodeId = nodeIdEditDisabledReason ? node.id : resolvedNodeId
     const unchanged = nextNodeId === node.id && nextTitle === node.title
     if (unchanged) {
-      setActiveIdentityField(null)
+      setEditingIdentity(false)
       return
     }
     setRenameBusy(true)
     try {
       await onRenameNode(node.id, { nodeId: nextNodeId, title: nextTitle })
-      setActiveIdentityField(null)
+      setEditingIdentity(false)
     } finally {
       setRenameBusy(false)
     }
   }
 
-  function cancelRename(field?: 'title' | 'nodeId') {
-    setActiveIdentityField(null)
-    if (!field || field === 'title') {
-      setDraftTitle(node.title)
-    }
-    if (!field || field === 'nodeId') {
-      setDraftNodeId(node.id)
-    }
-    setRenameBusy(false)
-  }
-
-  function activateIdentityField(field: 'title' | 'nodeId') {
-    if (renameBusy || (field === 'nodeId' && nodeIdEditDisabledReason)) {
-      return
-    }
-    setActiveIdentityField(field)
-    if (field === 'title') {
-      setDraftTitle(node.title)
-      return
-    }
+  function cancelRename() {
+    setEditingIdentity(false)
     setDraftTitle(node.title)
     setDraftNodeId(node.id)
-  }
-
-  function handleIdentityKeyDown(event: React.KeyboardEvent<HTMLInputElement>) {
-    if (event.key === 'Enter') {
-      event.preventDefault()
-      if (activeIdentityField) {
-        void commitRename(activeIdentityField)
-      }
-    }
-    if (event.key === 'Escape') {
-      event.preventDefault()
-      cancelRename(activeIdentityField ?? undefined)
-    }
+    setNodeIdTouched(false)
+    setRenameBusy(false)
   }
 
   return (
     <div className="inspector-stack">
-      <div className="badge-line">
-        <span className="rf-badge static" title={badge.title}>{badge.label}</span>
-      </div>
-      <div className="stack-list subtle">
-        <div>
-          <span>Name</span>
-          <strong className="inspector-inline-edit">
-            {activeIdentityField === 'title' ? (
-              <input
-                value={draftTitle}
-                onChange={(event) => setDraftTitle(event.target.value)}
-                onKeyDown={handleIdentityKeyDown}
-                placeholder="Block name"
-              />
-            ) : (
-              node.title
-            )}
-            <button
-              type="button"
-              className="secondary small-icon-pill"
-              onClick={() => {
-                if (activeIdentityField === 'title') {
-                  void commitRename('title')
-                  return
-                }
-                activateIdentityField('title')
-              }}
-              disabled={renameBusy}
-              aria-label={activeIdentityField === 'title' ? 'Save name' : 'Edit name'}
-            >
-              {activeIdentityField === 'title' ? <Check width={16} height={16} /> : <Pencil width={16} height={16} />}
-            </button>
-          </strong>
-          {activeIdentityField === 'title' && titleError ? <span className="field-note error inspector-inline-note">Name is required.</span> : null}
+      <div className="inspector-identity-section">
+        <div className="inspector-identity">
+          <div className="inspector-identity-copy">
+            <strong>{node.title}</strong>
+            <code>{node.id}</code>
+          </div>
+          <button type="button" className="secondary small-icon-pill" onClick={() => setEditingIdentity(true)} disabled={renameBusy} aria-label="Edit name and node ID">
+            <Pencil width={16} height={16} />
+          </button>
         </div>
-        <div>
-          <span>Node ID</span>
-          <strong className="inspector-inline-edit">
-            {activeIdentityField === 'nodeId' ? (
-              <input
-                className={duplicateId || !resolvedNodeId ? 'invalid' : ''}
-                value={draftNodeId}
-                onChange={(event) => setDraftNodeId(normalizeNodeId(event.target.value))}
-                onKeyDown={handleIdentityKeyDown}
-                placeholder="notebook_id"
-                spellCheck={false}
-                disabled={Boolean(nodeIdEditDisabledReason)}
-              />
-            ) : (
-              node.id
-            )}
-            <button
-              type="button"
-              className="secondary small-icon-pill"
-              title={nodeIdEditDisabledReason ?? undefined}
-              onClick={() => {
-                if (activeIdentityField === 'nodeId') {
-                  void commitRename('nodeId')
-                  return
-                }
-                activateIdentityField('nodeId')
-              }}
-              disabled={renameBusy || Boolean(nodeIdEditDisabledReason)}
-              aria-label={activeIdentityField === 'nodeId' ? 'Save node ID' : 'Edit node ID'}
-            >
-              {activeIdentityField === 'nodeId' ? <Check width={16} height={16} /> : <Pencil width={16} height={16} />}
-            </button>
-          </strong>
-          {duplicateId && activeIdentityField === 'nodeId' ? <span className="field-note error inspector-inline-note">This ID is already used by another node.</span> : null}
-          {!duplicateId && activeIdentityField === 'nodeId' && !resolvedNodeId ? <span className="field-note error inspector-inline-note">Node ID is required.</span> : null}
-        </div>
-        <div><span>Kind</span><strong>{node.kind}</strong></div>
-        <div><span>Frozen</span><strong>{node.ui?.frozen ? 'yes' : 'no'}</strong></div>
-        <div><span>State</span><strong>{displayedState}</strong></div>
-        <div><span>Validation</span><strong>{blockingValidationIssues.length ? `${blockingValidationIssues.length} error${blockingValidationIssues.length === 1 ? '' : 's'}` : 'ok'}</strong></div>
-        <div><span>Artifacts</span><ArtifactCounts counts={counts} showLabels /></div>
+        {editingIdentity ? (
+          <form className="form-grid compact inspector-identity-form" onSubmit={(event) => { event.preventDefault(); void commitRename() }}>
+            <label>
+              <span>Name</span>
+              <input value={draftTitle} onChange={(event) => {
+                const nextTitle = event.target.value
+                setDraftTitle(nextTitle)
+                if (!nodeIdTouched && !nodeIdEditDisabledReason) setDraftNodeId(normalizeNodeId(nextTitle))
+              }} placeholder="Block name" autoFocus />
+              {titleError ? <span className="field-note error">Name is required.</span> : null}
+            </label>
+            <label>
+              <span>Node ID</span>
+              <input className={duplicateId || !resolvedNodeId ? 'invalid' : ''} value={draftNodeId} onChange={(event) => {
+                setNodeIdTouched(true)
+                setDraftNodeId(normalizeNodeId(event.target.value))
+              }} placeholder="notebook_id" spellCheck={false} disabled={Boolean(nodeIdEditDisabledReason)} />
+              {duplicateId ? <span className="field-note error">This ID is already used by another node.</span> : !resolvedNodeId ? <span className="field-note error">Node ID is required.</span> : nodeIdEditDisabledReason ? <span className="field-note">{nodeIdEditDisabledReason}</span> : <span className="field-note">Node IDs are stored as snake_case and used in graph references.</span>}
+            </label>
+            <div className="dialog-actions">
+              <button type="button" className="secondary" onClick={cancelRename}>Cancel</button>
+              <button type="submit" disabled={renameBusy || titleError || !resolvedNodeId || duplicateId}>{renameBusy ? 'Saving...' : 'Save'}</button>
+            </div>
+          </form>
+        ) : null}
       </div>
 
       {node.execution_meta ? (
         <div className="inspector-block">
           <h3>Execution</h3>
-          <div className="stack-list subtle">
-            <div><span>Origin</span><strong>Orchestrator</strong></div>
-            <div><span>Status</span><strong>{node.execution_meta.status}</strong></div>
-            <div><span>Started</span><strong>{formatTimestamp(node.execution_meta.started_at)}</strong></div>
-            {node.execution_meta.status === 'running' && runningDurationLabel ? <div><span>Elapsed</span><strong>{runningDurationLabel}</strong></div> : null}
-            {node.execution_meta.status !== 'running' && typeof node.execution_meta.duration_seconds === 'number' && node.state === 'ready' ? <div><span>Duration</span><strong>{formatDurationSeconds(node.execution_meta.duration_seconds)}</strong></div> : null}
+          <div className={`execution-timeline status-${node.execution_meta.status}`}>
+            <div className="execution-timeline-bar"><span /><span /></div>
+            <div className="execution-timeline-copy">
+              <div className="execution-timeline-endpoint"><span>Started</span> <strong>{formatRelativeTimestamp(node.execution_meta.started_at, now)}</strong> <time>{formatExecutionTimestamp(node.execution_meta.started_at)}</time></div>
+              <div className="execution-timeline-duration">
+                <span>Elapsed</span> <strong>{node.execution_meta.status === 'running' ? runningDurationLabel : typeof node.execution_meta.duration_seconds === 'number' ? formatDurationSeconds(node.execution_meta.duration_seconds) : '—'}</strong>
+                {node.execution_meta.status === 'running' && node.execution_meta.total_cells ? <span> ({executionCellNumber}/{node.execution_meta.total_cells})</span> : null}
+              </div>
+              <div className="execution-timeline-endpoint">{node.execution_meta.status === 'succeeded' && node.execution_meta.ended_at ? <><span>Finished</span> <strong>{formatRelativeTimestamp(node.execution_meta.ended_at, now)}</strong> <time>{formatExecutionTimestamp(node.execution_meta.ended_at)}</time></> : <span className="execution-timeline-placeholder">—</span>}</div>
+            </div>
           </div>
+          {node.execution_meta.status === 'failed' && node.execution_meta.error ? <pre className="execution-error-block">{node.execution_meta.error}</pre> : null}
         </div>
       ) : null}
 
@@ -396,19 +331,9 @@ export function NodeInspector({
         />
       ) : null}
 
-      {node.template?.ref ? (
-        <div className="inspector-block">
-          <div className="panel-header-row">
-            <h3>Template origin</h3>
-            <button className="secondary" onClick={() => onOpenTemplate(node.template?.ref as string)}>View template</button>
-          </div>
-          <p className="muted-copy">{template?.ref ?? node.template.ref}</p>
-        </div>
-      ) : null}
-
       <div className="inspector-block">
         <h3>{node.kind === 'notebook' ? 'Notebook docs' : 'Block docs'}</h3>
-        <pre className="code-block docs-block">{node.interface?.docs ?? 'No block docs found.'}</pre>
+        {node.interface?.docs ? <SimpleMarkdown className="inspector-docs" text={node.interface.docs} /> : <p className="muted-copy">No block docs found.</p>}
       </div>
 
       {node.kind === 'constant' ? (
@@ -435,11 +360,12 @@ export function NodeInspector({
             const isMissingRequired = !port.has_default && (!source || artifactIsEmpty(upstreamArtifact))
             return (
               <div key={port.name} className={`inspector-port state-${state} ${isMissingRequired ? 'missing-required' : ''}`}>
-                <PortPill name={port.name} label={port.label} dataType={port.data_type} side="input" compact />
-                <div className="inspector-port-meta">
-                  <span>{source ? `${source.source_node}/${source.source_port}` : port.has_default ? 'default value' : 'not connected'}</span>
-                  {port.has_default ? <span>default: {JSON.stringify(port.default)}</span> : null}
+                <div className="inspector-port-heading">
+                  <span className="port-circle" style={{ backgroundColor: TYPE_COLORS[port.data_type] ?? TYPE_COLORS.object }} />
+                  <code>{port.name}</code>
+                  <span className="inspector-port-type">{formatType(port.data_type)}</span>
                 </div>
+                {port.description ? <p className="inspector-port-description">{port.description}</p> : null}
               </div>
             )
           })}
@@ -455,34 +381,22 @@ export function NodeInspector({
             const state = artifact?.state ?? 'pending'
             return (
               <div key={port.name} className={`inspector-port state-${state}`}>
-                <PortPill
-                  name={port.name}
-                  label={port.label}
-                  dataType={port.data_type}
-                  side="output"
-                  compact
-                />
+                <div className="inspector-port-heading">
+                  <span className="port-circle" style={{ backgroundColor: TYPE_COLORS[port.data_type] ?? TYPE_COLORS.object }} />
+                  <code>{port.name}</code>
+                  <span className="inspector-port-type">{formatType(port.data_type)}</span>
+                </div>
+                {port.description ? <p className="inspector-port-description">{port.description}</p> : null}
               </div>
             )
           })}
           {!node.interface?.outputs?.length ? <p className="muted-copy">No outputs.</p> : null}
-        </div>
-      </div>
-
-      <div className="inspector-block">
-        <h3>Validation</h3>
-        <div className="warning-list">
-          {snapshot.notices.filter((issue) => issue.node_id === node.id).map((issue) => {
-            const details = formatIssueDetails(issue.details)
-            return (
-              <div key={issue.issue_id} className={`warning-chip ${issue.severity}`}>
-                <strong>{issue.code}</strong>
-                <SimpleMarkdown className="warning-chip-message" text={issue.message} />
-                {details ? <pre className="warning-details">{details}</pre> : null}
-              </div>
-            )
-          })}
-          {!snapshot.notices.some((issue) => issue.node_id === node.id) ? <p className="muted-copy">No active validation issues.</p> : null}
+          {assetCount > 0 && viewAssetsAction?.href ? (
+            <div className={`inspector-assets-output state-${assetState}`}>
+              <strong>+ {assetCount} asset{assetCount === 1 ? '' : 's'}</strong>
+              <ActionButtons actions={[{ ...viewAssetsAction, label: 'View', className: `${viewAssetsAction.className ?? ''} inspector-assets-view`.trim() }]} itemClassName="secondary" />
+            </div>
+          ) : null}
         </div>
       </div>
 
@@ -501,6 +415,13 @@ export function NodeInspector({
             }}
           />
           {node.ui?.frozen ? <p className="muted-copy">{frozenFileBlockMessage(node)}</p> : null}
+        </div>
+      ) : null}
+
+      {node.template?.ref ? (
+        <div className="inspector-block">
+          <h3>Template origin</h3>
+          <code className="template-origin-id">{template?.ref ?? node.template.ref}</code>
         </div>
       ) : null}
 

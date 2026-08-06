@@ -297,7 +297,7 @@ function App() {
   const [editorSessions, setEditorSessions] = useState<Record<string, SessionRecord>>({})
   const [hoveredNoticeNodeId, setHoveredNoticeNodeId] = useState<string | null>(null)
   const [noticeFocusRequest, setNoticeFocusRequest] = useState<NoticeFocusRequest | null>(null)
-  const [notebookAssetCountsByNodeId, setNotebookAssetCountsByNodeId] = useState<Record<string, number>>({})
+  const [notebookAssetCountsByNodeId, setNotebookAssetCountsByNodeId] = useState<Record<string, { pending: number; stale: number; ready: number }>>({})
   const [themeMode, setThemeMode] = useState<ThemeMode>(() => {
     const stored = window.localStorage.getItem('bulletjournal-theme')
     if (stored === 'light' || stored === 'dark' || stored === 'system') {
@@ -1020,9 +1020,16 @@ function App() {
   async function preloadNotebookAssetCount(nodeId: string) {
     try {
       const assets = await listNodeAssets(nodeId)
-      setNotebookAssetCountsByNodeId((current) => ({ ...current, [nodeId]: assets.length }))
+      setNotebookAssetCountsByNodeId((current) => ({
+        ...current,
+        [nodeId]: {
+          pending: assets.filter((asset) => asset.state === 'pending').length,
+          stale: assets.filter((asset) => asset.state === 'stale').length,
+          ready: assets.filter((asset) => asset.state === 'ready').length,
+        },
+      }))
     } catch {
-      setNotebookAssetCountsByNodeId((current) => ({ ...current, [nodeId]: 0 }))
+      setNotebookAssetCountsByNodeId((current) => ({ ...current, [nodeId]: { pending: 0, stale: 0, ready: 0 } }))
     }
   }
 
@@ -1520,7 +1527,8 @@ function App() {
     }
 
     if (node.kind === 'notebook') {
-      const assetCount = notebookAssetCountsByNodeId[node.id] ?? 0
+      const assetCounts = notebookAssetCountsByNodeId[node.id] ?? { pending: 0, stale: 0, ready: 0 }
+      const assetCount = assetCounts.pending + assetCounts.stale + assetCounts.ready
       actions.push({
         key: 'view-assets',
         label: `View ${assetCount} asset${assetCount === 1 ? '' : 's'}`,
@@ -1811,7 +1819,7 @@ function App() {
       return
     }
     void preloadNotebookAssetCount(selectedNode.id)
-  }, [selectedNode?.id, selectedNode?.kind])
+  }, [selectedNode?.id, selectedNode?.kind, selectedNode?.execution_meta?.status, selectedNode?.execution_meta?.updated_at])
 
   const artifactNode = useMemo(
     () => liveSnapshot?.graph.nodes.find((node) => node.id === artifactNodeId) ?? null,
@@ -4510,24 +4518,15 @@ function App() {
 
         <aside className={`sidebar right floating-panel ${selectedNode && inspectorOpen ? 'open' : 'closed'}`}>
           <div className={`panel inspector-panel ${selectedNode && inspectorOpen ? 'open' : 'closed'}`}>
-            <div className="panel-header-row">
-              <h2>Inspector</h2>
-              {selectedNode ? <button className="secondary" onClick={() => {
-                applySelection([], [], { openInspector: false })
-              }}>Clear</button> : null}
-            </div>
             {selectedNode ? (
               <NodeInspector
                 snapshot={liveSnapshot as ProjectSnapshot}
                 node={selectedNode}
                 serverNowMs={serverNowMs}
                 serverNowClientAnchorMs={clientNowAnchorMs}
-                activeRunNodeId={runningNodeId}
-                queuedRunNodeIds={queuedNodeIds}
-                completedRunNodeIds={completedNodeIds}
                 nodeActions={nodeActionsForNode(selectedNode)}
+                assetCounts={notebookAssetCountsByNodeId[selectedNode.id] ?? { pending: 0, stale: 0, ready: 0 }}
                 onUploadFile={handleUploadFile}
-                onOpenTemplate={openTemplateInfo}
                 existingNodeIds={existingNodeIds.filter((nodeId) => nodeId !== selectedNode.id)}
                 onRenameNode={handleRenameNode}
                 nodeIdEditDisabledReason={selectedNode.kind === 'notebook'

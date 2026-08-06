@@ -87,6 +87,7 @@ export type NodeRecord = {
     } | null
     stdout: ExecutionLogSummary | null
     stderr: ExecutionLogSummary | null
+    error: string | null
     updated_at: string
   } | null
   orchestrator_state?: {

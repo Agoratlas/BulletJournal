@@ -1540,6 +1540,10 @@ if __name__ == '__main__':
     assert 'Run failed in `Broken Node` (`broken_node`).' in notice['message']
     assert notice['details']['node_id'] == 'broken_node'
     assert 'Traceback' in notice['details']['traceback']
+    node = next(node for node in snapshot['graph']['nodes'] if node['id'] == 'broken_node')
+    assert node['execution_meta']['status'] == 'failed'
+    assert 'Traceback' in node['execution_meta']['error']
+    assert 'RuntimeError: boom' in node['execution_meta']['error']
 
 
 def test_orchestrated_failure_marks_only_failing_node_as_error(tmp_path) -> None:
