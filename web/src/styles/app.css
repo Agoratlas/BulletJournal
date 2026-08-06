@@ -3807,6 +3807,7 @@ input.invalid {
   max-height: calc(100vh - 140px);
   display: grid;
   gap: 12px;
+  overflow-y: auto;
   z-index: 16;
   pointer-events: none;
 }

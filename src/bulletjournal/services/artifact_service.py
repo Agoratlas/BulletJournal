@@ -326,10 +326,11 @@ class ArtifactService:
         interface = self.project_service.latest_interface(node_id)
         if interface is None:
             raise InvalidRequestError(f'Node `{node_id}` does not have a parsed interface yet.')
+        project = self.project_service.require_project()
         changed_artifacts: list[str] = []
         for port in interface.get('outputs', []):
             artifact_name = str(port['name'])
-            head = self.project_service.require_project().state_db.get_artifact_head(node_id, artifact_name)
+            head = project.state_db.get_artifact_head(node_id, artifact_name)
             if head is None or head.get('current_version_id') is None:
                 continue
             current_state = ArtifactState(str(head['state']))
@@ -344,11 +345,35 @@ class ArtifactService:
                 propagate_downstream_stale=False,
             )
             changed_artifacts.append(artifact_name)
-        if changed_artifacts and state == ArtifactState.STALE:
+        changed_assets: list[str] = []
+        for head in project.state_db.list_asset_heads(node_id=node_id):
+            if head.get('current_asset_version_id') is None:
+                continue
+            current_state = ArtifactState(str(head['state']))
+            if only_current_state is not None and current_state != only_current_state:
+                continue
+            if current_state == state:
+                continue
+            asset_name = str(head['asset_name'])
+            project.state_db.set_asset_head_state(node_id, asset_name, state)
+            self.project_service.event_service.publish(
+                'asset.state_changed',
+                project_id=project.metadata.project_id,
+                graph_version=int(self.project_service.graph().meta['graph_version']),
+                payload={
+                    'node_id': node_id,
+                    'asset_name': asset_name,
+                    'old_state': current_state.value,
+                    'new_state': state.value,
+                },
+            )
+            changed_assets.append(asset_name)
+        if (changed_artifacts or changed_assets) and state == ArtifactState.STALE:
             GraphService(self.project_service).mark_downstream_stale([node_id])
         return {
             'node_id': node_id,
             'artifact_names': changed_artifacts,
+            'asset_names': changed_assets,
             'state': state.value,
             'only_current_state': None if only_current_state is None else only_current_state.value,
         }

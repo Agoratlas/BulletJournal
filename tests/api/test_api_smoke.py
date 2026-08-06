@@ -3292,6 +3292,79 @@ def test_artifact_state_endpoints_can_mark_outputs_stale_and_ready(tmp_path) -> 
     assert refreshed.json()['state'] == 'ready'
 
 
+def test_node_output_state_endpoints_include_assets(tmp_path) -> None:
+    project_root = init_project_root(tmp_path / 'project').root
+    app = create_app(project_path=project_root)
+    client = TestClient(app)
+    container = app.state.container
+
+    opened = client.get('/api/v1/project/snapshot')
+    graph_version = opened.json()['graph']['meta']['graph_version']
+    created = client.patch(
+        '/api/v1/graph',
+        json={
+            'graph_version': graph_version,
+            'operations': [
+                {
+                    'type': 'add_notebook_node',
+                    'node_id': 'asset_node',
+                    'title': 'Asset Node',
+                }
+            ],
+        },
+    )
+    assert created.status_code == 200
+
+    notebook_path = project_root / 'notebooks' / 'asset_node.py'
+    notebook_path.write_text(
+        """
+import marimo
+
+app = marimo.App()
+
+with app.setup:
+    from bulletjournal.runtime import assets
+
+@app.cell
+def _():
+    assets.push(assets.Markdown('hello'), name='notes', title='Notes')
+    return
+""".strip()
+        + '\n',
+        encoding='utf-8',
+    )
+    container.project_service.reparse_notebook_by_path(notebook_path)
+
+    run = client.post('/api/v1/nodes/asset_node/run', json={'mode': 'run_stale', 'action': 'use_stale'})
+    assert run.status_code == 200
+    wait_for_run_status(client, run.json()['run_id'], 'succeeded')
+
+    stale = client.post('/api/v1/nodes/asset_node/outputs/state', json={'state': 'stale'})
+    assert stale.status_code == 200
+    assert stale.json()['artifact_names'] == []
+    assert stale.json()['asset_names'] == ['notes']
+
+    snapshot = client.get('/api/v1/project/snapshot').json()
+    asset_node = next(node for node in snapshot['graph']['nodes'] if node['id'] == 'asset_node')
+    assert asset_node['ui']['asset_counts'] == {'pending': 0, 'stale': 1, 'ready': 0}
+
+    stale_asset = client.get('/api/v1/nodes/asset_node/assets/notes')
+    assert stale_asset.status_code == 200
+    assert stale_asset.json()['state'] == 'stale'
+
+    ready = client.post(
+        '/api/v1/nodes/asset_node/outputs/state',
+        json={'state': 'ready', 'only_current_state': 'stale'},
+    )
+    assert ready.status_code == 200
+    assert ready.json()['artifact_names'] == []
+    assert ready.json()['asset_names'] == ['notes']
+
+    ready_asset = client.get('/api/v1/nodes/asset_node/assets/notes')
+    assert ready_asset.status_code == 200
+    assert ready_asset.json()['state'] == 'ready'
+
+
 def test_marking_node_outputs_stale_also_stales_downstream_nodes(tmp_path) -> None:
     project_root = init_project_root(tmp_path / 'project').root
     app = create_app(project_path=project_root)

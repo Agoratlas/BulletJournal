@@ -275,6 +275,64 @@ function downstreamNodeIds(snapshot: ProjectSnapshot, rootNodeIds: string[]): Se
   return visited
 }
 
+export function upstreamNodeIds(snapshot: ProjectSnapshot, nodeIds: string[]): string[] {
+  const upstreamByNodeId = new Map<string, string[]>()
+  for (const edge of snapshot.graph.edges) {
+    const sources = upstreamByNodeId.get(edge.target_node) ?? []
+    sources.push(edge.source_node)
+    upstreamByNodeId.set(edge.target_node, sources)
+  }
+  const ancestors = new Set<string>()
+  const queue = [...nodeIds]
+  while (queue.length) {
+    const nodeId = queue.shift() as string
+    for (const sourceNodeId of upstreamByNodeId.get(nodeId) ?? []) {
+      if (ancestors.has(sourceNodeId)) {
+        continue
+      }
+      ancestors.add(sourceNodeId)
+      queue.push(sourceNodeId)
+    }
+  }
+  return snapshot.graph.nodes.filter((node) => ancestors.has(node.id)).map((node) => node.id)
+}
+
+export function topologicallyOrderNodeIds(snapshot: ProjectSnapshot, nodeIds: string[]): string[] {
+  const selected = new Set(nodeIds)
+  const upstreamByNodeId = new Map<string, Set<string>>()
+  const downstreamByNodeId = new Map<string, string[]>()
+  for (const edge of snapshot.graph.edges) {
+    const upstream = upstreamByNodeId.get(edge.target_node) ?? new Set<string>()
+    upstream.add(edge.source_node)
+    upstreamByNodeId.set(edge.target_node, upstream)
+    const downstream = downstreamByNodeId.get(edge.source_node) ?? []
+    downstream.push(edge.target_node)
+    downstreamByNodeId.set(edge.source_node, downstream)
+  }
+  const indegree = new Map<string, number>()
+  for (const nodeId of selected) {
+    indegree.set(nodeId, [...(upstreamByNodeId.get(nodeId) ?? [])].filter((upstreamId) => selected.has(upstreamId)).length)
+  }
+  const queue = [...selected].filter((nodeId) => indegree.get(nodeId) === 0).sort()
+  const ordered: string[] = []
+  while (queue.length) {
+    const nodeId = queue.shift() as string
+    ordered.push(nodeId)
+    for (const downstreamId of downstreamByNodeId.get(nodeId) ?? []) {
+      if (!selected.has(downstreamId)) {
+        continue
+      }
+      const remaining = (indegree.get(downstreamId) ?? 0) - 1
+      indegree.set(downstreamId, remaining)
+      if (remaining === 0) {
+        queue.push(downstreamId)
+        queue.sort()
+      }
+    }
+  }
+  return ordered
+}
+
 export function frozenBlockBlockersForStaleRoots(snapshot: ProjectSnapshot, rootNodeIds: string[]): NodeRecord[] {
   const affectedNodeIds = downstreamNodeIds(snapshot, rootNodeIds)
   return snapshot.graph.nodes.filter((node) => Boolean(node.ui?.frozen) && affectedNodeIds.has(node.id))

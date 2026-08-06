@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import uuid
 from contextlib import contextmanager, suppress
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
@@ -640,6 +641,13 @@ class ProjectService:
                 expected_source_hash = normalized_source_hash_text(rendered_template_source)
                 template_status = 'template' if interface.get('source_hash') == expected_source_hash else 'modified'
             node_ui = dict(node.ui)
+            if node.kind == NodeKind.NOTEBOOK:
+                asset_states = asset_states_by_node.get(node.id, [])
+                node_ui['asset_counts'] = {
+                    ArtifactState.PENDING.value: asset_states.count(ArtifactState.PENDING.value),
+                    ArtifactState.STALE.value: asset_states.count(ArtifactState.STALE.value),
+                    ArtifactState.READY.value: asset_states.count(ArtifactState.READY.value),
+                }
             if node.kind == NodeKind.DASHBOARD and self.dashboard_service is not None:
                 node_ui = self._dashboard_ui_payload(node.id, base_ui=node_ui)
             orchestrator_state = orchestrator_state_by_node.get(node.id)
@@ -818,13 +826,20 @@ class ProjectService:
 
     def mark_environment_changed(self, *, reason: str, mark_all_artifacts_stale: bool = True) -> dict[str, Any]:
         project = self.require_project()
+        notice_id = f'environment_changed:{uuid.uuid4()}'
         stale_count = 0
+        frozen_node_ids: set[str] = set()
         if mark_all_artifacts_stale:
-            notebook_ids = {node.id for node in self.graph().nodes if node.kind == NodeKind.NOTEBOOK}
+            graph = self.graph()
+            notebook_ids = {node.id for node in graph.nodes if node.kind == NodeKind.NOTEBOOK}
+            frozen_ids = {node.id for node in graph.nodes if self.block_is_frozen(node)}
             for head in project.state_db.list_artifact_heads():
                 if head['node_id'] not in notebook_ids:
                     continue
                 if head['current_version_id'] is None or head['state'] == ArtifactState.STALE.value:
+                    continue
+                if head['node_id'] in frozen_ids:
+                    frozen_node_ids.add(str(head['node_id']))
                     continue
                 project.state_db.set_artifact_head_state(head['node_id'], head['artifact_name'], ArtifactState.STALE)
                 stale_count += 1
@@ -833,9 +848,12 @@ class ProjectService:
                     continue
                 if head['current_asset_version_id'] is None or head['state'] == ArtifactState.STALE.value:
                     continue
+                if head['node_id'] in frozen_ids:
+                    frozen_node_ids.add(str(head['node_id']))
+                    continue
                 project.state_db.set_asset_head_state(head['node_id'], head['asset_name'], ArtifactState.STALE)
                 stale_count += 1
-            graph_version = int(self.graph().meta['graph_version'])
+            graph_version = int(graph.meta['graph_version'])
             self.event_service.publish(
                 'project.environment_changed',
                 project_id=project.metadata.project_id,
@@ -843,19 +861,34 @@ class ProjectService:
                 payload={'reason': reason, 'mark_all_artifacts_stale': True, 'stale_count': stale_count},
             )
         notice = self.record_notice(
-            issue_id='environment_changed',
+            issue_id=notice_id,
             node_id=None,
             severity=ValidationSeverity.WARNING,
             code='environment_changed',
             message='Project outputs were marked stale because the environment changed.',
             details={'reason': reason, 'mark_all_artifacts_stale': mark_all_artifacts_stale},
         )
+        frozen_notice = None
+        if frozen_node_ids:
+            frozen_notice = self.record_notice(
+                issue_id=f'{notice_id}:frozen_blocks',
+                node_id=None,
+                severity=ValidationSeverity.WARNING,
+                code='environment_changed_frozen_blocks',
+                message='Outputs for frozen blocks were not marked stale because the environment changed.',
+                details={
+                    'reason': reason,
+                    'node_ids': sorted(frozen_node_ids),
+                    'skipped_node_count': len(frozen_node_ids),
+                },
+            )
         return {
             'project_id': project.metadata.project_id,
             'reason': reason,
             'mark_all_artifacts_stale': mark_all_artifacts_stale,
             'stale_count': stale_count,
             'notice': notice,
+            'frozen_notice': frozen_notice,
         }
 
     def reparse_all_notebooks(self) -> None:

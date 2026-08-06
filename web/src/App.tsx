@@ -8,7 +8,7 @@ import { areaSettings, type AreaColorKey, type AreaTitlePosition } from './lib/a
 import { useDocumentMetadata } from './lib/documentMetadata'
 import type { ArtifactRecord, DashboardRecord, GraphPatchOperation, LayoutRecord, NodeRecord, ProjectSnapshot, SessionRecord, TemplateRecord } from './lib/types'
 import type { AppNotice, ClipboardGraph, ClipboardNodeRecord, ConstantValueType, DataFrameUploadFormat, GraphHistoryEntry, GraphMutationPlan, NodeActionItem, OptimisticGraphState, PaletteEntry, PalettePreviewBlock, PortActionMenuState } from './appTypes'
-import { applyOptimisticDashboardSources, applyOptimisticGraphOperations, areaAddOperationForNode, artifactTargetForPort, blockCreateMode, clampContextMenuPosition, cloneSnapshot, constantAddOperationForNode, copiedTitle, createClientNotice, dashboardAddOperationForNode, edgeIdForPorts, edgeIdsForPort, editorSessionDetails, expandMutationPlan, fileInputAddOperationForNode, formatMarkdownCode, formatRunBlockedMessage, formatRunFailureMessage, freezeBlockMessage, frozenBlockBlockersForDelete, frozenBlockBlockersForRemovedEdges, frozenBlockBlockersForStaleRoots, isEditableTarget, isEditorOpenConflict, isFreezeConflict, isManagedRunFailure, normalizeNodeId, notebookAddOperationForNode, organizerAddOperationForNode, pipelineTemplateNodeRecords, pipelineTopLeftForCenter, SNAPSHOT_REFRESH_EVENTS, SNAPSHOT_REFRESH_THROTTLE_MS, snapToGrid, uniqueCopiedNodeId } from './lib/appHelpers'
+import { applyOptimisticDashboardSources, applyOptimisticGraphOperations, areaAddOperationForNode, artifactTargetForPort, blockCreateMode, clampContextMenuPosition, cloneSnapshot, constantAddOperationForNode, copiedTitle, createClientNotice, dashboardAddOperationForNode, edgeIdForPorts, edgeIdsForPort, editorSessionDetails, expandMutationPlan, fileInputAddOperationForNode, formatMarkdownCode, formatRunBlockedMessage, formatRunFailureMessage, freezeBlockMessage, frozenBlockBlockersForDelete, frozenBlockBlockersForRemovedEdges, frozenBlockBlockersForStaleRoots, isEditableTarget, isEditorOpenConflict, isFreezeConflict, isManagedRunFailure, normalizeNodeId, notebookAddOperationForNode, organizerAddOperationForNode, pipelineTemplateNodeRecords, pipelineTopLeftForCenter, SNAPSHOT_REFRESH_EVENTS, SNAPSHOT_REFRESH_THROTTLE_MS, snapToGrid, topologicallyOrderNodeIds, uniqueCopiedNodeId, upstreamNodeIds } from './lib/appHelpers'
 import { ArtifactCard } from './components/ArtifactCard'
 import { ArtifactCounts } from './components/ArtifactCounts'
 import { BlockPalette } from './components/BlockPalette'
@@ -233,6 +233,7 @@ type ConfirmationState =
   | {
       kind: 'node-frozen'
       nodeIds: string[]
+      ancestorNodeIds: string[]
       frozen: boolean
       title: string
       message: string
@@ -1361,8 +1362,13 @@ function App() {
       return
     }
     try {
-      await Promise.all(nodeIds.map((nodeId) => setNodeOutputsState(nodeId, state, onlyCurrentState)))
+      // Ready transitions can make a downstream selected block eligible.
+      const orderedNodeIds = liveSnapshot ? topologicallyOrderNodeIds(liveSnapshot, nodeIds) : nodeIds
+      for (const nodeId of orderedNodeIds) {
+        await setNodeOutputsState(nodeId, state, onlyCurrentState)
+      }
       await refreshSnapshot()
+      await Promise.all(orderedNodeIds.map((nodeId) => preloadNotebookAssetCount(nodeId)))
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Node output state update failed.'
       reportClientError(
@@ -1393,14 +1399,22 @@ function App() {
       void handleSetNodesFrozen(nodeIds, true)
       return
     }
+    const ancestorNodeIds = liveSnapshot
+      ? upstreamNodeIds(liveSnapshot, nodeIds).filter(
+          (nodeId) => !nodeIds.includes(nodeId) && Boolean(liveSnapshot.graph.nodes.find((node) => node.id === nodeId)?.ui?.frozen),
+        )
+      : []
     setConfirmationState({
       kind: 'node-frozen',
       nodeIds,
+      ancestorNodeIds,
       frozen: false,
       title: nodeIds.length === 1 ? 'Unfreeze block?' : 'Unfreeze selected blocks?',
-      message: nodeIds.length === 1
-        ? 'This will unfreeze the block and any frozen descendants downstream of it.'
-        : `This will unfreeze ${nodeIds.length} selected blocks and any frozen descendants downstream of them.`,
+      message: ancestorNodeIds.length
+        ? 'This will unfreeze the selected blocks and any frozen descendants downstream of them. You can also unfreeze their ancestors.'
+        : nodeIds.length === 1
+          ? 'This will unfreeze the block and any frozen descendants downstream of it.'
+          : `This will unfreeze ${nodeIds.length} selected blocks and any frozen descendants downstream of them.`,
     })
   }
 
@@ -1455,8 +1469,9 @@ function App() {
           .map((port) => artifactFor(liveSnapshot, node.id, port.name))
           .filter((artifact): artifact is ArtifactRecord => artifact !== undefined && artifact.current_version_id !== null)
       : []
-    const canMarkOutputsStale = node.kind !== 'constant' && artifactHeads.some((artifact) => artifact.state !== 'stale')
-    const canMarkOutputsReady = node.kind !== 'constant' && artifactHeads.some((artifact) => artifact.state === 'stale') && nodeInputsAreReady(node)
+    const assetCounts = node.ui?.asset_counts ?? notebookAssetCountsByNodeId[node.id] ?? { pending: 0, stale: 0, ready: 0 }
+    const canMarkOutputsStale = node.kind !== 'constant' && (artifactHeads.some((artifact) => artifact.state !== 'stale') || assetCounts.ready > 0)
+    const canMarkOutputsReady = node.kind !== 'constant' && (artifactHeads.some((artifact) => artifact.state === 'stale') || assetCounts.stale > 0) && nodeInputsAreReady(node)
     const actions: NodeActionItem[] = []
 
     if (node.kind === 'notebook') {
@@ -1527,7 +1542,6 @@ function App() {
     }
 
     if (node.kind === 'notebook') {
-      const assetCounts = notebookAssetCountsByNodeId[node.id] ?? { pending: 0, stale: 0, ready: 0 }
       const assetCount = assetCounts.pending + assetCounts.stale + assetCounts.ready
       actions.push({
         key: 'view-assets',
@@ -1624,6 +1638,7 @@ function App() {
       }
       return (node.interface?.outputs ?? [])
         .some((port) => artifactFor(liveSnapshot, node.id, port.name)?.current_version_id !== null)
+        || (node.ui?.asset_counts?.pending ?? 0) + (node.ui?.asset_counts?.stale ?? 0) + (node.ui?.asset_counts?.ready ?? 0) > 0
     }).map((node) => node.id)
     const staleMutationNodes = menuNodes.filter((node) => {
       if (!liveSnapshot) {
@@ -1634,6 +1649,7 @@ function App() {
       }
       return (node.interface?.outputs ?? [])
         .some((port) => artifactFor(liveSnapshot, node.id, port.name)?.state !== 'stale')
+        || (node.ui?.asset_counts?.ready ?? 0) > 0
     })
     const readyMutationNodes = menuNodes.filter((node) => {
       if (!liveSnapshot) {
@@ -1644,7 +1660,7 @@ function App() {
       }
       const hasStaleOutputs = (node.interface?.outputs ?? [])
         .some((port) => artifactFor(liveSnapshot, node.id, port.name)?.state === 'stale')
-      return hasStaleOutputs && nodeInputsAreReady(node)
+      return hasStaleOutputs || (node.ui?.asset_counts?.stale ?? 0) > 0
     })
     const staleEligibleNodeIds = staleMutationNodes.map((node) => node.id)
     const readyEligibleNodeIds = readyMutationNodes.map((node) => node.id)
@@ -2748,6 +2764,7 @@ function App() {
     try {
       await setNodeOutputsState(nodeId, state, onlyCurrentState)
       await refreshSnapshot()
+      await preloadNotebookAssetCount(nodeId)
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Node output state update failed.'
       reportClientError(
@@ -5059,7 +5076,13 @@ function App() {
           title={confirmationState.title}
           message={confirmationState.message}
           confirmLabel={confirmationState.frozen ? 'Freeze' : 'Unfreeze'}
+          alternateLabel={!confirmationState.frozen && confirmationState.ancestorNodeIds.length ? 'Unfreeze ancestors too' : undefined}
           onClose={() => setConfirmationState(null)}
+          onAlternate={() => {
+            const pending = confirmationState
+            setConfirmationState(null)
+            void handleSetNodesFrozen([...pending.nodeIds, ...pending.ancestorNodeIds], pending.frozen)
+          }}
           onConfirm={() => {
             const pending = confirmationState
             setConfirmationState(null)
