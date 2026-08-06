@@ -80,6 +80,7 @@ BulletJournal owns the project layout and schema files under `graph/`, `metadata
 - `docs/API.md`
 - `docs/TEMPLATES.md`
 - `docs/OPERATIONS.md`
+- `docs/ARTIFACT_LIFECYCLE.md`
 - `docs/TROUBLESHOOTING.md`
 
 ## Testing

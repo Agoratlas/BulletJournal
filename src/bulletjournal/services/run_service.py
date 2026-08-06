@@ -45,6 +45,7 @@ class ActiveRun:
 @dataclass(slots=True)
 class OrchestratorNodeState:
     node_id: str
+    incarnation_id: str
     run_id: str
     status: str
     started_at: str | None = None
@@ -458,6 +459,7 @@ class RunService:
             )
 
     def orchestrator_state(self) -> dict[str, dict[str, Any]]:
+        project = self.project_service.require_project()
         with self._lock:
             return {
                 node_id: {
@@ -468,6 +470,7 @@ class RunService:
                     'completed_at': state.completed_at,
                 }
                 for node_id, state in self._orchestrator_node_states.items()
+                if project.state_db.live_incarnation_id(node_id) == state.incarnation_id
             }
 
     def _run_single_node(self, run_id: str, node_id: str, active_run: ActiveRun) -> dict[str, Any]:
@@ -603,7 +606,13 @@ class RunService:
             active = ActiveRun(run_id=run_id, cancel_event=Event(), node_ids=list(plan))
             self._active_run = active
             self._orchestrator_node_states = {
-                node_id: OrchestratorNodeState(node_id=node_id, run_id=run_id, status='queued') for node_id in plan
+                node_id: OrchestratorNodeState(
+                    node_id=node_id,
+                    incarnation_id=project.state_db.live_incarnation_id(node_id) or '',
+                    run_id=run_id,
+                    status='queued',
+                )
+                for node_id in plan
             }
         project.state_db.record_run(
             run_id,
@@ -667,6 +676,7 @@ class RunService:
                 with self._lock:
                     self._orchestrator_node_states[current_node_id] = OrchestratorNodeState(
                         node_id=current_node_id,
+                        incarnation_id=project.state_db.live_incarnation_id(current_node_id) or '',
                         run_id=run_id,
                         status='running',
                         started_at=active.current_node_started_at,
@@ -713,6 +723,7 @@ class RunService:
                     with self._lock:
                         self._orchestrator_node_states[current_node_id] = OrchestratorNodeState(
                             node_id=current_node_id,
+                            incarnation_id=project.state_db.live_incarnation_id(current_node_id) or '',
                             run_id=run_id,
                             status='cancelled',
                             started_at=active.current_node_started_at,
@@ -753,6 +764,7 @@ class RunService:
                     with self._lock:
                         self._orchestrator_node_states[current_node_id] = OrchestratorNodeState(
                             node_id=current_node_id,
+                            incarnation_id=project.state_db.live_incarnation_id(current_node_id) or '',
                             run_id=run_id,
                             status='failed',
                             started_at=active.current_node_started_at,
@@ -787,6 +799,7 @@ class RunService:
                 with self._lock:
                     self._orchestrator_node_states[current_node_id] = OrchestratorNodeState(
                         node_id=current_node_id,
+                        incarnation_id=project.state_db.live_incarnation_id(current_node_id) or '',
                         run_id=run_id,
                         status='succeeded',
                         started_at=active.current_node_started_at,

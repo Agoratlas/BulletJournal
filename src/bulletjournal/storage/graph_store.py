@@ -28,6 +28,16 @@ class GraphStore:
             layout = [LayoutEntry(**item) for item in self._read_list(self.paths.graph_dir / 'layout.json')]
             return GraphData(meta=meta, nodes=nodes, edges=edges, layout=layout)
 
+    def ensure_incarnations(self) -> GraphData:
+        """Upgrade legacy graph nodes before any node-owned state is exposed."""
+        graph = self.read()
+        if all(node.incarnation_id for node in graph.nodes):
+            return graph
+        for node in graph.nodes:
+            if not node.incarnation_id:
+                node.incarnation_id = str(uuid.uuid4())
+        return self.write(graph, increment_version=False)
+
     def write(self, graph: GraphData, *, increment_version: bool = True) -> GraphData:
         with self._lock:
             meta = dict(graph.meta)
@@ -134,6 +144,7 @@ class GraphStore:
             id=str(data['id']),
             kind=NodeKind(str(data['kind'])),
             title=str(data['title']),
+            incarnation_id=str(data.get('incarnation_id') or ''),
             path=resolved_path,
             template=template,
             ui=resolved_ui,

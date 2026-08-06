@@ -2,7 +2,7 @@ import { Suspense, lazy, useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import type { Connection, EdgeChange, Node } from 'reactflow'
 
-import { appBasePath, appUrl, cancelRun, clearConstantValue, createCheckpoint, currentProject, dashboardUrl, dismissNotice, downloadNotebookSource, getDashboard, getSnapshot, listNodeAssets, listSessions, notebookAssetsUrl, notebookDownloadUrl, patchDashboard, patchGraph, restoreCheckpoint, runAll, runNode, runSelection, setArtifactState, setConstantValue, setNodeOutputsState, stopSession, uploadConstantFile, uploadFile } from './lib/api'
+import { appBasePath, appUrl, cancelRun, clearConstantValue, createCheckpoint, currentProject, dashboardUrl, dismissNotice, downloadNotebookSource, getDashboard, getSnapshot, listNodeAssets, listSessions, notebookAssetsUrl, notebookDownloadUrl, patchDashboard, patchGraph, redoGraphTombstone, restoreCheckpoint, restoreGraphTombstone, runAll, runNode, runSelection, setArtifactState, setConstantValue, setNodeOutputsState, stopSession, uploadConstantFile, uploadFile } from './lib/api'
 import { CONSTANT_NODE_HEIGHT, CONSTANT_NODE_PORT_CENTER_OFFSET, CONSTANT_NODE_WIDTH, GRID_SIZE, PORT_ROW_HEIGHT, STANDARD_NODE_PORT_CENTER_OFFSET, activeRunNodeId, artifactFor, artifactsForDisplay, currentRun, formatTimestamp, globalArtifactCounts, inputState, inputsForNode, outputsForNode, queuedRunNodeIds, templateByRef } from './lib/helpers'
 import { areaSettings, type AreaColorKey, type AreaTitlePosition } from './lib/area'
 import { useDocumentMetadata } from './lib/documentMetadata'
@@ -2519,7 +2519,16 @@ function App() {
           graphMutationInFlightRef.current = []
           syncGraphMutationOptimisticState(currentCommittedSnapshot(committedSnapshot))
           const historyEntries = batch
-            .map((mutation) => mutation.history)
+            .map((mutation) => {
+              if (!mutation.history) {
+                return null
+              }
+              const deletedNodeIds = new Set(
+                mutation.operations.filter((operation) => operation.type === 'delete_node').map((operation) => operation.node_id),
+              )
+              const deletion = response.tombstone_mutations?.filter((item) => deletedNodeIds.has(item.node_id)) ?? []
+              return deletion.length ? { ...mutation.history, deletion } : mutation.history
+            })
             .filter((entry): entry is GraphHistoryEntry => Boolean(entry))
           if (historyEntries.length) {
             setGraphHistoryPast((current) => [...current, ...historyEntries])
@@ -4235,7 +4244,24 @@ function App() {
     if (!entry) {
       return
     }
-    const success = await mutateGraph(expandMutationPlan(entry.undo))
+    let success = false
+    if (entry.deletion?.length) {
+      try {
+        for (const deletion of entry.deletion) {
+          const response = await restoreGraphTombstone(deletion.tombstone_id)
+          const committed = currentCommittedSnapshot()
+          if (committed) {
+            setSnapshotData(queryClient, committed, () => response)
+          }
+        }
+        success = true
+      } catch (err) {
+        reportClientError('graph-history', 'history_restore_failed', err instanceof Error ? err.message : 'Undo failed.')
+        await refreshSnapshot()
+      }
+    } else {
+      success = await mutateGraph(expandMutationPlan(entry.undo))
+    }
     if (!success) {
       return
     }
@@ -4249,12 +4275,36 @@ function App() {
     if (!entry) {
       return
     }
-    const success = await mutateGraph(expandMutationPlan(entry.redo))
+    let success = false
+    let nextEntry = entry
+    if (entry.deletion?.length) {
+      try {
+        const nextDeletion = []
+        for (const deletion of entry.deletion) {
+          const response = await redoGraphTombstone(deletion.tombstone_id, deletion.incarnation_id)
+          const mutation = response.tombstone_mutations?.[0]
+          if (mutation) {
+            nextDeletion.push(mutation)
+          }
+          const committed = currentCommittedSnapshot()
+          if (committed) {
+            setSnapshotData(queryClient, committed, () => response)
+          }
+        }
+        nextEntry = { ...entry, deletion: nextDeletion }
+        success = true
+      } catch (err) {
+        reportClientError('graph-history', 'history_redo_failed', err instanceof Error ? err.message : 'Redo failed.')
+        await refreshSnapshot()
+      }
+    } else {
+      success = await mutateGraph(expandMutationPlan(entry.redo))
+    }
     if (!success) {
       return
     }
     setGraphHistoryFuture((current) => current.slice(1))
-    setGraphHistoryPast((current) => [...current, entry])
+    setGraphHistoryPast((current) => [...current, nextEntry])
     applySelection([], [], { openInspector: false })
   }
 

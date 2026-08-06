@@ -1,14 +1,19 @@
 from __future__ import annotations
 
+import json
+import os
 import re
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from dataclasses import asdict, dataclass
+from datetime import UTC, datetime
 from pathlib import Path
+from threading import Lock, Thread
 from typing import Any
 
 from bulletjournal.domain.enums import ArtifactRole, ArtifactState, NodeKind, ValidationSeverity
 from bulletjournal.domain.errors import InvalidRequestError, NotFoundError
-from bulletjournal.domain.graph_bindings import organizer_interface_for_node
+from bulletjournal.domain.graph_bindings import organizer_interface_for_node, resolve_input_binding
+from bulletjournal.domain.hashing import combine_hashes
 from bulletjournal.domain.models import (
     GraphData,
     Node,
@@ -23,10 +28,12 @@ from bulletjournal.domain.state_machine import derive_node_state
 from bulletjournal.execution.planner import downstream_closure, upstream_closure
 from bulletjournal.execution.watcher import NotebookWatcher
 from bulletjournal.parser.source_hash import normalized_source_hash_text
-from bulletjournal.services.notebook_freshness import notebook_uses_execution_head
+from bulletjournal.services.notebook_freshness import lineage_metadata_for_notebook, notebook_uses_execution_head
 from bulletjournal.storage.graph_store import GraphStore
+from bulletjournal.storage.object_gc import ObjectGarbageCollector, ObjectGCSettings
 from bulletjournal.storage.object_store import ObjectStore
 from bulletjournal.storage.project_fs import ProjectPaths, init_project_root, load_project_json, require_project_root
+from bulletjournal.storage.project_lock import ProjectLock
 from bulletjournal.storage.state_db import StateDB
 from bulletjournal.utils import utc_now_iso
 
@@ -80,6 +87,8 @@ class ProjectService:
         self.run_service = None
         self.watcher = NotebookWatcher(self)
         self._automatic_checkpoint_suspensions = 0
+        self._gc_task_lock = Lock()
+        self._gc_task_active = False
 
     def init_project(self, path: Path, *, title: str | None = None, project_id: str | None = None) -> dict[str, Any]:
         paths = init_project_root(path, title=title, project_id=project_id)
@@ -103,14 +112,17 @@ class ProjectService:
         )
         graph_store = GraphStore(paths)
         state_db = StateDB(paths.state_db_path)
+        graph = graph_store.ensure_incarnations()
+        state_db.reconcile_node_incarnations(graph.nodes)
         object_store = ObjectStore(paths)
         project = OpenProject(
             paths=paths, metadata=metadata, graph_store=graph_store, state_db=state_db, object_store=object_store
         )
         state_db.abort_inflight_runs()
         self.project = project
+        ObjectGarbageCollector(paths).recover()
+        self._reconcile_startup_heads(graph)
         self.watcher.start()
-        graph = graph_store.read()
         self._ensure_activity_meta(project, graph.meta.get('updated_at'))
         self.event_service.publish(
             'project.opened',
@@ -119,6 +131,221 @@ class ProjectService:
             payload={'project_id': metadata.project_id, 'root': str(paths.root)},
         )
         return project
+
+    def _reconcile_startup_heads(self, graph: GraphData) -> None:
+        project = self.require_project()
+        with ProjectLock(project.paths.project_lock_path).exclusive():
+            for node in graph.nodes:
+                try:
+                    self._reconcile_startup_node(node, graph)
+                except Exception as exc:  # A damaged node must not prevent the project from opening.
+                    with suppress(Exception):
+                        project.state_db.save_persistent_notice(
+                            issue_id=f'startup_reconciliation:{node.incarnation_id}',
+                            node_id=node.id,
+                            severity=ValidationSeverity.ERROR,
+                            code='startup_reconciliation_failed',
+                            message=f'Could not verify saved outputs for `{node.id}` during startup.',
+                            details={'error': str(exc)},
+                        )
+
+    def _reconcile_startup_node(self, node: Node, graph: GraphData) -> None:
+        project = self.require_project()
+        db = project.state_db
+        source_hash: str | None = None
+        source_valid = node.kind != NodeKind.NOTEBOOK
+        interface = self.latest_interface(node.id)
+        if node.kind == NodeKind.NOTEBOOK:
+            try:
+                path = project.paths.notebook_path(node.id)
+                source_hash = normalized_source_hash_text(path.read_text(encoding='utf-8'))
+                source_valid = bool(interface and interface.get('source_hash') == source_hash)
+            except (OSError, UnicodeError):
+                source_valid = False
+
+        input_lineage = self._startup_input_lineage(node.id, interface, graph) if source_valid else None
+        for head in db.list_artifact_heads():
+            if head['node_id'] != node.id or head.get('current_version_id') is None:
+                continue
+            reason = None
+            if not self._startup_head_version_belongs_to_node(node, 'artifact', head['current_version_id']):
+                reason = 'invalid_incarnation'
+            if reason is None:
+                reason = self._invalid_startup_object(head.get('artifact_hash'), head.get('size_bytes'))
+            if reason is not None:
+                self._clear_startup_head(
+                    node, 'artifact', str(head['artifact_name']), reason, head.get('artifact_hash')
+                )
+            elif node.kind == NodeKind.NOTEBOOK and (
+                not source_valid
+                or not self._startup_lineage_matches(
+                    head, source_hash, f'{node.id}/{head["artifact_name"]}', input_lineage
+                )
+            ):
+                db.set_artifact_head_state(node.id, str(head['artifact_name']), ArtifactState.STALE)
+
+        for head in db.list_asset_heads(node_id=node.id):
+            if head.get('current_asset_version_id') is None:
+                continue
+            invalid = (
+                (
+                    None,
+                    'invalid_incarnation',
+                )
+                if not self._startup_head_version_belongs_to_node(node, 'asset', head['current_asset_version_id'])
+                else None
+            )
+            if invalid is None:
+                for item in head.get('objects', []):
+                    reason = self._invalid_startup_object_for_hash(item.get('artifact_hash'))
+                    if reason is not None:
+                        invalid = (item.get('artifact_hash'), reason)
+                        break
+            if invalid is not None:
+                self._clear_startup_head(node, 'asset', str(head['asset_name']), invalid[1], invalid[0])
+            elif node.kind == NodeKind.NOTEBOOK and (
+                not source_valid
+                or not self._startup_lineage_matches(
+                    head, source_hash, f'{node.id}/{head["asset_name"]}', input_lineage
+                )
+            ):
+                db.set_asset_head_state(node.id, str(head['asset_name']), ArtifactState.STALE)
+
+        execution = db.get_notebook_execution_head(node.id)
+        if execution is not None and node.kind == NodeKind.NOTEBOOK:
+            execution_lineage = lineage_metadata_for_notebook(self, node.id, graph) if source_valid else None
+            if (
+                not source_valid
+                or execution_lineage is None
+                or any(
+                    execution.get(key) != execution_lineage[key]
+                    for key in ('source_hash', 'upstream_data_hash', 'upstream_code_hash')
+                )
+            ):
+                state = ArtifactState.STALE if execution.get('last_run_finished_at') else ArtifactState.PENDING
+                db.set_notebook_execution_head_state(node.id, state)
+
+    def _startup_head_version_belongs_to_node(self, node: Node, kind: str, version_id: object) -> bool:
+        if not isinstance(version_id, int):
+            return False
+        table, column = (
+            ('artifact_versions', 'version_id') if kind == 'artifact' else ('asset_versions', 'asset_version_id')
+        )
+        with self.require_project().state_db._connection() as connection:
+            row = connection.execute(
+                f'SELECT node_id, incarnation_id FROM {table} WHERE {column} = ?',  # noqa: S608
+                (version_id,),
+            ).fetchone()
+        return bool(row is not None and row['node_id'] == node.id and row['incarnation_id'] == node.incarnation_id)
+
+    def _startup_input_lineage(
+        self, node_id: str, interface: dict[str, Any] | None, graph: GraphData
+    ) -> tuple[list[str], list[str]] | None:
+        if interface is None:
+            return None
+        data_hashes: list[str] = []
+        code_hashes: list[str] = []
+        db = self.require_project().state_db
+        for port in interface.get('inputs', []):
+            binding = resolve_input_binding(graph, node_id=node_id, input_name=str(port['name']))
+            if binding is None:
+                if not port.get('has_default'):
+                    return None
+                from bulletjournal.domain.hashing import hash_json
+
+                data_hashes.append(hash_json(port.get('default')))
+                code_hashes.append('default')
+                continue
+            head = db.get_artifact_head(*binding)
+            if head is None or head.get('current_version_id') is None or head.get('state') != ArtifactState.READY.value:
+                return None
+            if not head.get('artifact_hash') or not head.get('upstream_code_hash'):
+                return None
+            data_hashes.append(str(head['artifact_hash']))
+            code_hashes.append(str(head['upstream_code_hash']))
+        return data_hashes, code_hashes
+
+    @staticmethod
+    def _startup_lineage_matches(
+        head: dict[str, Any],
+        source_hash: str | None,
+        logical_output: str,
+        input_lineage: tuple[list[str], list[str]] | None,
+    ) -> bool:
+        return bool(
+            source_hash
+            and input_lineage is not None
+            and head.get('source_hash') == source_hash
+            and head.get('upstream_data_hash') == combine_hashes([source_hash, logical_output, *input_lineage[0]])
+            and head.get('upstream_code_hash') == combine_hashes([source_hash, logical_output, *input_lineage[1]])
+        )
+
+    def _invalid_startup_object_for_hash(self, artifact_hash: object) -> str | None:
+        if not isinstance(artifact_hash, str) or not artifact_hash:
+            return 'missing_object_reference'
+        record = self.require_project().state_db.get_object_record(artifact_hash)
+        if record is None:
+            return 'missing_object_row'
+        return self._invalid_startup_object(artifact_hash, record.get('size_bytes'))
+
+    def _invalid_startup_object(self, artifact_hash: object, size_bytes: object) -> str | None:
+        if not isinstance(artifact_hash, str) or not artifact_hash:
+            return 'missing_object_reference'
+        record = self.require_project().state_db.get_object_record(artifact_hash)
+        if record is None:
+            return 'missing_object_row'
+        if record.get('gc_state') != 'active':
+            return 'object_not_active'
+        if not isinstance(size_bytes, int) or int(record['size_bytes']) != size_bytes:
+            return 'invalid_object_metadata'
+        try:
+            self.require_project().object_store.verify_object(artifact_hash, size_bytes)
+        except FileNotFoundError:
+            return 'missing_canonical_file'
+        except (OSError, ValueError):
+            self._quarantine_corrupt_startup_object(artifact_hash)
+            return 'corrupt_canonical_file'
+        return None
+
+    def _quarantine_corrupt_startup_object(self, artifact_hash: str) -> None:
+        store = self.require_project().object_store
+        source = store.object_path(artifact_hash)
+        destination = store.quarantine_path(artifact_hash)
+        if not source.is_file() or destination.exists():
+            return
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        os.replace(source, destination)
+        db = self.require_project().state_db
+        with db._connection() as connection:
+            connection.execute(
+                "UPDATE objects SET gc_state = 'quarantined', quarantined_at = ?, quarantine_path = ? "
+                'WHERE artifact_hash = ?',
+                (utc_now_iso(), str(destination.relative_to(store.paths.root)), artifact_hash),
+            )
+            connection.commit()
+
+    def _clear_startup_head(self, node: Node, kind: str, name: str, reason: str, artifact_hash: object) -> None:
+        db = self.require_project().state_db
+        table, version_column, name_column = (
+            ('artifact_heads', 'current_version_id', 'artifact_name')
+            if kind == 'artifact'
+            else ('asset_heads', 'current_asset_version_id', 'asset_name')
+        )
+        with db._connection() as connection:
+            connection.execute(
+                f'UPDATE {table} SET {version_column} = NULL, state = ? '  # noqa: S608 - fixed table allowlist.
+                f'WHERE node_id = ? AND {name_column} = ? AND incarnation_id = ?',
+                (ArtifactState.PENDING.value, node.id, name, node.incarnation_id),
+            )
+            connection.commit()
+        db.save_persistent_notice(
+            issue_id=f'object_integrity:{node.incarnation_id}:{kind}:{name}',
+            node_id=node.id,
+            severity=ValidationSeverity.ERROR,
+            code='object_integrity_failed',
+            message=f'Saved {kind} `{node.id}/{name}` is unavailable and must be rebuilt.',
+            details={'kind': kind, 'name': name, 'artifact_hash': artifact_hash, 'reason': reason},
+        )
 
     def require_project(self) -> OpenProject:
         if self.project is None:
@@ -503,9 +730,74 @@ class ProjectService:
 
     def record_graph_activity(self, timestamp: str | None = None) -> None:
         self.require_project().state_db.set_project_meta('last_graph_edit_at', timestamp or utc_now_iso())
+        self.request_gc()
 
     def record_notebook_activity(self, timestamp: str | None = None) -> None:
         self.require_project().state_db.set_project_meta('last_notebook_edit_at', timestamp or utc_now_iso())
+        self.request_gc()
+
+    def gc_status(self) -> dict[str, Any]:
+        project = self.require_project()
+        meta = project.state_db.list_project_meta()
+        settings = ObjectGCSettings.from_project_meta(project.state_db)
+        report = json.loads(meta['gc_last_report']) if meta.get('gc_last_report') else None
+        return {
+            'task_active': self._gc_task_active,
+            'requested_at': meta.get('gc_requested_at'),
+            'last_completed_at': meta.get('gc_last_completed_at'),
+            'last_report': report,
+            'settings': asdict(settings),
+        }
+
+    def collect_garbage(self, *, dry_run: bool = True) -> dict[str, Any]:
+        project = self.require_project()
+        collector = ObjectGarbageCollector(project.paths, activity_check=self._gc_activity_blocker)
+        report = collector.collect(dry_run=dry_run)
+        payload = report.as_dict()
+        project.state_db.set_project_meta('gc_last_report', json.dumps(payload, sort_keys=True))
+        return payload
+
+    def request_gc(self) -> bool:
+        project = self.require_project()
+        settings = ObjectGCSettings.from_project_meta(project.state_db)
+        if not settings.enabled:
+            return False
+        now = datetime.now(tz=UTC)
+        project.state_db.set_project_meta('gc_requested_at', now.isoformat().replace('+00:00', 'Z'))
+        last = project.state_db.get_project_meta('gc_last_completed_at')
+        minimum = settings.min_interval_seconds
+        if last:
+            try:
+                if (now - datetime.fromisoformat(last.replace('Z', '+00:00'))).total_seconds() < minimum:
+                    return False
+            except ValueError:
+                return False
+        with self._gc_task_lock:
+            if self._gc_task_active:
+                return False
+            self._gc_task_active = True
+        Thread(target=self._run_scheduled_gc, name='bulletjournal-gc', daemon=True).start()
+        return True
+
+    def _run_scheduled_gc(self) -> None:
+        try:
+            self.collect_garbage(dry_run=False)
+        except Exception as exc:
+            project = self.project
+            if project is not None:
+                project.state_db.set_project_meta('gc_last_error', str(exc))
+        finally:
+            with self._gc_task_lock:
+                self._gc_task_active = False
+
+    def _gc_activity_blocker(self) -> str | None:
+        if self.run_service is None:
+            return None
+        if self.run_service.has_active_run():
+            return 'active_execution'
+        if self.run_service.session_manager.list():
+            return 'active_editor'
+        return None
 
     @property
     def automatic_checkpoints_suspended(self) -> bool:
@@ -581,7 +873,11 @@ class ProjectService:
                 continue
             if node.kind in {NodeKind.ORGANIZER, NodeKind.AREA, NodeKind.DASHBOARD}:
                 continue
-            notebook_service.reparse_notebook(node.id)
+            try:
+                notebook_service.reparse_notebook(node.id)
+            except (FileNotFoundError, OSError, UnicodeError):
+                # Startup reconciliation has already retained the graph and made prior outputs non-ready.
+                continue
 
     def reparse_notebook_by_path(self, path: Path) -> None:
         node_id = path.stem

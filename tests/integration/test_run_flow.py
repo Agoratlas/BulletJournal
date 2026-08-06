@@ -1706,7 +1706,7 @@ if __name__ == '__main__':
     node = next(node for node in snapshot['graph']['nodes'] if node['id'] == 'broken_node')
 
     assert all(entry['issue_id'] != notice['issue_id'] for entry in snapshot['notices'])
-    assert node['state'] == 'ready'
+    assert node['state'] == 'pending'
 
 
 def test_run_all_is_blocked_by_pending_file_input(tmp_path) -> None:

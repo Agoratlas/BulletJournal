@@ -4,6 +4,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse, Response
+from starlette.background import BackgroundTask
 
 from bulletjournal.api.schemas import (
     ArtifactStateChangeRequest,
@@ -36,14 +37,25 @@ def download_artifact(node_id: str, artifact_name: str, request: Request, format
             media_type=file_info['mime_type'],
             headers={'Content-Disposition': f'attachment; filename="{file_info["filename"]}"'},
         )
-    return FileResponse(file_info['path'], media_type=file_info['mime_type'], filename=file_info['filename'])
+    project = container.project_service.require_project()
+    return FileResponse(
+        file_info['path'],
+        media_type=file_info['mime_type'],
+        filename=file_info['filename'],
+        background=BackgroundTask(project.state_db.release_object_lease, file_info['lease_id']),
+    )
 
 
 @router.get('/artifacts/{node_id}/{artifact_name}/content')
 def artifact_content(node_id: str, artifact_name: str, request: Request):
     container = request.app.state.container
     file_info = container.artifact_service.download_file(node_id, artifact_name)
-    return FileResponse(file_info['path'], media_type=file_info['mime_type'])
+    project = container.project_service.require_project()
+    return FileResponse(
+        file_info['path'],
+        media_type=file_info['mime_type'],
+        background=BackgroundTask(project.state_db.release_object_lease, file_info['lease_id']),
+    )
 
 
 @router.post('/file-inputs/{node_id}/upload')

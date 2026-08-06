@@ -208,6 +208,7 @@ def main(argv: list[str] | None = None) -> int:
                 bindings=bindings,
                 outputs=outputs,
                 asset_declarations=asset_declarations,
+                defer_publication=True,
             )
             progress_path = Path(manifest.progress_path) if manifest.progress_path else None
             _install_script_runner_progress_hooks(
@@ -218,6 +219,7 @@ def main(argv: list[str] | None = None) -> int:
                 warnings.simplefilter('always')
                 with activate_runtime_context(context):
                     execute_notebook(Path(manifest.notebook_path), progress_path=progress_path)
+                context.commit_publication()
                 captured_warnings = [
                     {
                         'message': str(item.message),
@@ -228,6 +230,8 @@ def main(argv: list[str] | None = None) -> int:
                     for item in runtime_warnings
                 ]
     except Exception as exc:
+        if context is not None:
+            context.abandon_publication()
         payload = {
             'status': 'error',
             'error': str(exc),

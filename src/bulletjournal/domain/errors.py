@@ -18,6 +18,10 @@ class GraphValidationError(BulletJournalError):
     pass
 
 
+class TombstoneExpiredError(BulletJournalError):
+    pass
+
+
 class ArtifactError(BulletJournalError):
     pass
 

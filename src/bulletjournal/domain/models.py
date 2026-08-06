@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import uuid
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -29,6 +30,7 @@ class Node:
     id: str
     kind: NodeKind
     title: str
+    incarnation_id: str = field(default_factory=lambda: str(uuid.uuid4()))
     path: str | None = None
     template: TemplateRef | None = None
     ui: dict[str, Any] = field(default_factory=dict)
@@ -38,6 +40,7 @@ class Node:
             'id': self.id,
             'kind': self.kind.value,
             'title': self.title,
+            'incarnation_id': self.incarnation_id,
             'path': self.path,
             'template': self.template.to_dict() if self.template else None,
             'ui': self.ui,

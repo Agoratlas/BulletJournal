@@ -200,10 +200,22 @@ export async function getSnapshot(): Promise<ProjectSnapshot> {
   return request('/api/v1/project/snapshot')
 }
 
-export async function patchGraph(graphVersion: number, operations: GraphPatchOperation[]): Promise<GraphPatchResponse> {
+export async function patchGraph(graphVersion: number, operations: GraphPatchOperation[], requestId = crypto.randomUUID()): Promise<GraphPatchResponse> {
   return request('/api/v1/graph', {
     method: 'PATCH',
-    body: JSON.stringify({ graph_version: graphVersion, operations }),
+    body: JSON.stringify({ graph_version: graphVersion, operations, request_id: requestId }),
+  })
+}
+
+export async function restoreGraphTombstone(tombstoneId: string): Promise<GraphPatchResponse> {
+  return request(`/api/v1/graph/tombstones/${tombstoneId}/restore`, {
+    method: 'POST', body: JSON.stringify({ request_id: crypto.randomUUID() }),
+  })
+}
+
+export async function redoGraphTombstone(tombstoneId: string, incarnationId: string): Promise<GraphPatchResponse> {
+  return request(`/api/v1/graph/tombstones/${tombstoneId}/redo`, {
+    method: 'POST', body: JSON.stringify({ request_id: crypto.randomUUID(), incarnation_id: incarnationId }),
   })
 }
 

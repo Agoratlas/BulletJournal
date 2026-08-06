@@ -224,7 +224,7 @@ def test_start_server_builds_app_and_opens_browser(monkeypatch: pytest.MonkeyPat
 
     timer_delays: list[float] = []
     opened_urls: list[str] = []
-    uvicorn_calls: list[tuple[object, str, int, bool, bool, str]] = []
+    uvicorn_calls: list[tuple[object, str, int, bool, bool, str, dict]] = []
     created: dict[str, object] = {}
 
     class FakeTimer:
@@ -248,8 +248,8 @@ def test_start_server_builds_app_and_opens_browser(monkeypatch: pytest.MonkeyPat
     monkeypatch.setattr(
         start_module.uvicorn,
         'run',
-        lambda app, host, port, reload, proxy_headers, forwarded_allow_ips: uvicorn_calls.append(
-            (app, host, port, reload, proxy_headers, forwarded_allow_ips)
+        lambda app, host, port, reload, proxy_headers, forwarded_allow_ips, log_config: uvicorn_calls.append(
+            (app, host, port, reload, proxy_headers, forwarded_allow_ips, log_config)
         ),
     )
 
@@ -275,7 +275,13 @@ def test_start_server_builds_app_and_opens_browser(monkeypatch: pytest.MonkeyPat
     )
     assert timer_delays == [1.0]
     assert opened_urls == ['http://0.0.0.0:9000/p/demo']
-    assert uvicorn_calls == [('fake-app', '0.0.0.0', 9000, True, True, '127.0.0.1')]
+    assert len(uvicorn_calls) == 1
+    assert uvicorn_calls[0][:-1] == ('fake-app', '0.0.0.0', 9000, True, True, '127.0.0.1')
+    assert uvicorn_calls[0][-1]['formatters']['access'] == {
+        '()': 'uvicorn.logging.AccessFormatter',
+        'fmt': '%(asctime)s | %(levelprefix)s %(client_addr)s - "%(request_line)s" %(status_code)s',
+        'datefmt': '%Y-%m-%d %H:%M:%S',
+    }
 
 
 def test_dev_server_prefers_pnpm_and_terminates_running_vite(monkeypatch: pytest.MonkeyPatch) -> None:

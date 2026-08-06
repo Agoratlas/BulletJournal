@@ -37,6 +37,7 @@ export type TemplateRef = {
 
 export type NodeRecord = {
   id: string
+  incarnation_id?: string
   kind: 'notebook' | 'constant' | 'file_input' | 'organizer' | 'area' | 'dashboard'
   title: string
   path?: string | null
@@ -98,6 +99,15 @@ export type NodeRecord = {
     completed_at: string | null
   } | null
   state: NodeState
+}
+
+export type TombstoneMutation = {
+  mutation_id: string
+  tombstone_id: string
+  incarnation_id: string
+  node_id: string
+  expires_at: string
+  skipped_edge_ids?: string[]
 }
 
 export type EdgeRecord = {
@@ -501,6 +511,8 @@ export type GraphPatchResponse = ProjectSnapshot & {
     node_id: string | null
     node_ids: string[]
   } | null
+  tombstone_mutations?: TombstoneMutation[]
+  tombstone_mutation?: TombstoneMutation
 }
 
 export type ProjectOpenResponse = ProjectSnapshot

@@ -3,6 +3,8 @@ from __future__ import annotations
 import io
 import json
 import mimetypes
+import uuid
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -13,6 +15,7 @@ from bulletjournal.domain.errors import InvalidRequestError, NotFoundError
 from bulletjournal.domain.graph_bindings import resolve_input_binding
 from bulletjournal.domain.models import constant_artifact_name, constant_data_type, file_input_artifact_name
 from bulletjournal.services.graph_service import GraphService
+from bulletjournal.storage.project_lock import ProjectLock
 from bulletjournal.utils import utc_now_iso
 
 DATAFRAME_CSV_DOWNLOAD_MAX_BYTES = 100_000_000
@@ -130,6 +133,10 @@ class ArtifactService:
             raise InvalidRequestError(self.project_service.freeze_block_message(blockers))
         artifact_name = constant_artifact_name(node)
         project = self.project_service.require_project()
+        incarnation = project.state_db.live_incarnation(node_id)
+        if incarnation is None:
+            raise InvalidRequestError(f'Node `{node_id}` has no live incarnation.')
+        project.state_db.advance_node_incarnation(str(incarnation['incarnation_id']))
         project.state_db.delete_artifact_state(node_id, artifact_name)
         project.state_db.ensure_artifact_head(node_id, artifact_name, ArtifactState.PENDING)
         if interrupt_active_run and self.project_service.run_service is not None:
@@ -198,6 +205,17 @@ class ArtifactService:
         interrupt_active_run: bool = True,
     ) -> dict[str, Any]:
         project = self.project_service.require_project()
+        incarnation = project.state_db.live_incarnation(node_id)
+        if incarnation is None:
+            raise InvalidRequestError(f'Node `{node_id}` has no live incarnation.')
+        project.state_db.advance_node_incarnation(str(incarnation['incarnation_id']))
+        run_id = f'upload:{node_id}:{utc_now_iso()}'
+        publication = project.state_db.begin_publication(
+            run_id=run_id,
+            node_id=node_id,
+            source_hash=source_hash,
+            graph_version=int(self.project_service.graph().meta['graph_version']),
+        )
         project.state_db.upsert_artifact_object(
             persisted['artifact_hash'],
             persisted['storage_kind'],
@@ -220,11 +238,23 @@ class ArtifactService:
             source_hash=source_hash,
             upstream_code_hash=persisted['artifact_hash'],
             upstream_data_hash=persisted['artifact_hash'],
-            run_id=f'upload:{node_id}:{utc_now_iso()}',
+            run_id=run_id,
             lineage_mode=LineageMode.MANAGED,
             warnings=[],
             state=ArtifactState.READY,
+            publication_id=str(publication['publication_id']),
         )
+        graph = self.project_service.graph()
+        from bulletjournal.execution.planner import downstream_closure
+
+        with ProjectLock(project.paths.project_lock_path).exclusive():
+            committed = project.state_db.commit_publication(
+                str(publication['publication_id']),
+                current_source_hash=source_hash,
+                downstream_node_ids=downstream_closure(graph, node_id),
+            )
+        if not committed:
+            raise InvalidRequestError('The upload was superseded by a newer block generation.')
         old_state = None if previous is None else previous['state']
         self.project_service.event_service.publish(
             'artifact.state_changed',
@@ -243,8 +273,6 @@ class ArtifactService:
                 [node_id],
                 self.project_service.graph(),
             )
-        if propagate_downstream_stale:
-            GraphService(self.project_service).mark_downstream_stale([node_id])
         return self.get_artifact(node_id, artifact_name)
 
     def set_artifact_state(
@@ -360,11 +388,18 @@ class ArtifactService:
         if download_format not in {None, 'parquet'}:
             raise InvalidRequestError(f'Unknown artifact download format `{download_format}`.')
         filename = self._download_filename(head)
+        lease_id = project.state_db.acquire_object_lease(
+            str(head['artifact_hash']),
+            'download',
+            str(uuid.uuid4()),
+            expires_at=(datetime.now(tz=UTC) + timedelta(hours=1)).isoformat().replace('+00:00', 'Z'),
+        )
         return {
             'kind': 'path',
             'path': project.object_store.load_file_path(str(head['artifact_hash'])),
             'filename': filename,
             'mime_type': self._download_mime_type(head, filename),
+            'lease_id': lease_id,
         }
 
     def _download_dataframe_csv(self, project, head: dict[str, Any]) -> dict[str, Any]:

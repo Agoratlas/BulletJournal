@@ -10,6 +10,7 @@ from bulletjournal.domain.errors import (
     NotFoundError,
     ProjectValidationError,
     RunConflictError,
+    TombstoneExpiredError,
     UnauthorizedError,
 )
 
@@ -17,11 +18,15 @@ from bulletjournal.domain.errors import (
 def install_error_handlers(app: FastAPI) -> None:
     @app.exception_handler(GraphValidationError)
     async def graph_validation_handler(_: Request, exc: GraphValidationError) -> JSONResponse:
-        return JSONResponse(status_code=409, content={'detail': str(exc)})
+        return JSONResponse(status_code=409, content={'detail': str(exc), 'code': 'history_conflict'})
 
     @app.exception_handler(RunConflictError)
     async def run_conflict_handler(_: Request, exc: RunConflictError) -> JSONResponse:
         return JSONResponse(status_code=409, content={'detail': str(exc)})
+
+    @app.exception_handler(TombstoneExpiredError)
+    async def tombstone_expired_handler(_: Request, exc: TombstoneExpiredError) -> JSONResponse:
+        return JSONResponse(status_code=410, content={'detail': str(exc), 'code': 'history_expired'})
 
     @app.exception_handler(ArtifactError)
     async def artifact_handler(_: Request, exc: ArtifactError) -> JSONResponse:

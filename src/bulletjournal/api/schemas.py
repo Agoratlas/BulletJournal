@@ -183,6 +183,15 @@ GraphOperation = Annotated[
 class GraphPatchRequest(StrictModel):
     graph_version: int
     operations: list[GraphOperation]
+    request_id: str | None = None
+
+
+class TombstoneMutationRequest(StrictModel):
+    request_id: str
+
+
+class TombstoneRedoRequest(TombstoneMutationRequest):
+    incarnation_id: str
 
 
 class RunAction(StrEnum):

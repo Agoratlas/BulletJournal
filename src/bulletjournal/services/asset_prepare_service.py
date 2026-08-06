@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import uuid
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from bulletjournal.assets.prepare_utils import ALLOWED_PAGE_SIZES, backing_dataset_object
@@ -92,6 +94,12 @@ class AssetPrepareService:
         project = self.project_service.require_project()
         dataset_object = backing_dataset_object(objects)
         project.state_db.touch_artifact_object(dataset_object['artifact_hash'])
+        lease_id = project.state_db.acquire_object_lease(
+            str(dataset_object['artifact_hash']),
+            'asset_prepare',
+            str(uuid.uuid4()),
+            expires_at=(datetime.now(tz=UTC) + timedelta(hours=1)).isoformat().replace('+00:00', 'Z'),
+        )
         dataset_path = project.object_store.load_file_path(str(dataset_object['artifact_hash']))
         try:
             payloads, resolved_modifiers = registration.prepare(
@@ -111,6 +119,8 @@ class AssetPrepareService:
                     exc=exc,
                 )
             raise
+        finally:
+            project.state_db.release_object_lease(lease_id)
         response = {
             'asset_version_id': int(current_asset_version_id),
             'state': head['state'],

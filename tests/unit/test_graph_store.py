@@ -71,3 +71,17 @@ def test_graph_store_round_trip_preserves_organizer_ui(tmp_path) -> None:
 
     organizer = next(node for node in loaded.nodes if node.id == 'organizer')
     assert organizer.ui['organizer_ports'][1]['name'] == 'sample_count'
+
+
+def test_graph_store_migrates_legacy_nodes_to_stable_incarnations(tmp_path) -> None:
+    paths = init_project_root(tmp_path / 'project')
+    store = GraphStore(paths)
+    nodes_path = paths.graph_dir / 'nodes.json'
+    nodes_path.write_text('[{"id":"legacy","kind":"area","title":"Legacy","ui":{}}]', encoding='utf-8')
+
+    first = store.ensure_incarnations()
+    second = store.ensure_incarnations()
+
+    assert first.nodes[0].incarnation_id
+    assert second.nodes[0].incarnation_id == first.nodes[0].incarnation_id
+    assert 'incarnation_id' in nodes_path.read_text(encoding='utf-8')

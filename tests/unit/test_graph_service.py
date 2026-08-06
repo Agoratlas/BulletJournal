@@ -5,7 +5,9 @@ from types import SimpleNamespace
 
 import pytest
 
-from bulletjournal.domain.errors import GraphValidationError
+from bulletjournal.domain.enums import ArtifactRole, ArtifactState, LineageMode
+from bulletjournal.domain.errors import GraphValidationError, TombstoneExpiredError
+from bulletjournal.domain.hashing import combine_hashes
 from bulletjournal.domain.models import CheckpointRecord
 from bulletjournal.services.checkpoint_service import CheckpointService
 from bulletjournal.services.dashboard_service import DashboardService
@@ -19,6 +21,91 @@ from bulletjournal.storage.project_fs import init_project_root
 class _FakeEventService:
     def publish(self, *args, **kwargs) -> None:
         _ = (args, kwargs)
+
+
+def test_delete_restore_conflict_restart_and_redo_preserve_incarnation(tmp_path) -> None:
+    project_root = init_project_root(tmp_path / 'project').root
+    project_service = ProjectService(_FakeEventService(), TemplateService())
+    project_service.open_project(project_root)
+    graph_service = GraphService(project_service)
+    created = graph_service.apply_operations(
+        int(project_service.graph().meta['graph_version']),
+        [{'type': 'add_area_node', 'node_id': 'same', 'title': 'Original'}],
+        request_id='create-original',
+    )
+    original_incarnation = created['graph']['nodes'][0]['incarnation_id']
+    deleted = graph_service.apply_operations(
+        int(created['graph']['meta']['graph_version']),
+        [{'type': 'delete_node', 'node_id': 'same'}],
+        request_id='delete-original',
+    )
+    mutation = deleted['tombstone_mutations'][0]
+    assert mutation['incarnation_id'] == original_incarnation
+    assert (
+        graph_service.apply_operations(
+            int(created['graph']['meta']['graph_version']),
+            [{'type': 'delete_node', 'node_id': 'same'}],
+            request_id='delete-original',
+        )['tombstone_mutations']
+        == deleted['tombstone_mutations']
+    )
+
+    replacement = graph_service.apply_operations(
+        int(deleted['graph']['meta']['graph_version']),
+        [{'type': 'add_area_node', 'node_id': 'same', 'title': 'Replacement'}],
+    )
+    assert replacement['graph']['nodes'][0]['incarnation_id'] != original_incarnation
+    with pytest.raises(GraphValidationError, match='already exists'):
+        graph_service.restore_tombstone(mutation['tombstone_id'])
+
+    renamed = graph_service.apply_operations(
+        int(replacement['graph']['meta']['graph_version']),
+        [{'type': 'rename_node', 'node_id': 'same', 'new_node_id': 'replacement', 'title': 'Replacement'}],
+    )
+    project_service.watcher.stop()
+    reopened = ProjectService(_FakeEventService(), TemplateService())
+    reopened.open_project(project_root)
+    reopened_graph_service = GraphService(reopened)
+    restored = reopened_graph_service.restore_tombstone(mutation['tombstone_id'], request_id='restore-original')
+    restored_node = next(node for node in restored['graph']['nodes'] if node['id'] == 'same')
+    assert restored_node['incarnation_id'] == original_incarnation
+
+    redone = reopened_graph_service.redo_tombstone(
+        mutation['tombstone_id'], original_incarnation, request_id='redo-original'
+    )
+    assert all(node['incarnation_id'] != original_incarnation for node in redone['graph']['nodes'])
+    assert renamed['graph']['nodes'][0]['incarnation_id'] != original_incarnation
+
+
+def test_constant_delete_restores_exact_ready_version_and_expiry_is_controlled(tmp_path) -> None:
+    project_root = init_project_root(tmp_path / 'project').root
+    project_service = ProjectService(_FakeEventService(), TemplateService())
+    project_service.open_project(project_root)
+    graph_service = GraphService(project_service)
+    created = graph_service.apply_operations(
+        int(project_service.graph().meta['graph_version']),
+        [{'type': 'add_constant_node', 'node_id': 'value', 'title': 'Value', 'data_type': 'int', 'value': 42}],
+    )
+    before = project_service.require_project().state_db.get_artifact_head('value', 'value')
+    assert before is not None and before['state'] == 'ready'
+    deleted = graph_service.apply_operations(
+        int(created['graph']['meta']['graph_version']), [{'type': 'delete_node', 'node_id': 'value'}]
+    )
+    mutation = deleted['tombstone_mutations'][0]
+    assert project_service.require_project().state_db.get_artifact_head('value', 'value') is None
+    graph_service.restore_tombstone(mutation['tombstone_id'])
+    after = project_service.require_project().state_db.get_artifact_head('value', 'value')
+    assert after is not None
+    assert after['current_version_id'] == before['current_version_id']
+    assert after['artifact_hash'] == before['artifact_hash']
+
+    project_service.require_project().state_db.set_project_meta('gc_tombstone_retention_seconds', '0')
+    graph = project_service.graph()
+    expired = graph_service.apply_operations(
+        int(graph.meta['graph_version']), [{'type': 'delete_node', 'node_id': 'value'}]
+    )['tombstone_mutations'][0]
+    with pytest.raises(TombstoneExpiredError):
+        graph_service.restore_tombstone(expired['tombstone_id'])
 
 
 def _attach_checkpoint_service(project_service: ProjectService) -> CheckpointService:
@@ -54,6 +141,228 @@ if __name__ == '__main__':
 """.strip()
         + '\n'
     )
+
+
+def _asset_source() -> str:
+    return (
+        """
+import marimo
+
+app = marimo.App()
+
+with app.setup:
+    from bulletjournal.runtime import assets
+
+@app.cell
+def _():
+    assets.push(assets.Markdown('hello'), name='notes', title='Notes')
+    return
+
+if __name__ == '__main__':
+    from bulletjournal.runtime.standalone import run_notebook_app
+
+    run_notebook_app(app, __file__)
+""".strip()
+        + '\n'
+    )
+
+
+def _consumer_with_asset_source() -> str:
+    return (
+        """
+import marimo
+
+app = marimo.App()
+
+with app.setup:
+    from bulletjournal.runtime import artifacts, assets
+
+@app.cell
+def _():
+    source_value = artifacts.pull(name='source_value', data_type=int)
+    return source_value
+
+@app.cell
+def _(source_value):
+    artifacts.push(source_value * 2, name='doubled', data_type=int)
+    assets.push(assets.Markdown(str(source_value)), name='notes', title='Notes')
+    return
+
+if __name__ == '__main__':
+    from bulletjournal.runtime.standalone import run_notebook_app
+
+    run_notebook_app(app, __file__)
+""".strip()
+        + '\n'
+    )
+
+
+def test_notebook_tombstone_restores_dashboard_panel_and_exact_ready_asset_version(tmp_path) -> None:
+    project_root = init_project_root(tmp_path / 'project').root
+    project_service = ProjectService(_FakeEventService(), TemplateService())
+    project_service.open_project(project_root)
+    project_service.dashboard_service = DashboardService(project_service)
+    graph_service = GraphService(project_service)
+
+    created = graph_service.apply_operations(
+        int(project_service.graph().meta['graph_version']),
+        [{'type': 'add_notebook_node', 'node_id': 'report', 'title': 'Report', 'source_text': _asset_source()}],
+    )
+    interface = project_service.latest_interface('report')
+    assert interface is not None
+    source_hash = interface['source_hash']
+    expected_data_hash = combine_hashes([source_hash, 'report/notes'])
+    expected_code_hash = combine_hashes([source_hash, 'report/notes'])
+    db = project_service.require_project().state_db
+    asset_version_id = db.create_asset_version(
+        node_id='report',
+        asset_name='notes',
+        asset_type='markdown',
+        interactive=False,
+        source_hash=source_hash,
+        upstream_code_hash=expected_code_hash,
+        upstream_data_hash=expected_data_hash,
+        run_id='run-report',
+        lineage_mode=LineageMode.MANAGED,
+        definition={'asset_type': 'markdown', 'markdown_text': 'hello'},
+        modifier_schema=[{'name': 'theme', 'type': 'string'}],
+        default_modifiers={'theme': 'light'},
+        override_schema_hash='schema-notes',
+        warnings=[],
+        objects=[],
+    )
+    panel = {
+        'panel_id': 'report/notes',
+        'node_id': 'report',
+        'asset_name': 'notes',
+        'visible': False,
+        'position': 0,
+        'modifier_overrides': {'theme': 'dark'},
+        'override_schema_hash': 'schema-notes',
+    }
+    dashboard = project_service.dashboard_service.create_dashboard(
+        dashboard_id='report_dashboard',
+        title='Report Dashboard',
+        sources=[{'node_id': 'report'}],
+        panels=[panel],
+    )
+
+    deleted = graph_service.apply_operations(
+        int(project_service.graph().meta['graph_version']),
+        [{'type': 'delete_node', 'node_id': 'report'}],
+    )
+    assert project_service.dashboard_service.get_dashboard('report_dashboard')['sources'] == []
+
+    graph_service.restore_tombstone(deleted['tombstone_mutations'][0]['tombstone_id'])
+
+    restored_dashboard = project_service.dashboard_service.get_dashboard('report_dashboard')
+    assert restored_dashboard['sources'] == dashboard['sources']
+    assert restored_dashboard['panels'] == dashboard['panels']
+    restored_asset = db.get_asset_head('report', 'notes')
+    assert restored_asset is not None
+    assert restored_asset['current_asset_version_id'] == asset_version_id
+    assert restored_asset['state'] == ArtifactState.READY.value
+
+
+def test_notebook_tombstone_keeps_outputs_stale_when_restored_input_is_stale(tmp_path) -> None:
+    project_root = init_project_root(tmp_path / 'project').root
+    project_service = ProjectService(_FakeEventService(), TemplateService())
+    project_service.open_project(project_root)
+    project_service.dashboard_service = DashboardService(project_service)
+    graph_service = GraphService(project_service)
+
+    created = graph_service.apply_operations(
+        int(project_service.graph().meta['graph_version']),
+        [
+            {'type': 'add_constant_node', 'node_id': 'source', 'title': 'Source', 'data_type': 'int', 'value': 21},
+            {
+                'type': 'add_notebook_node',
+                'node_id': 'consumer',
+                'title': 'Consumer',
+                'source_text': _consumer_with_asset_source(),
+            },
+        ],
+    )
+    connected = graph_service.apply_operations(
+        int(created['graph']['meta']['graph_version']),
+        [
+            {
+                'type': 'add_edge',
+                'source_node': 'source',
+                'source_port': 'value',
+                'target_node': 'consumer',
+                'target_port': 'source_value',
+            }
+        ],
+    )
+    db = project_service.require_project().state_db
+    source_head = db.get_artifact_head('source', 'value')
+    interface = project_service.latest_interface('consumer')
+    assert source_head is not None and interface is not None
+    source_hash = interface['source_hash']
+    input_hash = source_head['artifact_hash']
+    input_code_hash = source_head['upstream_code_hash']
+    db.upsert_artifact_object(
+        'consumer-output-hash',
+        'json',
+        'int',
+        2,
+        None,
+        None,
+        {'kind': 'simple', 'repr': '42', 'truncated': False},
+    )
+    artifact_version_id = db.create_artifact_version(
+        node_id='consumer',
+        artifact_name='doubled',
+        role=ArtifactRole.OUTPUT,
+        artifact_hash='consumer-output-hash',
+        source_hash=source_hash,
+        upstream_code_hash=combine_hashes([source_hash, 'consumer/doubled', input_code_hash]),
+        upstream_data_hash=combine_hashes([source_hash, 'consumer/doubled', input_hash]),
+        run_id='run-consumer',
+        lineage_mode=LineageMode.MANAGED,
+        warnings=[],
+    )
+    asset_version_id = db.create_asset_version(
+        node_id='consumer',
+        asset_name='notes',
+        asset_type='markdown',
+        interactive=False,
+        source_hash=source_hash,
+        upstream_code_hash=combine_hashes([source_hash, 'consumer/notes', input_code_hash]),
+        upstream_data_hash=combine_hashes([source_hash, 'consumer/notes', input_hash]),
+        run_id='run-consumer',
+        lineage_mode=LineageMode.MANAGED,
+        definition={'asset_type': 'markdown', 'markdown_text': '21'},
+        modifier_schema=[],
+        default_modifiers={},
+        override_schema_hash='schema-notes',
+        warnings=[],
+        objects=[],
+    )
+    deleted = graph_service.apply_operations(
+        int(connected['graph']['meta']['graph_version']),
+        [{'type': 'delete_node', 'node_id': 'consumer'}],
+    )
+    db.set_artifact_head_state('source', 'value', ArtifactState.STALE)
+
+    restored = graph_service.restore_tombstone(deleted['tombstone_mutations'][0]['tombstone_id'])
+
+    assert any(
+        edge['source_node'] == 'source'
+        and edge['source_port'] == 'value'
+        and edge['target_node'] == 'consumer'
+        and edge['target_port'] == 'source_value'
+        for edge in restored['graph']['edges']
+    )
+    restored_artifact = db.get_artifact_head('consumer', 'doubled')
+    restored_asset = db.get_asset_head('consumer', 'notes')
+    assert restored_artifact is not None
+    assert restored_artifact['current_version_id'] == artifact_version_id
+    assert restored_artifact['state'] == ArtifactState.STALE.value
+    assert restored_asset is not None
+    assert restored_asset['current_asset_version_id'] == asset_version_id
+    assert restored_asset['state'] == ArtifactState.STALE.value
 
 
 def test_graph_service_restores_deleted_notebook_and_edges_in_same_request(tmp_path) -> None:

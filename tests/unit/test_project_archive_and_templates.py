@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 import zipfile
 from dataclasses import replace
 from pathlib import Path
@@ -8,6 +9,7 @@ from types import SimpleNamespace
 
 import pytest
 
+import bulletjournal.storage.project_archive as project_archive_module
 from bulletjournal.api.app import create_app
 from bulletjournal.domain.enums import ArtifactRole, ArtifactState, LineageMode
 from bulletjournal.domain.errors import ProjectValidationError
@@ -30,6 +32,50 @@ def test_project_archive_round_trip_preserves_project_id(tmp_path: Path) -> None
     assert exported['mode'] == ProjectExportMode.CODE_ONLY.value
     assert (tmp_path / 'imported' / 'pyproject.toml').is_file()
     assert (tmp_path / 'imported' / 'uv.lock').is_file()
+
+
+@pytest.mark.parametrize('mode', list(ProjectExportMode))
+def test_project_archive_modes_round_trip_final_state_schema(tmp_path: Path, mode: ProjectExportMode) -> None:
+    project_root = init_project_root(tmp_path / 'project', project_id='study-a').root
+    paths = ProjectPaths(project_root)
+    with sqlite3.connect(paths.state_db_path) as connection:
+        connection.execute('ALTER TABLE objects ADD COLUMN nondeterministic INTEGER NOT NULL DEFAULT 0')
+        connection.execute(
+            'CREATE TABLE cache_index ('
+            'node_id TEXT NOT NULL, artifact_name TEXT NOT NULL, upstream_data_hash TEXT NOT NULL, '
+            'artifact_hash TEXT NOT NULL, is_nondeterministic INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL, '
+            'PRIMARY KEY (node_id, artifact_name, upstream_data_hash))'
+        )
+        connection.execute("DELETE FROM schema_migrations WHERE name = '007_remove_cache_and_nondeterminism'")
+    archive_path = tmp_path / f'{mode.value}.zip'
+
+    export_project_archive(project_root, archive_path, mode=mode)
+    imported_root = tmp_path / 'imported'
+    import_project_archive(archive_path, imported_root)
+
+    with sqlite3.connect(imported_root / 'metadata' / 'state.db') as connection:
+        tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+        columns = {row[1] for row in connection.execute('PRAGMA table_info(objects)')}
+    assert 'cache_index' not in tables
+    assert 'nondeterministic' not in columns
+
+
+def test_project_archive_import_migration_failure_cleans_staging_and_destination(tmp_path: Path, monkeypatch) -> None:
+    project_root = init_project_root(tmp_path / 'project', project_id='study-a').root
+    archive_path = tmp_path / 'study-a.zip'
+    export_project_archive(project_root, archive_path, mode=ProjectExportMode.FULL)
+    destination = tmp_path / 'imported'
+
+    def fail_migration(path: Path) -> None:
+        raise RuntimeError(f'migration failed for {path}')
+
+    monkeypatch.setattr(project_archive_module, 'StateDB', fail_migration)
+
+    with pytest.raises(RuntimeError, match='migration failed'):
+        import_project_archive(archive_path, destination)
+
+    assert not destination.exists()
+    assert not (tmp_path / '.imported.import.tmp').exists()
 
 
 def test_project_archive_round_trip_preserves_dashboards(tmp_path: Path) -> None:
@@ -307,7 +353,7 @@ def test_project_archive_import_rejects_manifest_file(tmp_path: Path) -> None:
             target_zip.writestr(info, source_zip.read(info.filename))
         target_zip.writestr('export_manifest.json', '{}')
 
-    with pytest.raises(ProjectValidationError, match='must not contain `export_manifest.json`'):
+    with pytest.raises(ProjectValidationError, match=r'must not contain `export_manifest\.json`'):
         import_project_archive(invalid_archive_path, tmp_path / 'imported-invalid')
 
 

@@ -27,6 +27,7 @@ def run_notebook_app(app: Any, notebook_path: str | Path):
     except Exception as exc:
         _record_run_finished(context, failure=exc)
         raise
+    context.commit_publication()
     _record_run_finished(context)
     _mark_downstream_stale(context)
     return result
@@ -60,6 +61,7 @@ def build_standalone_context(notebook_path: str | Path) -> RuntimeContext:
         bindings=_bindings_for_interface(graph, interface),
         outputs=_outputs_for_interface(interface),
         asset_declarations={declaration.name: declaration for declaration in contract.asset_declarations},
+        defer_publication=True,
     )
 
 

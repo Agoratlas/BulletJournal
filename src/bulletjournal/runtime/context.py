@@ -5,7 +5,9 @@ import contextvars
 import json
 import os
 import time
+import uuid
 from dataclasses import dataclass, field
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -26,6 +28,7 @@ from bulletjournal.runtime.warnings import (
 from bulletjournal.storage.graph_store import GraphStore
 from bulletjournal.storage.object_store import ObjectStore
 from bulletjournal.storage.project_fs import ProjectPaths, load_project_json
+from bulletjournal.storage.project_lock import ProjectLock
 from bulletjournal.storage.state_db import StateDB
 
 MISSING_BINDING_HELP = 'Please ensure you have connected an input or set a default value.'
@@ -95,6 +98,8 @@ class RuntimeContext:
     pushed_assets: list[dict[str, Any]] = field(default_factory=list)
     interactive_contract_key: tuple[float | None, str] | None = None
     interactive_contract_error: KeyError | None = None
+    defer_publication: bool = False
+    publication_id: str | None = field(init=False, default=None)
 
     def __post_init__(self) -> None:
         self.paths = ProjectPaths(self.project_root)
@@ -102,6 +107,16 @@ class RuntimeContext:
         self.object_store = ObjectStore(self.paths)
         if self.project_id is None:
             self.project_id = str(load_project_json(self.paths)['project_id'])
+        incarnation = self.db.live_incarnation(self.node_id)
+        if incarnation is not None:
+            graph_version = int(GraphStore(self.paths).read().meta.get('graph_version', 0))
+            publication = self.db.begin_publication(
+                run_id=self.run_id,
+                node_id=self.node_id,
+                source_hash=self.source_hash,
+                graph_version=graph_version,
+            )
+            self.publication_id = str(publication['publication_id'])
 
     def resolve_pull(self, name: str) -> dict[str, Any]:
         self._refresh_interactive_contracts()
@@ -132,6 +147,7 @@ class RuntimeContext:
                 f'expected {binding.data_type}, got {head["data_type"]}.'
             )
         self.db.touch_artifact_object(head['artifact_hash'])
+        self._lease_for_run(str(head['artifact_hash']))
         warnings: list[dict[str, Any]] = []
         if head['state'] == ArtifactState.STALE.value:
             warnings.append(stale_input_warning(f'{binding.source_node}/{binding.source_artifact}'))
@@ -144,6 +160,7 @@ class RuntimeContext:
             'source_node': binding.source_node,
             'source_artifact': binding.source_artifact,
             'loaded_version_id': head['current_version_id'],
+            'producer_incarnation_id': self.db.live_incarnation_id(binding.source_node),
         }
 
     def validate_pull_contract(self, *, name: str, data_type: str) -> None:
@@ -182,6 +199,7 @@ class RuntimeContext:
         if head is None or head['current_version_id'] is None:
             raise FileNotFoundError(f'Artifact `{binding.source_node}/{binding.source_artifact}` is pending.')
         self.db.touch_artifact_object(head['artifact_hash'])
+        self._lease_for_run(str(head['artifact_hash']))
         warnings: list[dict[str, Any]] = []
         if head['state'] == ArtifactState.STALE.value:
             warnings.append(stale_input_warning(f'{binding.source_node}/{binding.source_artifact}'))
@@ -194,11 +212,30 @@ class RuntimeContext:
             'source_node': binding.source_node,
             'source_artifact': binding.source_artifact,
             'loaded_version_id': head['current_version_id'],
+            'producer_incarnation_id': self.db.live_incarnation_id(binding.source_node),
         }
 
     def record_pull(self, name: str, metadata: dict[str, Any]) -> None:
         self.loaded_inputs[name] = metadata
-        self.db.record_run_input(self.run_id, f'{self.node_id}/{name}', metadata['artifact_hash'], metadata['state'])
+        source_node = str(metadata.get('source_node') or '')
+        source_artifact = str(metadata.get('source_artifact') or '')
+        self.db.record_run_input(
+            self.run_id,
+            f'{source_node}/{source_artifact}' if source_node else f'default:{self.node_id}/{name}',
+            metadata['artifact_hash'],
+            metadata['state'],
+            producer_incarnation_id=metadata.get('producer_incarnation_id'),
+            producer_artifact_name=source_artifact or None,
+            version_id=metadata.get('loaded_version_id'),
+        )
+
+    def _lease_for_run(self, artifact_hash: str) -> None:
+        self.db.acquire_object_lease(
+            artifact_hash,
+            'runtime_pull',
+            f'{self.run_id}:{uuid.uuid4()}',
+            expires_at=(datetime.now(tz=UTC) + timedelta(hours=24)).isoformat().replace('+00:00', 'Z'),
+        )
 
     def finalize_value_push(self, *, name: str, value: Any, data_type: str, role: ArtifactRole) -> dict[str, Any]:
         self._refresh_interactive_contracts()
@@ -244,6 +281,7 @@ class RuntimeContext:
         asset_type: type[BaseAsset] | None,
     ) -> dict[str, Any]:
         self._refresh_interactive_contracts()
+        self._ensure_publication()
         if self.interactive_contract_error is not None:
             raise self.interactive_contract_error
         declaration = self.asset_declarations.get(name)
@@ -310,6 +348,7 @@ class RuntimeContext:
             warnings=warnings,
             objects=objects,
             state=output_state,
+            publication_id=self.publication_id,
         )
         record = {
             'asset_name': name,
@@ -318,9 +357,12 @@ class RuntimeContext:
             'state': output_state.value,
         }
         self.pushed_assets.append(record)
+        if self.publication_id is not None and not self.defer_publication:
+            self.commit_publication()
         return record
 
     def _create_version(self, *, name: str, persisted: dict[str, Any], role: ArtifactRole) -> dict[str, Any]:
+        self._ensure_publication()
         upstream_data_hash, upstream_code_hash, warnings, output_state = self._lineage_for_logical_output(name)
         version_id = self.db.create_artifact_version(
             node_id=self.node_id,
@@ -334,6 +376,7 @@ class RuntimeContext:
             lineage_mode=self.lineage_mode,
             warnings=warnings,
             state=output_state,
+            publication_id=self.publication_id,
         )
         record = {
             'artifact_name': name,
@@ -343,7 +386,51 @@ class RuntimeContext:
             'role': role.value,
         }
         self.pushed_outputs.append(record)
+        if self.publication_id is not None and not self.defer_publication:
+            self.commit_publication()
         return record
+
+    def commit_publication(self, *, execution_head: dict[str, Any] | None = None) -> bool:
+        if self.publication_id is None:
+            return True
+        graph = GraphStore(self.paths).read()
+        current_node = next((node for node in graph.nodes if node.id == self.node_id), None)
+        current_source_hash = self.source_hash
+        notebook_path = self.paths.notebook_path(self.node_id)
+        if notebook_path.exists():
+            current_source_hash = compute_source_hash(notebook_path)
+        downstream = _downstream_node_ids(graph, self.node_id)
+        with ProjectLock(self.paths.project_lock_path).exclusive():
+            committed = self.db.commit_publication(
+                self.publication_id,
+                current_source_hash=current_source_hash if current_node is not None else '',
+                downstream_node_ids=downstream,
+                execution_head=execution_head,
+            )
+        if not committed:
+            raise RuntimeError('Publication was superseded by a newer node generation or input version.')
+        if not self.defer_publication:
+            self.publication_id = None
+        return True
+
+    def abandon_publication(self) -> None:
+        if self.publication_id is not None:
+            self.db.abandon_publication(self.publication_id)
+
+    def _ensure_publication(self) -> None:
+        if self.publication_id is not None:
+            return
+        incarnation = self.db.live_incarnation(self.node_id)
+        if incarnation is None:
+            return
+        graph_version = int(GraphStore(self.paths).read().meta.get('graph_version', 0))
+        publication = self.db.begin_publication(
+            run_id=self.run_id,
+            node_id=self.node_id,
+            source_hash=self.source_hash,
+            graph_version=graph_version,
+        )
+        self.publication_id = str(publication['publication_id'])
 
     def _lineage_for_logical_output(self, name: str) -> tuple[str, str, list[dict[str, Any]], ArtifactState]:
         input_hashes = [self.source_hash, f'{self.node_id}/{name}']
@@ -494,6 +581,19 @@ def _live_bindings_for_node(
             has_default=port.has_default,
         )
     return bindings
+
+
+def _downstream_node_ids(graph: GraphData, node_id: str) -> list[str]:
+    pending = [node_id]
+    seen: set[str] = set()
+    while pending:
+        source = pending.pop()
+        for edge in graph.edges:
+            if edge.source_node != source or edge.target_node in seen or edge.target_node == node_id:
+                continue
+            seen.add(edge.target_node)
+            pending.append(edge.target_node)
+    return sorted(seen)
 
 
 _RUNTIME_CONTEXT: contextvars.ContextVar[RuntimeContext | None] = contextvars.ContextVar(

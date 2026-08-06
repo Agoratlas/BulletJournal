@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import threading
 import webbrowser
+from copy import deepcopy
 from pathlib import Path
 
 import uvicorn
@@ -14,6 +15,15 @@ from bulletjournal.config import (
     normalize_base_path,
 )
 from bulletjournal.storage import require_project_root
+
+
+def _uvicorn_log_config() -> dict:
+    config = deepcopy(uvicorn.config.LOGGING_CONFIG)
+    for formatter_name in ('default', 'access'):
+        formatter = config['formatters'][formatter_name]
+        formatter['fmt'] = f'%(asctime)s | {formatter["fmt"]}'
+        formatter['datefmt'] = '%Y-%m-%d %H:%M:%S'
+    return config
 
 
 def start_server(
@@ -44,4 +54,12 @@ def start_server(
     )
     if open_browser:
         threading.Timer(1.0, lambda: webbrowser.open(f'http://{host}:{port}{normalized_base_path or "/"}')).start()
-    uvicorn.run(app, host=host, port=port, reload=reload, proxy_headers=True, forwarded_allow_ips='127.0.0.1')
+    uvicorn.run(
+        app,
+        host=host,
+        port=port,
+        reload=reload,
+        proxy_headers=True,
+        forwarded_allow_ips='127.0.0.1',
+        log_config=_uvicorn_log_config(),
+    )

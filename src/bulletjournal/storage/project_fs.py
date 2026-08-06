@@ -46,6 +46,18 @@ class ProjectPaths:
         return self.metadata_dir / 'state.db'
 
     @property
+    def tombstones_dir(self) -> Path:
+        return self.metadata_dir / 'tombstones'
+
+    @property
+    def project_lock_path(self) -> Path:
+        return self.metadata_dir / 'project.lock'
+
+    @property
+    def object_quarantine_dir(self) -> Path:
+        return self.object_store_dir / '.quarantine'
+
+    @property
     def project_json_path(self) -> Path:
         return self.metadata_dir / 'project.json'
 
@@ -149,12 +161,14 @@ def _initialize_project_layout(paths: ProjectPaths, *, project_id: str, title: s
     ensure_directory(paths.object_store_dir)
     ensure_directory(paths.dashboards_dir)
     ensure_directory(paths.metadata_dir)
+    ensure_directory(paths.tombstones_dir)
     ensure_directory(paths.checkpoints_dir)
     ensure_directory(paths.temp_dir)
     ensure_directory(paths.uploads_dir)
     ensure_directory(paths.pulled_files_dir)
     ensure_directory(paths.execution_logs_dir)
     ensure_directory(paths.worker_temp_dir)
+    ensure_directory(paths.tombstones_dir)
 
     _ensure_graph_files(paths, project_id=project_id, now=now)
     _ensure_project_json(paths, project_id=project_id, title=title, now=now)

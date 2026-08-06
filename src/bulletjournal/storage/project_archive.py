@@ -19,6 +19,7 @@ from bulletjournal.storage.project_fs import (
     validate_project_id,
     validate_project_schema_version,
 )
+from bulletjournal.storage.state_db import StateDB
 from bulletjournal.utils import utc_now_iso
 
 EXCLUDED_NAMES = {'.DS_Store'}
@@ -140,6 +141,7 @@ def import_project_archive(archive_path: Path, destination_root: Path) -> dict[s
             zf.extractall(temp_root)
         _restore_required_directories(temp_root)
         _validate_imported_project_metadata(ProjectPaths(temp_root))
+        StateDB(ProjectPaths(temp_root).state_db_path)
         _rewrite_imported_state_paths(ProjectPaths(temp_root))
         extracted_paths = require_project_root(temp_root)
         project_json = load_project_json(extracted_paths)
@@ -208,6 +210,7 @@ def _should_exclude_path(path: Path) -> bool:
 
 
 def _reconcile_staged_state_db(paths: ProjectPaths, *, mode: ProjectExportMode) -> None:
+    StateDB(paths.state_db_path)
     now = utc_now_iso()
     with sqlite3.connect(paths.state_db_path) as connection:
         connection.execute('PRAGMA foreign_keys = ON')
@@ -229,7 +232,6 @@ def _reconcile_staged_state_db(paths: ProjectPaths, *, mode: ProjectExportMode) 
             )
             connection.execute('DELETE FROM run_inputs')
             connection.execute('DELETE FROM run_outputs')
-            connection.execute('DELETE FROM cache_index')
             connection.execute('DELETE FROM orchestrator_execution_meta')
             connection.execute('DELETE FROM run_records')
             connection.execute('DELETE FROM asset_version_objects')

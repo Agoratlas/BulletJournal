@@ -1,4 +1,4 @@
-import type { EdgeRecord, GraphPatchOperation, LayoutRecord, NodeRecord, NoticeRecord, ProjectSnapshot } from './lib/types'
+import type { EdgeRecord, GraphPatchOperation, LayoutRecord, NodeRecord, NoticeRecord, ProjectSnapshot, TombstoneMutation } from './lib/types'
 
 export type PalettePreviewBlock = {
   key: string
@@ -50,6 +50,7 @@ export type GraphMutationPlan = {
 export type GraphHistoryEntry = {
   undo: GraphMutationPlan
   redo: GraphMutationPlan
+  deletion?: TombstoneMutation[]
 }
 
 export type ClipboardNodeRecord = {

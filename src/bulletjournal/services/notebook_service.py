@@ -49,6 +49,10 @@ class NotebookService:
             changed = previous_interface is not None and previous_interface.get('source_hash') != contract.source_hash
             first_parse = previous_interface is None
             if changed or first_parse:
+                if changed:
+                    incarnation = project.state_db.live_incarnation(node_id)
+                    if incarnation is not None:
+                        project.state_db.advance_node_incarnation(str(incarnation['incarnation_id']))
                 if (
                     changed
                     and self.project_service.checkpoint_service is not None

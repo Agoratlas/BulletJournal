@@ -227,8 +227,82 @@ def test_checkpoint_restore_marks_restored_outputs_stale(tmp_path) -> None:
 
     restored_artifact = client.get('/api/v1/artifacts/table_sink/sample_df')
     assert restored_artifact.status_code == 200
-    assert restored_artifact.json()['state'] == 'stale'
-    assert restored_artifact.json()['preview']['rows'] == 10
+    assert restored_artifact.json()['state'] == 'ready'
+    assert restored_artifact.json()['preview']['rows'] == 42
+
+
+def test_checkpoint_restore_marks_constant_and_dependent_output_ready(tmp_path) -> None:
+    project_root = init_project_root(tmp_path / 'project').root
+    app = create_app(project_path=project_root)
+    client = TestClient(app)
+
+    graph_version = client.get('/api/v1/project/snapshot').json()['graph']['meta']['graph_version']
+    created = client.patch(
+        '/api/v1/graph',
+        json={
+            'graph_version': graph_version,
+            'operations': [
+                {
+                    'type': 'add_constant_node',
+                    'node_id': 'sample_count',
+                    'title': 'Sample Count',
+                    'data_type': 'int',
+                    'value': 42,
+                },
+                {
+                    'type': 'add_notebook_node',
+                    'node_id': 'table_sink',
+                    'title': 'Table Sink',
+                    'template_ref': 'builtin/test_starter_notebook',
+                },
+            ],
+        },
+    )
+    assert created.status_code == 200
+
+    connected = client.patch(
+        '/api/v1/graph',
+        json={
+            'graph_version': created.json()['graph']['meta']['graph_version'],
+            'operations': [
+                {
+                    'type': 'add_edge',
+                    'source_node': 'sample_count',
+                    'source_port': 'value',
+                    'target_node': 'table_sink',
+                    'target_port': 'sample_count',
+                }
+            ],
+        },
+    )
+    assert connected.status_code == 200
+
+    run = client.post(
+        '/api/v1/nodes/table_sink/run',
+        json={'mode': 'run_stale', 'action': 'run_upstream'},
+    )
+    assert run.status_code == 200
+    wait_for_run_status(client, run.json()['run_id'], 'succeeded')
+
+    checkpoint = client.post('/api/v1/checkpoints')
+    assert checkpoint.status_code == 200
+    checkpoint_id = checkpoint.json()['checkpoint_id']
+
+    updated = client.post('/api/v1/constants/sample_count/value', json={'value': 10})
+    assert updated.status_code == 200
+
+    restored = client.post(f'/api/v1/checkpoints/{checkpoint_id}/restore')
+    assert restored.status_code == 200
+
+    constant = client.get('/api/v1/artifacts/sample_count/value')
+    assert constant.status_code == 200
+    assert constant.json()['state'] == 'ready'
+    assert constant.json()['preview']['repr'] == '42'
+
+    output = client.get('/api/v1/artifacts/table_sink/sample_df')
+    assert output.status_code == 200
+    assert output.json()['state'] == 'ready'
+    assert output.json()['preview']['rows'] == 42
 
 
 def test_manual_checkpoint_endpoint_still_creates_checkpoint_even_when_auto_checkpoint_not_due(

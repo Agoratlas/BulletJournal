@@ -26,6 +26,16 @@ def project_status(request: Request):
     return container.project_service.project_status()
 
 
+@router.get('/maintenance/gc/status')
+def gc_status(request: Request):
+    return request.app.state.container.project_service.gc_status()
+
+
+@router.post('/maintenance/gc')
+def collect_garbage(request: Request, dry_run: bool = True):
+    return request.app.state.container.project_service.collect_garbage(dry_run=dry_run)
+
+
 @router.post('/notices/{issue_id}/dismiss', response_model=NoticeDismissResponse)
 def dismiss_notice(issue_id: str, request: Request):
     container = request.app.state.container

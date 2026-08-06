@@ -5,7 +5,7 @@ from pathlib import Path
 from fastapi import APIRouter, Request
 from fastapi.responses import FileResponse
 
-from bulletjournal.api.schemas import GraphPatchRequest
+from bulletjournal.api.schemas import GraphPatchRequest, TombstoneMutationRequest, TombstoneRedoRequest
 
 router = APIRouter(tags=['graph'])
 
@@ -20,7 +20,19 @@ def get_graph(request: Request):
 def patch_graph(payload: GraphPatchRequest, request: Request):
     container = request.app.state.container
     operations = [operation.model_dump(mode='python') for operation in payload.operations]
-    return container.graph_service.apply_operations(payload.graph_version, operations)
+    return container.graph_service.apply_operations(payload.graph_version, operations, request_id=payload.request_id)
+
+
+@router.post('/graph/tombstones/{tombstone_id}/restore')
+def restore_tombstone(tombstone_id: str, payload: TombstoneMutationRequest, request: Request):
+    return request.app.state.container.graph_service.restore_tombstone(tombstone_id, request_id=payload.request_id)
+
+
+@router.post('/graph/tombstones/{tombstone_id}/redo')
+def redo_tombstone(tombstone_id: str, payload: TombstoneRedoRequest, request: Request):
+    return request.app.state.container.graph_service.redo_tombstone(
+        tombstone_id, payload.incarnation_id, request_id=payload.request_id
+    )
 
 
 @router.get('/nodes/{node_id}')

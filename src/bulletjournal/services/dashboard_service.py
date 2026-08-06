@@ -60,14 +60,13 @@ class DashboardService:
                 panels=self._coerce_panels(panels, graph=graph),
             )
             self._validate_panel_sources(document)
-            graph.nodes.append(
-                Node(
-                    id=resolved_dashboard_id,
-                    kind=NodeKind.DASHBOARD,
-                    title=document.title,
-                    ui=self._dashboard_ui(document),
-                )
+            node = Node(
+                id=resolved_dashboard_id,
+                kind=NodeKind.DASHBOARD,
+                title=document.title,
+                ui=self._dashboard_ui(document),
             )
+            graph.nodes.append(node)
             graph.layout.append(
                 LayoutEntry(
                     node_id=resolved_dashboard_id,
@@ -79,6 +78,9 @@ class DashboardService:
             )
             self._write_dashboard_document(document)
             self.project_service.write_graph(graph)
+            self.project_service.require_project().state_db.register_node_incarnation(
+                node.incarnation_id, node.id, node.kind.value
+            )
             self.project_service.create_automatic_checkpoint_if_due()
             self._publish_dashboard_updated(document)
             return document.to_dict()
@@ -260,6 +262,67 @@ class DashboardService:
                 self._write_dashboard_document(updated)
                 self._sync_dashboard_node_metadata(updated)
                 self._publish_dashboard_updated(updated)
+
+    def capture_node_references(self, node_id: str) -> list[dict[str, Any]]:
+        graph_incarnations = {node.id: node.incarnation_id for node in self.project_service.graph().nodes}
+        captured: list[dict[str, Any]] = []
+        with self._lock:
+            for dashboard_id in self.list_dashboard_ids():
+                if dashboard_id == node_id:
+                    continue
+                document = self._read_dashboard_document(dashboard_id)
+                sources = [source.to_dict() for source in document.sources if source.node_id == node_id]
+                panels = [panel.to_dict() for panel in document.panels if panel.node_id == node_id]
+                if sources or panels:
+                    captured.append(
+                        {
+                            'dashboard_id': dashboard_id,
+                            'dashboard_incarnation_id': graph_incarnations.get(dashboard_id),
+                            'sources': sources,
+                            'panels': panels,
+                        }
+                    )
+        return captured
+
+    def restore_node_references(self, references: list[dict[str, Any]]) -> list[str]:
+        graph = self.project_service.graph()
+        graph_incarnations = {node.id: node.incarnation_id for node in graph.nodes}
+        skipped: list[str] = []
+        with self._lock:
+            for reference in references:
+                dashboard_id = str(reference.get('dashboard_id') or '')
+                expected_incarnation = reference.get('dashboard_incarnation_id')
+                if not dashboard_id or graph_incarnations.get(dashboard_id) != expected_incarnation:
+                    skipped.append(dashboard_id)
+                    continue
+                try:
+                    document = self._read_dashboard_document(dashboard_id)
+                except (NotFoundError, GraphValidationError):
+                    skipped.append(dashboard_id)
+                    continue
+                saved_sources = self._coerce_sources(list(reference.get('sources') or []), graph=graph)
+                saved_panels = self._coerce_panels(list(reference.get('panels') or []), graph=graph)
+                source_ids = {source.node_id for source in document.sources}
+                panel_ids = {panel.panel_id for panel in document.panels}
+                conflicting = [panel.panel_id for panel in saved_panels if panel.panel_id in panel_ids]
+                if conflicting:
+                    skipped.append(dashboard_id)
+                    continue
+                updated = replace(
+                    document,
+                    version=document.version + 1,
+                    updated_at=utc_now_iso(),
+                    sources=[
+                        *document.sources,
+                        *(source for source in saved_sources if source.node_id not in source_ids),
+                    ],
+                    panels=self._normalize_panel_positions([*document.panels, *saved_panels]),
+                )
+                self._validate_panel_sources(updated)
+                self._write_dashboard_document(updated)
+                self._sync_dashboard_node_metadata(updated)
+                self._publish_dashboard_updated(updated)
+        return skipped
 
     def refresh_dashboards_for_source(self, node_id: str) -> list[str]:
         with self._lock:

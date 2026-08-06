@@ -1,4 +1,8 @@
+import sqlite3
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+
+import pytest
 
 from bulletjournal.domain.enums import ArtifactRole, ArtifactState, LineageMode, RunStatus, ValidationSeverity
 from bulletjournal.domain.models import AssetDeclaration, ValidationIssue
@@ -7,7 +11,154 @@ from bulletjournal.storage.project_fs import init_project_root
 from bulletjournal.storage.state_db import StateDB, _database_journal_mode
 
 
-def test_state_db_tracks_artifact_head_lifecycle_and_cache_nondeterminism(tmp_path) -> None:
+def _downgrade_to_legacy_cache_schema(path: Path) -> None:
+    with sqlite3.connect(path) as connection:
+        connection.execute('ALTER TABLE objects ADD COLUMN nondeterministic INTEGER NOT NULL DEFAULT 0')
+        connection.execute(
+            'CREATE TABLE cache_index ('
+            'node_id TEXT NOT NULL, artifact_name TEXT NOT NULL, upstream_data_hash TEXT NOT NULL, '
+            'artifact_hash TEXT NOT NULL, is_nondeterministic INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL, '
+            'PRIMARY KEY (node_id, artifact_name, upstream_data_hash))'
+        )
+        connection.execute("DELETE FROM schema_migrations WHERE name = '007_remove_cache_and_nondeterminism'")
+
+
+def test_fresh_state_db_has_final_cache_free_schema(tmp_path) -> None:
+    path = tmp_path / 'state.db'
+
+    StateDB(path)
+
+    with sqlite3.connect(path) as connection:
+        tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+        columns = {row[1] for row in connection.execute('PRAGMA table_info(objects)')}
+        markers = {row[0] for row in connection.execute('SELECT name FROM schema_migrations')}
+    assert 'cache_index' not in tables
+    assert 'nondeterministic' not in columns
+    assert '007_remove_cache_and_nondeterminism' in markers
+
+
+def test_cache_removal_migration_preserves_objects_versions_heads_and_asset_links(tmp_path) -> None:
+    path = tmp_path / 'state.db'
+    db = StateDB(path)
+    db.upsert_artifact_object('hash-1', 'json', 'int', 2, '.json', 'application/json', {'kind': 'simple', 'repr': '1'})
+    version_id = db.create_artifact_version(
+        node_id='node-a',
+        artifact_name='output',
+        role=ArtifactRole.OUTPUT,
+        artifact_hash='hash-1',
+        source_hash='source-a',
+        upstream_code_hash='code-a',
+        upstream_data_hash='data-a',
+        run_id='run-1',
+        lineage_mode=LineageMode.MANAGED,
+        warnings=[],
+    )
+    asset_version_id = db.create_asset_version(
+        node_id='node-a',
+        asset_name='asset',
+        asset_type='markdown',
+        interactive=False,
+        source_hash='source-a',
+        upstream_code_hash='code-a',
+        upstream_data_hash='data-a',
+        run_id='run-1',
+        lineage_mode=LineageMode.MANAGED,
+        definition={'content': 'hello'},
+        modifier_schema=[],
+        default_modifiers={},
+        override_schema_hash='schema-a',
+        warnings=[],
+        objects=[{'object_role': 'primary', 'artifact_hash': 'hash-1'}],
+        state=ArtifactState.READY,
+    )
+    _downgrade_to_legacy_cache_schema(path)
+    with sqlite3.connect(path) as connection:
+        connection.execute("UPDATE objects SET nondeterministic = 1 WHERE artifact_hash = 'hash-1'")
+        connection.execute(
+            "UPDATE objects SET gc_state = 'quarantined', gc_marked_at = '2026-01-02T00:00:00Z', "
+            "quarantine_path = 'quarantine/hash-1' WHERE artifact_hash = 'hash-1'"
+        )
+        connection.execute(
+            "INSERT INTO cache_index VALUES ('node-a', 'output', 'data-a', 'hash-1', 1, '2026-01-01T00:00:00Z')"
+        )
+        retained_columns = [
+            row[1] for row in connection.execute('PRAGMA table_info(objects)') if row[1] != 'nondeterministic'
+        ]
+        before = connection.execute(f'SELECT {", ".join(retained_columns)} FROM objects').fetchall()  # noqa: S608
+
+    StateDB(path)
+    StateDB(path)
+
+    with sqlite3.connect(path) as connection:
+        after = connection.execute(f'SELECT {", ".join(retained_columns)} FROM objects').fetchall()  # noqa: S608
+        assert connection.execute('SELECT current_version_id FROM artifact_heads').fetchone()[0] == version_id
+        assert connection.execute('SELECT artifact_hash FROM artifact_versions').fetchone()[0] == 'hash-1'
+        assert connection.execute('SELECT asset_version_id, artifact_hash FROM asset_version_objects').fetchone() == (
+            asset_version_id,
+            'hash-1',
+        )
+        assert connection.execute('PRAGMA foreign_key_check').fetchall() == []
+        marker_count = connection.execute(
+            "SELECT COUNT(*) FROM schema_migrations WHERE name = '007_remove_cache_and_nondeterminism'"
+        ).fetchone()[0]
+    assert after == before
+    assert marker_count == 1
+
+
+def test_cache_removal_migration_rolls_back_entire_legacy_schema_on_fk_failure(tmp_path) -> None:
+    path = tmp_path / 'state.db'
+    StateDB(path)
+    _downgrade_to_legacy_cache_schema(path)
+    with sqlite3.connect(path) as connection:
+        connection.execute('PRAGMA foreign_keys = OFF')
+        connection.execute(
+            'INSERT INTO artifact_versions '
+            '(version_id, node_id, artifact_name, role, artifact_hash, source_hash, upstream_code_hash, '
+            'upstream_data_hash, run_id, lineage_mode, created_at, warning_json) '
+            "VALUES (1, 'node-a', 'output', 'output', 'missing', 'source', "
+            "'code', 'data', 'run', 'managed', '2026-01-01T00:00:00Z', '[]')"
+        )
+
+    with pytest.raises(sqlite3.IntegrityError, match='Foreign key check failed'):
+        StateDB(path)
+
+    with sqlite3.connect(path) as connection:
+        tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+        columns = {row[1] for row in connection.execute('PRAGMA table_info(objects)')}
+        marker = connection.execute(
+            "SELECT 1 FROM schema_migrations WHERE name = '007_remove_cache_and_nondeterminism'"
+        ).fetchone()
+        assert connection.execute('SELECT artifact_hash FROM artifact_versions').fetchone()[0] == 'missing'
+    assert 'cache_index' in tables
+    assert 'objects_replacement' not in tables
+    assert 'nondeterministic' in columns
+    assert marker is None
+
+
+def test_concurrent_state_db_initialization_applies_cache_migration_once(tmp_path) -> None:
+    path = tmp_path / 'state.db'
+    StateDB(path)
+    _downgrade_to_legacy_cache_schema(path)
+
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        list(executor.map(lambda _: StateDB(path), range(4)))
+
+    with sqlite3.connect(path) as connection:
+        assert (
+            connection.execute(
+                "SELECT COUNT(*) FROM schema_migrations WHERE name = '007_remove_cache_and_nondeterminism'"
+            ).fetchone()[0]
+            == 1
+        )
+        assert (
+            connection.execute(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'cache_index'"
+            ).fetchone()[0]
+            == 0
+        )
+
+
+def test_state_db_tracks_artifact_head_lifecycle_and_history(tmp_path) -> None:
     paths = init_project_root(tmp_path / 'project')
     db = StateDB(paths.state_db_path)
 
@@ -44,9 +195,6 @@ def test_state_db_tracks_artifact_head_lifecycle_and_cache_nondeterminism(tmp_pa
     assert ready['state'] == ArtifactState.READY.value
     assert ready['artifact_hash'] == 'hash-1'
 
-    cache_hit = db.get_cache_hit('node_a', 'output', 'data-hash')
-    assert cache_hit == {'artifact_hash': 'hash-1', 'is_nondeterministic': False}
-
     second_version = db.create_artifact_version(
         node_id='node_a',
         artifact_name='output',
@@ -59,10 +207,12 @@ def test_state_db_tracks_artifact_head_lifecycle_and_cache_nondeterminism(tmp_pa
         lineage_mode=LineageMode.MANAGED,
         warnings=[],
     )
-    cache_hit = db.get_cache_hit('node_a', 'output', 'data-hash')
-
     assert second_version > first_version
-    assert cache_hit == {'artifact_hash': 'hash-2', 'is_nondeterministic': True}
+    with db._connection() as connection:
+        versions = connection.execute(
+            'SELECT artifact_hash FROM artifact_versions WHERE node_id = ? ORDER BY version_id', ('node_a',)
+        ).fetchall()
+    assert [row['artifact_hash'] for row in versions] == ['hash-1', 'hash-2']
 
     db.set_artifact_head_state('node_a', 'output', ArtifactState.STALE)
     stale = db.get_artifact_head('node_a', 'output')
@@ -534,8 +684,6 @@ def test_state_db_rename_node_state_updates_all_node_id_indexes_and_payloads(tmp
         assert (
             connection.execute('SELECT COUNT(*) FROM artifact_heads WHERE node_id = ?', ('node_b',)).fetchone()[0] == 1
         )
-        assert connection.execute('SELECT COUNT(*) FROM cache_index WHERE node_id = ?', ('node_a',)).fetchone()[0] == 0
-        assert connection.execute('SELECT COUNT(*) FROM cache_index WHERE node_id = ?', ('node_b',)).fetchone()[0] == 1
         assert connection.execute('SELECT COUNT(*) FROM run_outputs WHERE node_id = ?', ('node_a',)).fetchone()[0] == 0
         assert connection.execute('SELECT COUNT(*) FROM run_outputs WHERE node_id = ?', ('node_b',)).fetchone()[0] == 1
         assert (
@@ -599,6 +747,27 @@ def test_state_db_truncates_execution_log_previews(tmp_path) -> None:
     assert 'line 79' in records['node_a']['stdout']['text']
     assert 'line 0' not in records['node_a']['stdout']['text']
     assert records['node_a']['stdout']['size_bytes'] == len(long_log.encode('utf-8'))
+
+
+def test_orchestrator_metadata_uses_live_incarnation_but_preserves_legacy_visibility(tmp_path) -> None:
+    db = StateDB(tmp_path / 'state.db')
+    db.upsert_orchestrator_execution_meta(
+        node_id='node_a', run_id='legacy-run', status='succeeded', started_at='2026-03-26T00:00:00Z'
+    )
+
+    assert db.list_orchestrator_execution_meta()['node_a']['run_id'] == 'legacy-run'
+
+    db.register_node_incarnation('incarnation-a', 'node_a', 'notebook')
+
+    assert 'node_a' not in db.list_orchestrator_execution_meta()
+
+    db.upsert_orchestrator_execution_meta(
+        node_id='node_a', run_id='live-run', status='running', started_at='2026-03-26T00:01:00Z'
+    )
+
+    record = db.list_orchestrator_execution_meta()['node_a']
+    assert record['run_id'] == 'live-run'
+    assert record['incarnation_id'] == 'incarnation-a'
 
 
 def test_database_journal_mode_defaults_to_delete_for_project_mounts_in_container() -> None:

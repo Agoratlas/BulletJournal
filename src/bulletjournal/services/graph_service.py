@@ -1,13 +1,16 @@
 from __future__ import annotations
 
+import json
 import re
 import shutil
+import uuid
 from contextlib import suppress
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from bulletjournal.domain.enums import ArtifactState, NodeKind
-from bulletjournal.domain.errors import GraphValidationError, NotFoundError
+from bulletjournal.domain.errors import GraphValidationError, NotFoundError, TombstoneExpiredError
 from bulletjournal.domain.graph_bindings import (
     organizer_interface_for_node,
     organizer_ports_from_ui,
@@ -34,6 +37,9 @@ from bulletjournal.domain.type_system import types_compatible
 from bulletjournal.execution.planner import downstream_closure, topological_nodes, visible_edge_id
 from bulletjournal.parser.interface_parser import parse_notebook_interface
 from bulletjournal.services.notebook_freshness import lineage_metadata_for_notebook, notebook_uses_execution_head
+from bulletjournal.storage.atomic_write import atomic_write_text
+from bulletjournal.storage.graph_store import GraphStore
+from bulletjournal.utils import json_dumps, utc_now_iso
 
 
 @dataclass(slots=True)
@@ -59,7 +65,14 @@ class GraphService:
             'layout': [entry.to_dict() for entry in graph.layout],
         }
 
-    def apply_operations(self, graph_version: int, operations: list[dict[str, Any]]) -> dict[str, Any]:
+    def apply_operations(
+        self, graph_version: int, operations: list[dict[str, Any]], *, request_id: str | None = None
+    ) -> dict[str, Any]:
+        state_db = self.project_service.require_project().state_db
+        if request_id:
+            cached = state_db.cached_mutation_response(request_id)
+            if cached is not None:
+                return cached
         with self.project_service.suspend_automatic_checkpoints():
             graph = self.project_service.graph()
             if int(graph.meta['graph_version']) != graph_version:
@@ -84,17 +97,21 @@ class GraphService:
             pending_state_deletes: list[str] = []
             pending_state_renames: list[tuple[str, str]] = []
             pending_notebook_interfaces: dict[str, dict[str, Any]] = {}
+            created_incarnations: list[Node] = []
+            tombstone_mutations: list[dict[str, Any]] = []
             for operation in operations:
                 op_type = operation['type']
                 if op_type == 'add_notebook_node':
                     node_id, source, interface = self._add_notebook_node(graph, operation)
                     pending_notebook_creates.append((node_id, source))
                     pending_notebook_interfaces[node_id] = interface
+                    created_incarnations.append(next(node for node in graph.nodes if node.id == node_id))
                     reparse_all = True
                     interruption_roots.add(node_id)
                 elif op_type == 'add_constant_node':
                     node_id, artifact_name = self._add_constant_node(graph, operation)
                     pending_input_heads.append((node_id, artifact_name))
+                    created_incarnations.append(next(node for node in graph.nodes if node.id == node_id))
                     if operation.get('value') is not None or operation.get('value_json') is not None:
                         pending_constant_values.append(
                             (node_id, operation.get('value'), _constant_value_json(operation))
@@ -105,11 +122,14 @@ class GraphService:
                     pending_input_heads.append(
                         (node_id, file_input_artifact_name(next(node for node in graph.nodes if node.id == node_id)))
                     )
+                    created_incarnations.append(next(node for node in graph.nodes if node.id == node_id))
                     interruption_roots.add(node_id)
                 elif op_type == 'add_organizer_node':
-                    self._add_organizer_node(graph, operation)
+                    node_id = self._add_organizer_node(graph, operation)
+                    created_incarnations.append(next(node for node in graph.nodes if node.id == node_id))
                 elif op_type == 'add_area_node':
-                    self._add_area_node(graph, operation)
+                    node_id = self._add_area_node(graph, operation)
+                    created_incarnations.append(next(node for node in graph.nodes if node.id == node_id))
                 elif op_type == 'add_dashboard_node':
                     node_id = self._add_dashboard_node(graph, operation)
                     pending_dashboard_creates.append(
@@ -120,7 +140,9 @@ class GraphService:
                             'panels': [],
                         }
                     )
+                    created_incarnations.append(next(node for node in graph.nodes if node.id == node_id))
                 elif op_type == 'add_pipeline_template':
+                    previous_incarnations = {node.incarnation_id for node in graph.nodes}
                     created = self._add_pipeline_template(graph, operation)
                     pending_notebook_creates.extend(created['notebook_creates'])
                     pending_dashboard_creates.extend(created['dashboard_creates'])
@@ -129,6 +151,9 @@ class GraphService:
                     reparse_all = True
                     interruption_roots.update(node_id for node_id, _ in created['notebook_creates'])
                     interruption_roots.update(node_id for node_id, _ in created['input_heads'])
+                    created_incarnations.extend(
+                        node for node in graph.nodes if node.incarnation_id not in previous_incarnations
+                    )
                 elif op_type == 'add_edge':
                     self._add_edge(graph, operation, pending_interfaces_by_node=pending_notebook_interfaces)
                     stale_roots.add(str(operation['target_node']))
@@ -184,6 +209,7 @@ class GraphService:
                 elif op_type == 'update_node_frozen':
                     pending_editor_stops.extend(self._update_frozen(graph, operation))
                 elif op_type == 'delete_node':
+                    tombstone_mutations.append(self._tombstone_node(graph, str(operation['node_id'])))
                     deleted = self._delete_node(graph, str(operation['node_id']))
                     stale_roots.update(deleted['stale_roots'])
                     interruption_roots.update(deleted['stale_roots'])
@@ -194,7 +220,6 @@ class GraphService:
                     if deleted['delete_dashboard_file']:
                         pending_dashboard_deletes.append(str(deleted['node_id']))
                     pending_dashboard_ref_deletes.append(str(deleted['node_id']))
-                    pending_state_deletes.append(str(deleted['node_id']))
                     reparse_all = True
                 else:
                     raise GraphValidationError(f'Unsupported graph operation `{op_type}`.')
@@ -205,6 +230,8 @@ class GraphService:
                     graph,
                 )
             graph = self.project_service.write_graph(graph)
+            for node in created_incarnations:
+                state_db.register_node_incarnation(node.incarnation_id, node.id, node.kind.value)
             if self.project_service.dashboard_service is not None:
                 for dashboard in pending_dashboard_creates:
                     self.project_service.dashboard_service.materialize_template_dashboard(**dashboard)
@@ -271,10 +298,14 @@ class GraphService:
                 self.restore_nodes_and_downstream_ready_if_lineage_matches(sorted(stale_roots))
         self.project_service.create_automatic_checkpoint_if_due()
         snapshot = self.project_service.snapshot()
-        return {
+        response = {
             **snapshot,
             'interrupted_run': active_run_interruption,
+            'tombstone_mutations': tombstone_mutations,
         }
+        if request_id:
+            state_db.cache_mutation_response(request_id, response)
+        return response
 
     def remove_edges_for_port_changes(
         self,
@@ -450,6 +481,45 @@ class GraphService:
                 payload={
                     'node_id': node_id,
                     'artifact_name': artifact_name,
+                    'old_state': ArtifactState.STALE.value,
+                    'new_state': ArtifactState.READY.value,
+                },
+            )
+
+        for asset in project.state_db.list_asset_heads(node_id=node_id):
+            asset_name = str(asset['asset_name'])
+            if asset.get('current_asset_version_id') is None or asset['state'] != ArtifactState.STALE.value:
+                continue
+            objects_valid = True
+            for item in asset.get('objects', []):
+                artifact_hash = str(item.get('artifact_hash') or '')
+                record = project.state_db.get_object_record(artifact_hash)
+                if record is None or record.get('gc_state') != 'active':
+                    objects_valid = False
+                    break
+                try:
+                    project.object_store.verify_object(artifact_hash, int(record['size_bytes']))
+                except (OSError, ValueError):
+                    objects_valid = False
+                    break
+            if not objects_valid:
+                continue
+            expected_upstream_data_hash = combine_hashes([source_hash, f'{node_id}/{asset_name}', *input_hashes])
+            expected_upstream_code_hash = combine_hashes([source_hash, f'{node_id}/{asset_name}', *input_code_hashes])
+            if (
+                asset.get('source_hash') != source_hash
+                or asset.get('upstream_data_hash') != expected_upstream_data_hash
+                or asset.get('upstream_code_hash') != expected_upstream_code_hash
+            ):
+                continue
+            project.state_db.set_asset_head_state(node_id, asset_name, ArtifactState.READY)
+            self.project_service.event_service.publish(
+                'asset.state_changed',
+                project_id=project.metadata.project_id,
+                graph_version=int(graph.meta['graph_version']),
+                payload={
+                    'node_id': node_id,
+                    'asset_name': asset_name,
                     'old_state': ArtifactState.STALE.value,
                     'new_state': ArtifactState.READY.value,
                 },
@@ -1257,6 +1327,171 @@ class GraphService:
             'delete_dashboard_file': existing.kind == NodeKind.DASHBOARD,
             'stale_roots': stale_roots,
         }
+
+    def _tombstone_node(self, graph: GraphData, node_id: str) -> dict[str, Any]:
+        project = self.project_service.require_project()
+        node = next((item for item in graph.nodes if item.id == node_id), None)
+        if node is None:
+            raise NotFoundError(f'Unknown node `{node_id}`.')
+        layout = next((item for item in graph.layout if item.node_id == node_id), None)
+        endpoint_incarnations = {item.id: item.incarnation_id for item in graph.nodes}
+        edges = [
+            {
+                **edge.to_dict(),
+                'source_incarnation_id': endpoint_incarnations[edge.source_node],
+                'target_incarnation_id': endpoint_incarnations[edge.target_node],
+            }
+            for edge in graph.edges
+            if edge.source_node == node_id or edge.target_node == node_id
+        ]
+        tombstone_id = str(uuid.uuid4())
+        mutation_id = str(uuid.uuid4())
+        deleted_at = utc_now_iso()
+        retention_seconds = int(project.state_db.get_project_meta('gc_tombstone_retention_seconds') or 3600)
+        expires_at = (datetime.now(UTC) + timedelta(seconds=max(0, retention_seconds))).isoformat()
+        tombstone_dir = project.paths.tombstones_dir / tombstone_id
+        tombstone_dir.mkdir(parents=True, exist_ok=False)
+        source_text = None
+        if node.kind == NodeKind.NOTEBOOK:
+            source_path = project.paths.notebook_path(node_id)
+            source_text = source_path.read_text(encoding='utf-8') if source_path.exists() else None
+        dashboard_json = None
+        if node.kind == NodeKind.DASHBOARD:
+            dashboard_path = project.paths.dashboard_path(node_id)
+            if dashboard_path.exists():
+                dashboard_json = json.loads(dashboard_path.read_text(encoding='utf-8'))
+        dashboard_references = (
+            self.project_service.dashboard_service.capture_node_references(node_id)
+            if self.project_service.dashboard_service is not None
+            else []
+        )
+        manifest_path = tombstone_dir / 'manifest.json'
+        state = project.state_db.tombstone_node_state(
+            tombstone_id=tombstone_id,
+            mutation_id=mutation_id,
+            incarnation_id=node.incarnation_id,
+            node_id=node.id,
+            node_kind=node.kind.value,
+            deleted_at=deleted_at,
+            expires_at=expires_at,
+            manifest_path=str(manifest_path.relative_to(project.paths.root)),
+            manifest_checksum='preparing',
+        )
+        payload = {
+            'schema_version': 1,
+            'tombstone_id': tombstone_id,
+            'mutation_id': mutation_id,
+            'deleted_at': deleted_at,
+            'expires_at': expires_at,
+            'node': node.to_dict(),
+            'layout': None if layout is None else layout.to_dict(),
+            'edges': edges,
+            'notebook_source': source_text,
+            'dashboard': dashboard_json,
+            'dashboard_references': dashboard_references,
+            'state': state,
+        }
+        checksum = hash_json(payload)
+        atomic_write_text(manifest_path, json_dumps({'checksum': checksum, 'manifest': payload}, pretty=True) + '\n')
+        project.state_db.update_tombstone_manifest_checksum(tombstone_id, checksum)
+        return {
+            'mutation_id': mutation_id,
+            'tombstone_id': tombstone_id,
+            'incarnation_id': node.incarnation_id,
+            'node_id': node.id,
+            'expires_at': expires_at,
+        }
+
+    def restore_tombstone(self, tombstone_id: str, *, request_id: str | None = None) -> dict[str, Any]:
+        project = self.project_service.require_project()
+        if request_id:
+            cached = project.state_db.cached_mutation_response(request_id)
+            if cached is not None:
+                return cached
+        record = project.state_db.get_tombstone(tombstone_id)
+        if record is None:
+            raise NotFoundError(f'Unknown tombstone `{tombstone_id}`.')
+        expires_at = datetime.fromisoformat(str(record['expires_at']))
+        if record['status'] == 'expired' or expires_at <= datetime.now(UTC):
+            project.state_db.expire_tombstone(tombstone_id, expired_at=utc_now_iso())
+            raise TombstoneExpiredError(f'Tombstone `{tombstone_id}` has expired.')
+        if record['status'] != 'retained':
+            raise GraphValidationError(f'Tombstone `{tombstone_id}` is not available for restore.')
+        graph = self.project_service.graph()
+        if any(node.id == record['node_id'] for node in graph.nodes):
+            raise GraphValidationError(f'Node `{record["node_id"]}` already exists.')
+        envelope = json.loads((project.paths.root / str(record['manifest_path'])).read_text(encoding='utf-8'))
+        manifest = envelope.get('manifest')
+        if not isinstance(manifest, dict) or hash_json(manifest) != envelope.get('checksum'):
+            raise GraphValidationError('Tombstone manifest checksum mismatch.')
+        if envelope['checksum'] != record['manifest_checksum']:
+            raise GraphValidationError('Tombstone database checksum mismatch.')
+        node = GraphStore._node_from_dict(dict(manifest['node']))
+        if node.incarnation_id != record['incarnation_id']:
+            raise GraphValidationError('Tombstone incarnation mismatch.')
+        graph.nodes.append(node)
+        if isinstance(manifest.get('layout'), dict):
+            graph.layout.append(LayoutEntry(**manifest['layout']))
+        live_by_id = {item.id: item.incarnation_id for item in graph.nodes}
+        skipped_edges: list[str] = []
+        for edge_data in manifest.get('edges', []):
+            if (
+                live_by_id.get(edge_data['source_node']) != edge_data['source_incarnation_id']
+                or live_by_id.get(edge_data['target_node']) != edge_data['target_incarnation_id']
+            ):
+                skipped_edges.append(str(edge_data['id']))
+                continue
+            graph.edges.append(
+                Edge(
+                    **{
+                        key: edge_data[key]
+                        for key in ('id', 'source_node', 'source_port', 'target_node', 'target_port')
+                    }
+                )
+            )
+        self._validate_graph(graph)
+        self.project_service.write_graph(graph)
+        if node.kind == NodeKind.NOTEBOOK and manifest.get('notebook_source') is not None:
+            project.paths.notebook_path(node.id).write_text(str(manifest['notebook_source']), encoding='utf-8')
+        if node.kind == NodeKind.DASHBOARD and manifest.get('dashboard') is not None:
+            atomic_write_text(
+                project.paths.dashboard_path(node.id), json_dumps(manifest['dashboard'], pretty=True) + '\n'
+            )
+        project.state_db.restore_tombstone_state(tombstone_id, dict(manifest['state']), restored_at=utc_now_iso())
+        self.project_service.reparse_all_notebooks()
+        self.restore_nodes_and_downstream_ready_if_lineage_matches([node.id])
+        skipped_dashboard_ids: list[str] = []
+        if self.project_service.dashboard_service is not None:
+            skipped_dashboard_ids = self.project_service.dashboard_service.restore_node_references(
+                list(manifest.get('dashboard_references') or [])
+            )
+        response = {
+            **self.project_service.snapshot(),
+            'tombstone_mutation': {
+                'mutation_id': str(uuid.uuid4()),
+                'tombstone_id': tombstone_id,
+                'incarnation_id': node.incarnation_id,
+                'node_id': node.id,
+                'expires_at': record['expires_at'],
+                'skipped_edge_ids': skipped_edges,
+                'skipped_dashboard_ids': skipped_dashboard_ids,
+            },
+        }
+        if request_id:
+            project.state_db.cache_mutation_response(request_id, response)
+        return response
+
+    def redo_tombstone(
+        self, tombstone_id: str, incarnation_id: str, *, request_id: str | None = None
+    ) -> dict[str, Any]:
+        graph = self.project_service.graph()
+        node = next((item for item in graph.nodes if item.incarnation_id == incarnation_id), None)
+        original = self.project_service.require_project().state_db.get_tombstone(tombstone_id)
+        if node is None or original is None or original['incarnation_id'] != incarnation_id:
+            raise GraphValidationError('Tombstone incarnation conflict.')
+        return self.apply_operations(
+            int(graph.meta['graph_version']), [{'type': 'delete_node', 'node_id': node.id}], request_id=request_id
+        )
 
     def _delete_execution_logs(self, node_id: str) -> None:
         logs_dir = self.project_service.require_project().paths.execution_logs_dir

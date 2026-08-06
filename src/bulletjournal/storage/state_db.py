@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+import uuid
 from collections.abc import Iterable, Iterator
 from contextlib import closing, contextmanager
 from pathlib import Path
@@ -62,6 +63,13 @@ class StateDB:
         connection.execute(f'PRAGMA journal_mode = {self._journal_mode}')
         return connection
 
+    @staticmethod
+    def _live_incarnation_id(connection: sqlite3.Connection, node_id: str) -> str | None:
+        row = connection.execute(
+            "SELECT incarnation_id FROM node_incarnations WHERE node_id = ? AND status = 'live'", (node_id,)
+        ).fetchone()
+        return None if row is None else str(row['incarnation_id'])
+
     @contextmanager
     def _connection(self) -> Iterator[sqlite3.Connection]:
         with closing(self._connect()) as connection, connection:
@@ -69,7 +77,7 @@ class StateDB:
 
     def _initialize(self) -> None:
         with self._connection() as connection:
-            for name, sql in MIGRATIONS:
+            for name, migration in MIGRATIONS:
                 exists = connection.execute(
                     'SELECT 1 FROM sqlite_master WHERE type = ? AND name = ?', ('table', 'schema_migrations')
                 ).fetchone()
@@ -77,12 +85,19 @@ class StateDB:
                     applied = connection.execute('SELECT 1 FROM schema_migrations WHERE name = ?', (name,)).fetchone()
                     if applied:
                         continue
-                connection.executescript(sql)
+                applied_at = utc_now_iso()
+                if callable(migration):
+                    migration(connection, name, applied_at)
+                    continue
+                connection.executescript(migration)
                 connection.execute(
                     'INSERT OR IGNORE INTO schema_migrations (name, applied_at) VALUES (?, ?)',
-                    (name, utc_now_iso()),
+                    (name, applied_at),
                 )
             self._ensure_orchestrator_execution_meta_columns(connection)
+            self._ensure_persistent_notice_columns(connection)
+            self._ensure_run_record_columns(connection)
+            self._ensure_object_lifecycle_schema(connection)
             connection.commit()
 
     def _ensure_orchestrator_execution_meta_columns(self, connection: sqlite3.Connection) -> None:
@@ -102,6 +117,111 @@ class StateDB:
         if 'error' not in columns:
             connection.execute('ALTER TABLE orchestrator_execution_meta ADD COLUMN error TEXT NULL')
 
+    def _ensure_persistent_notice_columns(self, connection: sqlite3.Connection) -> None:
+        columns = {str(row['name']) for row in connection.execute('PRAGMA table_info(persistent_notices)').fetchall()}
+        if 'incarnation_id' not in columns:
+            connection.execute('ALTER TABLE persistent_notices ADD COLUMN incarnation_id TEXT NULL')
+
+    def _ensure_run_record_columns(self, connection: sqlite3.Connection) -> None:
+        columns = {str(row['name']) for row in connection.execute('PRAGMA table_info(run_records)').fetchall()}
+        if 'target_incarnations_json' not in columns:
+            connection.execute('ALTER TABLE run_records ADD COLUMN target_incarnations_json TEXT NULL')
+
+    def _ensure_object_lifecycle_schema(self, connection: sqlite3.Connection) -> None:
+        columns = {str(row['name']) for row in connection.execute('PRAGMA table_info(objects)').fetchall()}
+        additions = {
+            'gc_state': "TEXT NOT NULL DEFAULT 'active'",
+            'gc_marked_at': 'TEXT NULL',
+            'quarantined_at': 'TEXT NULL',
+            'delete_after': 'TEXT NULL',
+            'quarantine_path': 'TEXT NULL',
+            'unreferenced_at': 'TEXT NULL',
+        }
+        for name, declaration in additions.items():
+            if name not in columns:
+                connection.execute(f'ALTER TABLE objects ADD COLUMN {name} {declaration}')
+        connection.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS object_pins (
+                owner_kind TEXT NOT NULL,
+                owner_id TEXT NOT NULL,
+                artifact_hash TEXT NOT NULL,
+                expires_at TEXT NULL,
+                created_at TEXT NOT NULL,
+                PRIMARY KEY (owner_kind, owner_id, artifact_hash),
+                FOREIGN KEY (artifact_hash) REFERENCES objects (artifact_hash)
+            );
+            CREATE TABLE IF NOT EXISTS object_leases (
+                lease_id TEXT PRIMARY KEY,
+                artifact_hash TEXT NOT NULL,
+                owner_kind TEXT NOT NULL,
+                owner_id TEXT NOT NULL,
+                acquired_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL,
+                FOREIGN KEY (artifact_hash) REFERENCES objects (artifact_hash)
+            );
+            DROP INDEX IF EXISTS idx_objects_gc_created;
+            CREATE INDEX IF NOT EXISTS idx_objects_gc_unreferenced
+            ON objects (gc_state, unreferenced_at, artifact_hash);
+            CREATE INDEX IF NOT EXISTS idx_object_pins_hash ON object_pins (artifact_hash);
+            CREATE INDEX IF NOT EXISTS idx_object_leases_hash_expiry ON object_leases (artifact_hash, expires_at);
+            CREATE INDEX IF NOT EXISTS idx_artifact_versions_hash ON artifact_versions (artifact_hash);
+            CREATE INDEX IF NOT EXISTS idx_asset_version_objects_hash ON asset_version_objects (artifact_hash);
+            CREATE TRIGGER IF NOT EXISTS artifact_versions_reference_object
+            AFTER INSERT ON artifact_versions BEGIN
+                UPDATE objects SET unreferenced_at = NULL WHERE artifact_hash = NEW.artifact_hash;
+            END;
+            CREATE TRIGGER IF NOT EXISTS artifact_versions_unreference_object
+            AFTER DELETE ON artifact_versions BEGIN
+                UPDATE objects SET unreferenced_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+                WHERE artifact_hash = OLD.artifact_hash AND unreferenced_at IS NULL
+                AND NOT EXISTS (SELECT 1 FROM artifact_versions WHERE artifact_hash = OLD.artifact_hash)
+                AND NOT EXISTS (SELECT 1 FROM asset_version_objects WHERE artifact_hash = OLD.artifact_hash)
+                AND NOT EXISTS (SELECT 1 FROM object_pins WHERE artifact_hash = OLD.artifact_hash)
+                AND NOT EXISTS (SELECT 1 FROM object_leases WHERE artifact_hash = OLD.artifact_hash);
+            END;
+            CREATE TRIGGER IF NOT EXISTS asset_version_objects_reference_object
+            AFTER INSERT ON asset_version_objects BEGIN
+                UPDATE objects SET unreferenced_at = NULL WHERE artifact_hash = NEW.artifact_hash;
+            END;
+            CREATE TRIGGER IF NOT EXISTS asset_version_objects_unreference_object
+            AFTER DELETE ON asset_version_objects BEGIN
+                UPDATE objects SET unreferenced_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+                WHERE artifact_hash = OLD.artifact_hash AND unreferenced_at IS NULL
+                AND NOT EXISTS (SELECT 1 FROM artifact_versions WHERE artifact_hash = OLD.artifact_hash)
+                AND NOT EXISTS (SELECT 1 FROM asset_version_objects WHERE artifact_hash = OLD.artifact_hash)
+                AND NOT EXISTS (SELECT 1 FROM object_pins WHERE artifact_hash = OLD.artifact_hash)
+                AND NOT EXISTS (SELECT 1 FROM object_leases WHERE artifact_hash = OLD.artifact_hash);
+            END;
+            CREATE TRIGGER IF NOT EXISTS object_pins_reference_object
+            AFTER INSERT ON object_pins BEGIN
+                UPDATE objects SET unreferenced_at = NULL WHERE artifact_hash = NEW.artifact_hash;
+            END;
+            CREATE TRIGGER IF NOT EXISTS object_pins_unreference_object
+            AFTER DELETE ON object_pins BEGIN
+                UPDATE objects SET unreferenced_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+                WHERE artifact_hash = OLD.artifact_hash AND unreferenced_at IS NULL
+                AND NOT EXISTS (SELECT 1 FROM artifact_versions WHERE artifact_hash = OLD.artifact_hash)
+                AND NOT EXISTS (SELECT 1 FROM asset_version_objects WHERE artifact_hash = OLD.artifact_hash)
+                AND NOT EXISTS (SELECT 1 FROM object_pins WHERE artifact_hash = OLD.artifact_hash)
+                AND NOT EXISTS (SELECT 1 FROM object_leases WHERE artifact_hash = OLD.artifact_hash);
+            END;
+            CREATE TRIGGER IF NOT EXISTS object_leases_reference_object
+            AFTER INSERT ON object_leases BEGIN
+                UPDATE objects SET unreferenced_at = NULL WHERE artifact_hash = NEW.artifact_hash;
+            END;
+            CREATE TRIGGER IF NOT EXISTS object_leases_unreference_object
+            AFTER DELETE ON object_leases BEGIN
+                UPDATE objects SET unreferenced_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+                WHERE artifact_hash = OLD.artifact_hash AND unreferenced_at IS NULL
+                AND NOT EXISTS (SELECT 1 FROM artifact_versions WHERE artifact_hash = OLD.artifact_hash)
+                AND NOT EXISTS (SELECT 1 FROM asset_version_objects WHERE artifact_hash = OLD.artifact_hash)
+                AND NOT EXISTS (SELECT 1 FROM object_pins WHERE artifact_hash = OLD.artifact_hash)
+                AND NOT EXISTS (SELECT 1 FROM object_leases WHERE artifact_hash = OLD.artifact_hash);
+            END;
+            """
+        )
+
     def set_project_meta(self, key: str, value: str) -> None:
         with self._connection() as connection:
             connection.execute(
@@ -115,6 +235,523 @@ class StateDB:
         with self._connection() as connection:
             row = connection.execute('SELECT value FROM project_meta WHERE key = ?', (key,)).fetchone()
         return None if row is None else str(row['value'])
+
+    def reconcile_node_incarnations(self, nodes: Iterable[Any]) -> None:
+        now = utc_now_iso()
+        with self._connection() as connection:
+            for node in nodes:
+                connection.execute(
+                    'INSERT INTO node_incarnations '
+                    '(incarnation_id, node_id, node_kind, status, generation, created_at) '
+                    "VALUES (?, ?, ?, 'live', 1, ?) ON CONFLICT(incarnation_id) DO UPDATE SET "
+                    "node_id = excluded.node_id, node_kind = excluded.node_kind, status = 'live'",
+                    (node.incarnation_id, node.id, node.kind.value, now),
+                )
+                for table in (
+                    'notebook_revisions',
+                    'artifact_versions',
+                    'artifact_heads',
+                    'asset_declarations',
+                    'asset_versions',
+                    'asset_heads',
+                    'notebook_execution_heads',
+                    'orchestrator_execution_meta',
+                    'run_outputs',
+                ):
+                    connection.execute(
+                        f'UPDATE {table} SET incarnation_id = ? '  # noqa: S608 - fixed table allowlist.
+                        'WHERE node_id = ? AND incarnation_id IS NULL',
+                        (node.incarnation_id, node.id),
+                    )
+            connection.commit()
+
+    def register_node_incarnation(self, incarnation_id: str, node_id: str, node_kind: str) -> None:
+        with self._connection() as connection:
+            connection.execute(
+                'INSERT INTO node_incarnations '
+                '(incarnation_id, node_id, node_kind, status, generation, created_at) '
+                "VALUES (?, ?, ?, 'live', 1, ?)",
+                (incarnation_id, node_id, node_kind, utc_now_iso()),
+            )
+            connection.commit()
+
+    def live_incarnation_id(self, node_id: str) -> str | None:
+        with self._connection() as connection:
+            row = connection.execute(
+                "SELECT incarnation_id FROM node_incarnations WHERE node_id = ? AND status = 'live'", (node_id,)
+            ).fetchone()
+        return None if row is None else str(row['incarnation_id'])
+
+    def live_incarnation(self, node_id: str) -> dict[str, Any] | None:
+        with self._connection() as connection:
+            row = connection.execute(
+                "SELECT * FROM node_incarnations WHERE node_id = ? AND status = 'live'", (node_id,)
+            ).fetchone()
+        return None if row is None else dict(row)
+
+    def begin_publication(self, *, run_id: str, node_id: str, source_hash: str, graph_version: int) -> dict[str, Any]:
+        publication_id = str(uuid.uuid4())
+        with self._connection() as connection:
+            incarnation = connection.execute(
+                "SELECT incarnation_id, generation FROM node_incarnations WHERE node_id = ? AND status = 'live'",
+                (node_id,),
+            ).fetchone()
+            if incarnation is None:
+                raise ValueError(f'Node `{node_id}` has no live incarnation.')
+            connection.execute(
+                'INSERT INTO publication_batches '
+                '(publication_id, run_id, incarnation_id, generation, source_hash, graph_version, state, created_at) '
+                "VALUES (?, ?, ?, ?, ?, ?, 'open', ?)",
+                (
+                    publication_id,
+                    run_id,
+                    incarnation['incarnation_id'],
+                    incarnation['generation'],
+                    source_hash,
+                    graph_version,
+                    utc_now_iso(),
+                ),
+            )
+            connection.commit()
+        return {
+            'publication_id': publication_id,
+            'incarnation_id': str(incarnation['incarnation_id']),
+            'generation': int(incarnation['generation']),
+        }
+
+    def abandon_publication(self, publication_id: str) -> None:
+        with self._connection() as connection:
+            connection.execute(
+                "UPDATE publication_batches SET state = 'abandoned', abandoned_at = ? "
+                "WHERE publication_id = ? AND state = 'open'",
+                (utc_now_iso(), publication_id),
+            )
+            connection.commit()
+
+    def commit_publication(
+        self,
+        publication_id: str,
+        *,
+        current_source_hash: str,
+        downstream_node_ids: Iterable[str] = (),
+        execution_head: dict[str, Any] | None = None,
+    ) -> bool:
+        """Atomically expose every staged output if identity and exact inputs still match."""
+        with self._connection() as connection:
+            batch = connection.execute(
+                'SELECT * FROM publication_batches WHERE publication_id = ?', (publication_id,)
+            ).fetchone()
+            if batch is None or batch['state'] != 'open':
+                return False
+            incarnation = connection.execute(
+                'SELECT * FROM node_incarnations WHERE incarnation_id = ?', (batch['incarnation_id'],)
+            ).fetchone()
+            valid = bool(
+                incarnation is not None
+                and incarnation['status'] == 'live'
+                and int(incarnation['generation']) == int(batch['generation'])
+                and str(batch['source_hash']) == current_source_hash
+            )
+            inputs = connection.execute(
+                'SELECT * FROM run_inputs WHERE run_id = ? AND producer_incarnation_id IS NOT NULL',
+                (batch['run_id'],),
+            ).fetchall()
+            for item in inputs:
+                head = connection.execute(
+                    'SELECT ah.current_version_id, ah.state, av.artifact_hash, ah.incarnation_id '
+                    'FROM artifact_heads ah LEFT JOIN artifact_versions av ON av.version_id = ah.current_version_id '
+                    'WHERE ah.incarnation_id = ? AND ah.artifact_name = ?',
+                    (item['producer_incarnation_id'], item['producer_artifact_name']),
+                ).fetchone()
+                if (
+                    head is None
+                    or head['current_version_id'] != item['version_id']
+                    or head['artifact_hash'] != item['artifact_hash_at_load']
+                    or head['state'] != item['state_at_load']
+                ):
+                    valid = False
+                    break
+            if not valid:
+                connection.execute(
+                    "UPDATE publication_batches SET state = 'abandoned', abandoned_at = ? WHERE publication_id = ?",
+                    (utc_now_iso(), publication_id),
+                )
+                connection.commit()
+                return False
+
+            for downstream_node_id in set(downstream_node_ids):
+                connection.execute(
+                    "UPDATE artifact_heads SET state = 'stale' WHERE node_id = ? AND current_version_id IS NOT NULL",
+                    (downstream_node_id,),
+                )
+                connection.execute(
+                    "UPDATE asset_heads SET state = 'stale' WHERE node_id = ? AND current_asset_version_id IS NOT NULL",
+                    (downstream_node_id,),
+                )
+                connection.execute(
+                    "UPDATE notebook_execution_heads SET state = 'stale', updated_at = ? WHERE node_id = ?",
+                    (utc_now_iso(), downstream_node_id),
+                )
+            artifact_versions = connection.execute(
+                'SELECT version_id, node_id, artifact_name, incarnation_id FROM artifact_versions '
+                'WHERE publication_id = ? ORDER BY version_id',
+                (publication_id,),
+            ).fetchall()
+            for version in artifact_versions:
+                connection.execute(
+                    'INSERT INTO artifact_heads (node_id, artifact_name, current_version_id, state, incarnation_id) '
+                    'SELECT node_id, artifact_name, version_id, '
+                    "CASE WHEN EXISTS (SELECT 1 FROM run_inputs WHERE run_id = ? AND state_at_load != 'ready') "
+                    "THEN 'stale' ELSE 'ready' END, incarnation_id FROM artifact_versions WHERE version_id = ? "
+                    'ON CONFLICT(node_id, artifact_name) DO UPDATE SET '
+                    'current_version_id = excluded.current_version_id, '
+                    'state = excluded.state, incarnation_id = excluded.incarnation_id',
+                    (batch['run_id'], version['version_id']),
+                )
+            asset_versions = connection.execute(
+                'SELECT asset_version_id FROM asset_versions WHERE publication_id = ? ORDER BY asset_version_id',
+                (publication_id,),
+            ).fetchall()
+            for version in asset_versions:
+                connection.execute(
+                    'INSERT INTO asset_heads (node_id, asset_name, current_asset_version_id, state, incarnation_id) '
+                    'SELECT node_id, asset_name, asset_version_id, '
+                    "CASE WHEN EXISTS (SELECT 1 FROM run_inputs WHERE run_id = ? AND state_at_load != 'ready') "
+                    "THEN 'stale' ELSE 'ready' END, incarnation_id FROM asset_versions WHERE asset_version_id = ? "
+                    'ON CONFLICT(node_id, asset_name) DO UPDATE SET '
+                    'current_asset_version_id = excluded.current_asset_version_id, state = excluded.state, '
+                    'incarnation_id = excluded.incarnation_id',
+                    (batch['run_id'], version['asset_version_id']),
+                )
+            if execution_head is not None:
+                connection.execute(
+                    'INSERT INTO notebook_execution_heads '
+                    '(node_id, state, source_hash, upstream_code_hash, upstream_data_hash, run_id, '
+                    'last_run_started_at, last_run_finished_at, updated_at, incarnation_id) '
+                    'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(node_id) DO UPDATE SET '
+                    'state=excluded.state, source_hash=excluded.source_hash, '
+                    'upstream_code_hash=excluded.upstream_code_hash, '
+                    'upstream_data_hash=excluded.upstream_data_hash, run_id=excluded.run_id, '
+                    'last_run_started_at=excluded.last_run_started_at, '
+                    'last_run_finished_at=excluded.last_run_finished_at, updated_at=excluded.updated_at, '
+                    'incarnation_id=excluded.incarnation_id',
+                    (
+                        execution_head['node_id'],
+                        execution_head['state'],
+                        execution_head['source_hash'],
+                        execution_head['upstream_code_hash'],
+                        execution_head['upstream_data_hash'],
+                        batch['run_id'],
+                        execution_head.get('last_run_started_at'),
+                        execution_head.get('last_run_finished_at'),
+                        utc_now_iso(),
+                        batch['incarnation_id'],
+                    ),
+                )
+            connection.execute(
+                "UPDATE publication_batches SET state = 'committed', committed_at = ? WHERE publication_id = ?",
+                (utc_now_iso(), publication_id),
+            )
+            connection.commit()
+            return True
+
+    def advance_node_incarnation(self, incarnation_id: str, *, node_id: str | None = None) -> int:
+        with self._connection() as connection:
+            if node_id is None:
+                connection.execute(
+                    'UPDATE node_incarnations SET generation = generation + 1 WHERE incarnation_id = ?',
+                    (incarnation_id,),
+                )
+            else:
+                connection.execute(
+                    'UPDATE node_incarnations SET node_id = ?, generation = generation + 1 WHERE incarnation_id = ?',
+                    (node_id, incarnation_id),
+                )
+            row = connection.execute(
+                'SELECT generation FROM node_incarnations WHERE incarnation_id = ?', (incarnation_id,)
+            ).fetchone()
+            connection.commit()
+        if row is None:
+            raise ValueError(f'Unknown node incarnation {incarnation_id}.')
+        return int(row['generation'])
+
+    def cached_mutation_response(self, request_id: str) -> dict[str, Any] | None:
+        with self._connection() as connection:
+            row = connection.execute(
+                'SELECT response_json FROM mutation_requests WHERE request_id = ?', (request_id,)
+            ).fetchone()
+        return None if row is None else json.loads(str(row['response_json']))
+
+    def cache_mutation_response(self, request_id: str, response: dict[str, Any]) -> None:
+        with self._connection() as connection:
+            connection.execute(
+                'INSERT OR IGNORE INTO mutation_requests (request_id, response_json, created_at) VALUES (?, ?, ?)',
+                (request_id, json_dumps(response), utc_now_iso()),
+            )
+            connection.commit()
+
+    def tombstone_node_state(
+        self,
+        *,
+        tombstone_id: str,
+        mutation_id: str,
+        incarnation_id: str,
+        node_id: str,
+        node_kind: str,
+        deleted_at: str,
+        expires_at: str,
+        manifest_path: str,
+        manifest_checksum: str,
+    ) -> dict[str, Any]:
+        with self._connection() as connection:
+            execution_meta = connection.execute(
+                'SELECT stdout_path, stderr_path FROM orchestrator_execution_meta WHERE incarnation_id = ?',
+                (incarnation_id,),
+            ).fetchone()
+            artifact_heads = [
+                dict(row)
+                for row in connection.execute(
+                    'SELECT * FROM artifact_heads WHERE incarnation_id = ?', (incarnation_id,)
+                ).fetchall()
+            ]
+            asset_heads = [
+                dict(row)
+                for row in connection.execute(
+                    'SELECT * FROM asset_heads WHERE incarnation_id = ?', (incarnation_id,)
+                ).fetchall()
+            ]
+            declarations = [
+                dict(row)
+                for row in connection.execute(
+                    'SELECT * FROM asset_declarations WHERE incarnation_id = ?', (incarnation_id,)
+                ).fetchall()
+            ]
+            execution = connection.execute(
+                'SELECT * FROM notebook_execution_heads WHERE incarnation_id = ?', (incarnation_id,)
+            ).fetchone()
+            hashes = {
+                str(row['artifact_hash'])
+                for row in connection.execute(
+                    'SELECT av.artifact_hash FROM artifact_heads ah JOIN artifact_versions av '
+                    'ON av.version_id = ah.current_version_id WHERE ah.incarnation_id = ?',
+                    (incarnation_id,),
+                ).fetchall()
+            }
+            hashes.update(
+                str(row['artifact_hash'])
+                for row in connection.execute(
+                    'SELECT avo.artifact_hash FROM asset_heads ah JOIN asset_version_objects avo '
+                    'ON avo.asset_version_id = ah.current_asset_version_id WHERE ah.incarnation_id = ?',
+                    (incarnation_id,),
+                ).fetchall()
+            )
+            connection.execute(
+                'INSERT INTO node_tombstones '
+                '(tombstone_id, incarnation_id, node_id, node_kind, status, deleted_at, expires_at, '
+                'manifest_path, manifest_checksum, mutation_id) '
+                "VALUES (?, ?, ?, ?, 'retained', ?, ?, ?, ?, ?)",
+                (
+                    tombstone_id,
+                    incarnation_id,
+                    node_id,
+                    node_kind,
+                    deleted_at,
+                    expires_at,
+                    manifest_path,
+                    manifest_checksum,
+                    mutation_id,
+                ),
+            )
+            connection.execute(
+                "UPDATE node_incarnations SET status = 'tombstoned', generation = generation + 1, "
+                'tombstoned_at = ? WHERE incarnation_id = ?',
+                (deleted_at, incarnation_id),
+            )
+            for artifact_hash in hashes:
+                connection.execute(
+                    'INSERT INTO object_pins (owner_kind, owner_id, artifact_hash, expires_at, created_at) '
+                    "VALUES ('tombstone', ?, ?, ?, ?)",
+                    (tombstone_id, artifact_hash, expires_at, deleted_at),
+                )
+            for table in ('artifact_heads', 'asset_heads', 'asset_declarations', 'notebook_execution_heads'):
+                connection.execute(
+                    f'DELETE FROM {table} WHERE incarnation_id = ?',  # noqa: S608 - fixed table allowlist.
+                    (incarnation_id,),
+                )
+            connection.commit()
+        if execution_meta is not None:
+            for column in ('stdout_path', 'stderr_path'):
+                path_value = execution_meta[column]
+                if path_value:
+                    Path(str(path_value)).unlink(missing_ok=True)
+        return {
+            'artifact_heads': artifact_heads,
+            'asset_heads': asset_heads,
+            'asset_declarations': declarations,
+            'execution_head': None if execution is None else dict(execution),
+            'pinned_hashes': sorted(hashes),
+        }
+
+    def get_tombstone(self, tombstone_id: str) -> dict[str, Any] | None:
+        with self._connection() as connection:
+            row = connection.execute('SELECT * FROM node_tombstones WHERE tombstone_id = ?', (tombstone_id,)).fetchone()
+        return None if row is None else dict(row)
+
+    def update_tombstone_manifest_checksum(self, tombstone_id: str, checksum: str) -> None:
+        with self._connection() as connection:
+            connection.execute(
+                'UPDATE node_tombstones SET manifest_checksum = ? WHERE tombstone_id = ?',
+                (checksum, tombstone_id),
+            )
+            connection.commit()
+
+    def restore_tombstone_state(self, tombstone_id: str, state: dict[str, Any], *, restored_at: str) -> None:
+        with self._connection() as connection:
+            tombstone = connection.execute(
+                'SELECT * FROM node_tombstones WHERE tombstone_id = ?', (tombstone_id,)
+            ).fetchone()
+            if tombstone is None:
+                raise ValueError('Unknown tombstone.')
+            incarnation_id = str(tombstone['incarnation_id'])
+            notebook_restore = str(tombstone['node_kind']) == 'notebook'
+            for row in state.get('artifact_heads', []):
+                restored_state = row['state']
+                if notebook_restore and row['current_version_id'] is not None:
+                    restored_state = ArtifactState.STALE.value
+                connection.execute(
+                    'INSERT INTO artifact_heads (node_id, artifact_name, current_version_id, state, incarnation_id) '
+                    'VALUES (?, ?, ?, ?, ?)',
+                    (row['node_id'], row['artifact_name'], row['current_version_id'], restored_state, incarnation_id),
+                )
+            for row in state.get('asset_heads', []):
+                restored_state = row['state']
+                if notebook_restore and row['current_asset_version_id'] is not None:
+                    restored_state = ArtifactState.STALE.value
+                connection.execute(
+                    'INSERT INTO asset_heads '
+                    '(node_id, asset_name, current_asset_version_id, state, incarnation_id) VALUES (?, ?, ?, ?, ?)',
+                    (
+                        row['node_id'],
+                        row['asset_name'],
+                        row['current_asset_version_id'],
+                        restored_state,
+                        incarnation_id,
+                    ),
+                )
+            for row in state.get('asset_declarations', []):
+                connection.execute(
+                    'INSERT INTO asset_declarations '
+                    '(node_id, asset_name, title, description, declared_asset_type, declaration_index, '
+                    'source_hash, updated_at, incarnation_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                    (
+                        row.get('node_id'),
+                        row.get('asset_name'),
+                        row.get('title'),
+                        row.get('description'),
+                        row.get('declared_asset_type'),
+                        row.get('declaration_index'),
+                        row.get('source_hash'),
+                        row.get('updated_at'),
+                        incarnation_id,
+                    ),
+                )
+            execution = state.get('execution_head')
+            if execution:
+                execution_state = execution.get('state')
+                if notebook_restore:
+                    execution_state = (
+                        ArtifactState.STALE.value
+                        if execution.get('last_run_finished_at') is not None
+                        else ArtifactState.PENDING.value
+                    )
+                connection.execute(
+                    'INSERT INTO notebook_execution_heads '
+                    '(node_id, state, source_hash, upstream_code_hash, upstream_data_hash, run_id, '
+                    'last_run_started_at, last_run_finished_at, updated_at, incarnation_id) '
+                    'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                    (
+                        execution.get('node_id'),
+                        execution_state,
+                        execution.get('source_hash'),
+                        execution.get('upstream_code_hash'),
+                        execution.get('upstream_data_hash'),
+                        execution.get('run_id'),
+                        execution.get('last_run_started_at'),
+                        execution.get('last_run_finished_at'),
+                        execution.get('updated_at'),
+                        incarnation_id,
+                    ),
+                )
+            connection.execute(
+                "UPDATE node_incarnations SET status = 'live', generation = generation + 1, tombstoned_at = NULL "
+                'WHERE incarnation_id = ?',
+                (incarnation_id,),
+            )
+            connection.execute(
+                "UPDATE node_tombstones SET status = 'restored', restored_at = ? WHERE tombstone_id = ?",
+                (restored_at, tombstone_id),
+            )
+            connection.commit()
+
+    def expire_tombstone(self, tombstone_id: str, *, expired_at: str) -> None:
+        with self._connection() as connection:
+            tombstone = connection.execute(
+                'SELECT * FROM node_tombstones WHERE tombstone_id = ?', (tombstone_id,)
+            ).fetchone()
+            if tombstone is None:
+                raise ValueError('Unknown tombstone.')
+            pins = [
+                str(row['artifact_hash'])
+                for row in connection.execute(
+                    "SELECT artifact_hash FROM object_pins WHERE owner_kind = 'tombstone' AND owner_id = ? "
+                    'ORDER BY artifact_hash',
+                    (tombstone_id,),
+                ).fetchall()
+            ]
+            audit = {
+                'tombstone': dict(tombstone),
+                'artifact_heads': [
+                    dict(row)
+                    for row in connection.execute(
+                        'SELECT artifact_name, current_version_id, state FROM artifact_heads WHERE incarnation_id = ? '
+                        'ORDER BY artifact_name',
+                        (tombstone['incarnation_id'],),
+                    ).fetchall()
+                ],
+                'asset_heads': [
+                    dict(row)
+                    for row in connection.execute(
+                        'SELECT asset_name, current_asset_version_id, state FROM asset_heads WHERE incarnation_id = ? '
+                        'ORDER BY asset_name',
+                        (tombstone['incarnation_id'],),
+                    ).fetchall()
+                ],
+                'pinned_hashes': pins,
+            }
+            connection.execute("UPDATE node_tombstones SET status = 'expired' WHERE tombstone_id = ?", (tombstone_id,))
+            connection.execute(
+                "UPDATE node_incarnations SET status = 'expired', expired_at = ? WHERE incarnation_id = "
+                '(SELECT incarnation_id FROM node_tombstones WHERE tombstone_id = ?)',
+                (expired_at, tombstone_id),
+            )
+            connection.execute(
+                'INSERT INTO tombstone_expiry_audit (tombstone_id, expired_at, audit_json) VALUES (?, ?, ?)',
+                (tombstone_id, expired_at, json_dumps(audit)),
+            )
+            # Pins are released only after the durable expired status and audit have been staged.
+            connection.execute(
+                "DELETE FROM object_pins WHERE owner_kind = 'tombstone' AND owner_id = ?", (tombstone_id,)
+            )
+            connection.commit()
+
+    def get_tombstone_expiry_audit(self, tombstone_id: str) -> dict[str, Any] | None:
+        with self._connection() as connection:
+            row = connection.execute(
+                'SELECT expired_at, audit_json FROM tombstone_expiry_audit WHERE tombstone_id = ?', (tombstone_id,)
+            ).fetchone()
+        if row is None:
+            return None
+        return {'expired_at': str(row['expired_at']), 'audit': json.loads(str(row['audit_json']))}
 
     def list_project_meta(self) -> dict[str, str]:
         with self._connection() as connection:
@@ -139,10 +776,12 @@ class StateDB:
         self, node_id: str, source_hash: str, docs: str | None, contract_json: dict[str, Any]
     ) -> None:
         with self._connection() as connection:
+            incarnation_id = self._live_incarnation_id(connection, node_id)
             connection.execute(
                 'INSERT OR REPLACE INTO notebook_revisions '
-                '(node_id, source_hash, saved_at, doc_excerpt, interface_json) VALUES (?, ?, ?, ?, ?)',
-                (node_id, source_hash, utc_now_iso(), docs, json_dumps(contract_json)),
+                '(node_id, source_hash, saved_at, doc_excerpt, interface_json, incarnation_id) '
+                'VALUES (?, ?, ?, ?, ?, ?)',
+                (node_id, source_hash, utc_now_iso(), docs, json_dumps(contract_json), incarnation_id),
             )
             connection.commit()
 
@@ -154,8 +793,9 @@ class StateDB:
     def latest_notebook_contract_json(self, node_id: str) -> dict[str, Any] | None:
         with self._connection() as connection:
             row = connection.execute(
-                'SELECT interface_json FROM notebook_revisions WHERE node_id = ? ORDER BY rowid DESC LIMIT 1',
-                (node_id,),
+                'SELECT interface_json FROM notebook_revisions WHERE node_id = ? AND incarnation_id IS ? '
+                'ORDER BY rowid DESC LIMIT 1',
+                (node_id, self._live_incarnation_id(connection, node_id)),
             ).fetchone()
         if row is None:
             return None
@@ -172,8 +812,9 @@ class StateDB:
     def latest_source_hash(self, node_id: str) -> str | None:
         with self._connection() as connection:
             row = connection.execute(
-                'SELECT source_hash FROM notebook_revisions WHERE node_id = ? ORDER BY rowid DESC LIMIT 1',
-                (node_id,),
+                'SELECT source_hash FROM notebook_revisions WHERE node_id = ? AND incarnation_id IS ? '
+                'ORDER BY rowid DESC LIMIT 1',
+                (node_id, self._live_incarnation_id(connection, node_id)),
             ).fetchone()
         return None if row is None else str(row['source_hash'])
 
@@ -259,27 +900,33 @@ class StateDB:
     ) -> None:
         now = utc_now_iso()
         with self._connection() as connection:
+            incarnation_id = self._live_incarnation_id(connection, node_id) if node_id is not None else None
             connection.execute(
                 'INSERT INTO persistent_notices '
-                '(issue_id, node_id, severity, code, message, details_json, created_at, dismissed_at) '
-                'VALUES (?, ?, ?, ?, ?, ?, ?, NULL) '
+                '(issue_id, node_id, severity, code, message, details_json, created_at, dismissed_at, incarnation_id) '
+                'VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?) '
                 'ON CONFLICT(issue_id) DO UPDATE SET '
                 'node_id = excluded.node_id, '
                 'severity = excluded.severity, '
                 'code = excluded.code, '
                 'message = excluded.message, '
                 'details_json = excluded.details_json, '
-                'created_at = excluded.created_at',
-                (issue_id, node_id, severity.value, code, message, json_dumps(details), now),
+                'created_at = excluded.created_at, '
+                'incarnation_id = excluded.incarnation_id',
+                (issue_id, node_id, severity.value, code, message, json_dumps(details), now, incarnation_id),
             )
             connection.commit()
 
     def list_persistent_notices(self, *, include_dismissed: bool = False) -> list[dict[str, Any]]:
         with self._connection() as connection:
-            query = 'SELECT * FROM persistent_notices'
+            query = (
+                'SELECT pn.* FROM persistent_notices pn LEFT JOIN node_incarnations ni '
+                'ON ni.incarnation_id = pn.incarnation_id '
+                "WHERE (pn.node_id IS NULL OR pn.incarnation_id IS NULL OR ni.status = 'live')"
+            )
             if not include_dismissed:
-                query = f'{query} WHERE dismissed_at IS NULL'
-            query = f'{query} ORDER BY created_at DESC, issue_id DESC'
+                query = f'{query} AND pn.dismissed_at IS NULL'
+            query = f'{query} ORDER BY pn.created_at DESC, pn.issue_id DESC'
             rows = connection.execute(query).fetchall()
         return [self._row_to_validation_issue(row) for row in rows]
 
@@ -323,7 +970,6 @@ class StateDB:
                 'UNION SELECT node_id FROM asset_declarations '
                 'UNION SELECT node_id FROM asset_versions '
                 'UNION SELECT node_id FROM asset_heads '
-                'UNION SELECT node_id FROM cache_index '
                 'UNION SELECT node_id FROM orchestrator_execution_meta '
                 'UNION SELECT node_id FROM run_outputs '
                 'ORDER BY node_id'
@@ -337,15 +983,16 @@ class StateDB:
         declarations: Iterable[AssetDeclaration],
     ) -> None:
         with self._connection() as connection:
+            incarnation_id = self._live_incarnation_id(connection, node_id)
             connection.execute('DELETE FROM asset_declarations WHERE node_id = ?', (node_id,))
             now = utc_now_iso()
             connection.executemany(
                 'INSERT INTO asset_declarations '
                 '('
                 'node_id, asset_name, title, description, declared_asset_type, declaration_index, '
-                'source_hash, updated_at'
+                'source_hash, updated_at, incarnation_id'
                 ') '
-                'VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+                'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
                 [
                     (
                         declaration.node_id,
@@ -356,6 +1003,7 @@ class StateDB:
                         declaration.declaration_index,
                         source_hash,
                         now,
+                        incarnation_id,
                     )
                     for declaration in declarations
                 ],
@@ -378,10 +1026,11 @@ class StateDB:
 
     def ensure_asset_head(self, node_id: str, asset_name: str, state: ArtifactState = ArtifactState.PENDING) -> None:
         with self._connection() as connection:
+            incarnation_id = self._live_incarnation_id(connection, node_id)
             connection.execute(
                 'INSERT OR IGNORE INTO asset_heads '
-                '(node_id, asset_name, current_asset_version_id, state) VALUES (?, ?, NULL, ?)',
-                (node_id, asset_name, state.value),
+                '(node_id, asset_name, current_asset_version_id, state, incarnation_id) VALUES (?, ?, NULL, ?, ?)',
+                (node_id, asset_name, state.value, incarnation_id),
             )
             connection.commit()
 
@@ -433,15 +1082,17 @@ class StateDB:
         warnings: list[dict[str, Any]],
         objects: list[dict[str, Any]],
         state: ArtifactState = ArtifactState.READY,
+        publication_id: str | None = None,
     ) -> int:
         now = utc_now_iso()
         with self._connection() as connection:
+            incarnation_id = self._live_incarnation_id(connection, node_id)
             cursor = connection.execute(
                 'INSERT INTO asset_versions '
                 '(node_id, asset_name, asset_type, interactive, source_hash, upstream_code_hash, upstream_data_hash, '
                 'run_id, lineage_mode, definition_json, modifier_schema_json, default_modifiers_json, '
-                'override_schema_hash, warning_json, created_at) '
-                'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                'override_schema_hash, warning_json, created_at, incarnation_id, publication_id) '
+                'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
                 (
                     node_id,
                     asset_name,
@@ -458,6 +1109,8 @@ class StateDB:
                     override_schema_hash,
                     json_dumps(warnings),
                     now,
+                    incarnation_id,
+                    publication_id,
                 ),
             )
             last_row_id = cursor.lastrowid
@@ -480,12 +1133,15 @@ class StateDB:
                         for item in objects
                     ],
                 )
-            connection.execute(
-                'INSERT INTO asset_heads (node_id, asset_name, current_asset_version_id, state) VALUES (?, ?, ?, ?) '
-                'ON CONFLICT(node_id, asset_name) DO UPDATE SET '
-                'current_asset_version_id = excluded.current_asset_version_id, state = excluded.state',
-                (node_id, asset_name, asset_version_id, state.value),
-            )
+            if publication_id is None:
+                connection.execute(
+                    'INSERT INTO asset_heads (node_id, asset_name, current_asset_version_id, state, incarnation_id) '
+                    'VALUES (?, ?, ?, ?, ?) '
+                    'ON CONFLICT(node_id, asset_name) DO UPDATE SET '
+                    'current_asset_version_id = excluded.current_asset_version_id, state = excluded.state, '
+                    'incarnation_id = excluded.incarnation_id',
+                    (node_id, asset_name, asset_version_id, state.value, incarnation_id),
+                )
             connection.commit()
             return asset_version_id
 
@@ -501,8 +1157,8 @@ class StateDB:
                 'FROM asset_heads ah '
                 'LEFT JOIN asset_declarations ad ON ad.node_id = ah.node_id AND ad.asset_name = ah.asset_name '
                 'LEFT JOIN asset_versions av ON av.asset_version_id = ah.current_asset_version_id '
-                'WHERE ah.node_id = ? AND ah.asset_name = ?',
-                (node_id, asset_name),
+                'WHERE ah.node_id = ? AND ah.asset_name = ? AND ah.incarnation_id IS ?',
+                (node_id, asset_name, self._live_incarnation_id(connection, node_id)),
             ).fetchone()
             if row is None:
                 return None
@@ -514,7 +1170,7 @@ class StateDB:
 
     def list_asset_heads(self, *, node_id: str | None = None) -> list[dict[str, Any]]:
         with self._connection() as connection:
-            query = (
+            select = (
                 'SELECT ah.node_id, ah.asset_name, ah.current_asset_version_id, ah.state, '
                 'ad.title, ad.description, ad.declared_asset_type, ad.declaration_index, '
                 'ad.source_hash AS declaration_source_hash, av.asset_version_id, av.asset_type, av.interactive, '
@@ -525,12 +1181,26 @@ class StateDB:
                 'LEFT JOIN asset_declarations ad ON ad.node_id = ah.node_id AND ad.asset_name = ah.asset_name '
                 'LEFT JOIN asset_versions av ON av.asset_version_id = ah.current_asset_version_id'
             )
-            params: list[Any] = []
             if node_id is not None:
-                query = f'{query} WHERE ah.node_id = ?'
-                params.append(node_id)
-            query = f'{query} ORDER BY ah.node_id, COALESCE(ad.declaration_index, 2147483647), ah.asset_name'
-            rows = connection.execute(query, params).fetchall()
+                rows = connection.execute(
+                    select + ' WHERE ah.node_id = ? AND ah.incarnation_id IS ? '
+                    'ORDER BY ah.node_id, COALESCE(ad.declaration_index, 2147483647), ah.asset_name',
+                    (node_id, self._live_incarnation_id(connection, node_id)),
+                ).fetchall()
+            else:
+                rows = connection.execute(
+                    'SELECT ah.node_id, ah.asset_name, ah.current_asset_version_id, ah.state, '
+                    'ad.title, ad.description, ad.declared_asset_type, ad.declaration_index, '
+                    'ad.source_hash AS declaration_source_hash, av.asset_version_id, av.asset_type, av.interactive, '
+                    'av.source_hash, av.upstream_code_hash, av.upstream_data_hash, av.run_id, av.lineage_mode, '
+                    'av.definition_json, av.modifier_schema_json, av.default_modifiers_json, '
+                    'av.override_schema_hash, av.warning_json, av.created_at FROM asset_heads ah '
+                    'LEFT JOIN asset_declarations ad ON ad.node_id = ah.node_id AND ad.asset_name = ah.asset_name '
+                    'LEFT JOIN asset_versions av ON av.asset_version_id = ah.current_asset_version_id '
+                    'WHERE ah.incarnation_id IS NULL OR ah.incarnation_id IN '
+                    "(SELECT incarnation_id FROM node_incarnations WHERE status = 'live') "
+                    'ORDER BY ah.node_id, COALESCE(ad.declaration_index, 2147483647), ah.asset_name'
+                ).fetchall()
             version_ids = [
                 int(row['current_asset_version_id']) for row in rows if row['current_asset_version_id'] is not None
             ]
@@ -549,10 +1219,11 @@ class StateDB:
         self, node_id: str, artifact_name: str, state: ArtifactState = ArtifactState.PENDING
     ) -> None:
         with self._connection() as connection:
+            incarnation_id = self._live_incarnation_id(connection, node_id)
             connection.execute(
                 'INSERT OR IGNORE INTO artifact_heads '
-                '(node_id, artifact_name, current_version_id, state) VALUES (?, ?, NULL, ?)',
-                (node_id, artifact_name, state.value),
+                '(node_id, artifact_name, current_version_id, state, incarnation_id) VALUES (?, ?, NULL, ?, ?)',
+                (node_id, artifact_name, state.value, incarnation_id),
             )
             connection.commit()
 
@@ -562,20 +1233,21 @@ class StateDB:
         state: ArtifactState = ArtifactState.PENDING,
     ) -> None:
         with self._connection() as connection:
+            incarnation_id = self._live_incarnation_id(connection, node_id)
             connection.execute(
                 'INSERT OR IGNORE INTO notebook_execution_heads '
                 '(node_id, state, source_hash, upstream_code_hash, upstream_data_hash, run_id, '
-                'last_run_started_at, last_run_finished_at, updated_at) '
-                'VALUES (?, ?, NULL, NULL, NULL, NULL, NULL, NULL, ?)',
-                (node_id, state.value, utc_now_iso()),
+                'last_run_started_at, last_run_finished_at, updated_at, incarnation_id) '
+                'VALUES (?, ?, NULL, NULL, NULL, NULL, NULL, NULL, ?, ?)',
+                (node_id, state.value, utc_now_iso(), incarnation_id),
             )
             connection.commit()
 
     def get_notebook_execution_head(self, node_id: str) -> dict[str, Any] | None:
         with self._connection() as connection:
             row = connection.execute(
-                'SELECT * FROM notebook_execution_heads WHERE node_id = ?',
-                (node_id,),
+                'SELECT * FROM notebook_execution_heads WHERE node_id = ? AND incarnation_id IS ?',
+                (node_id, self._live_incarnation_id(connection, node_id)),
             ).fetchone()
         return None if row is None else self._row_to_notebook_execution_head(row)
 
@@ -597,11 +1269,12 @@ class StateDB:
         last_run_finished_at: str | None = None,
     ) -> None:
         with self._connection() as connection:
+            incarnation_id = self._live_incarnation_id(connection, node_id)
             connection.execute(
                 'INSERT INTO notebook_execution_heads '
                 '(node_id, state, source_hash, upstream_code_hash, upstream_data_hash, run_id, '
-                'last_run_started_at, last_run_finished_at, updated_at) '
-                'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) '
+                'last_run_started_at, last_run_finished_at, updated_at, incarnation_id) '
+                'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) '
                 'ON CONFLICT(node_id) DO UPDATE SET '
                 'state = excluded.state, '
                 'source_hash = excluded.source_hash, '
@@ -621,6 +1294,7 @@ class StateDB:
                     last_run_started_at,
                     last_run_finished_at,
                     utc_now_iso(),
+                    incarnation_id,
                 ),
             )
             connection.commit()
@@ -651,7 +1325,6 @@ class StateDB:
             self._delete_run_records_for_node(connection, node_id)
             connection.execute('DELETE FROM run_inputs WHERE logical_artifact_id LIKE ?', (f'{node_id}/%',))
             connection.execute('DELETE FROM run_outputs WHERE node_id = ?', (node_id,))
-            connection.execute('DELETE FROM cache_index WHERE node_id = ?', (node_id,))
             connection.execute('DELETE FROM notebook_execution_heads WHERE node_id = ?', (node_id,))
             connection.execute(
                 'DELETE FROM asset_version_objects WHERE asset_version_id IN '
@@ -674,6 +1347,7 @@ class StateDB:
         if old_node_id == new_node_id:
             return
         with self._connection() as connection:
+            incarnation_id = self._live_incarnation_id(connection, old_node_id)
             connection.execute(
                 'UPDATE notebook_revisions SET node_id = ? WHERE node_id = ?', (new_node_id, old_node_id)
             )
@@ -691,7 +1365,6 @@ class StateDB:
             connection.execute('UPDATE asset_heads SET node_id = ? WHERE node_id = ?', (new_node_id, old_node_id))
             connection.execute('UPDATE artifact_versions SET node_id = ? WHERE node_id = ?', (new_node_id, old_node_id))
             connection.execute('UPDATE artifact_heads SET node_id = ? WHERE node_id = ?', (new_node_id, old_node_id))
-            connection.execute('UPDATE cache_index SET node_id = ? WHERE node_id = ?', (new_node_id, old_node_id))
             connection.execute(
                 'UPDATE orchestrator_execution_meta SET node_id = ? WHERE node_id = ?',
                 (new_node_id, old_node_id),
@@ -706,6 +1379,11 @@ class StateDB:
             self._rename_issue_detail_refs(connection, 'persistent_notices', old_node_id, new_node_id)
             self._rename_run_record_node_refs(connection, old_node_id, new_node_id)
             self._prune_stale_validation_issue_dismissals(connection)
+            if incarnation_id is not None:
+                connection.execute(
+                    'UPDATE node_incarnations SET node_id = ?, generation = generation + 1 WHERE incarnation_id = ?',
+                    (new_node_id, incarnation_id),
+                )
             connection.commit()
 
     def delete_artifact_state(self, node_id: str, artifact_name: str) -> None:
@@ -713,10 +1391,6 @@ class StateDB:
             connection.execute('DELETE FROM run_inputs WHERE logical_artifact_id = ?', (f'{node_id}/{artifact_name}',))
             connection.execute(
                 'DELETE FROM run_outputs WHERE node_id = ? AND artifact_name = ?',
-                (node_id, artifact_name),
-            )
-            connection.execute(
-                'DELETE FROM cache_index WHERE node_id = ? AND artifact_name = ?',
                 (node_id, artifact_name),
             )
             connection.execute(
@@ -752,7 +1426,7 @@ class StateDB:
             connection.execute(
                 'INSERT OR IGNORE INTO objects '
                 '(artifact_hash, storage_kind, data_type, size_bytes, extension, mime_type, preview_json, created_at, '
-                'last_accessed_at, nondeterministic) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)',
+                'last_accessed_at, unreferenced_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
                 (
                     artifact_hash,
                     storage_kind,
@@ -761,6 +1435,7 @@ class StateDB:
                     extension,
                     mime_type,
                     None if preview_json is None else json_dumps(preview_json),
+                    now,
                     now,
                     now,
                 ),
@@ -774,6 +1449,52 @@ class StateDB:
                 (utc_now_iso(), artifact_hash),
             )
             connection.commit()
+
+    def pin_object(self, owner_kind: str, owner_id: str, artifact_hash: str, *, expires_at: str | None = None) -> None:
+        if not owner_kind or not owner_id:
+            raise ValueError('Object pin owner_kind and owner_id are required.')
+        with self._connection() as connection:
+            connection.execute(
+                'INSERT INTO object_pins (owner_kind, owner_id, artifact_hash, expires_at, created_at) '
+                'VALUES (?, ?, ?, ?, ?) ON CONFLICT(owner_kind, owner_id, artifact_hash) DO UPDATE SET '
+                'expires_at = excluded.expires_at',
+                (owner_kind, owner_id, artifact_hash, expires_at, utc_now_iso()),
+            )
+            connection.commit()
+
+    def unpin_object(self, owner_kind: str, owner_id: str, artifact_hash: str | None = None) -> None:
+        with self._connection() as connection:
+            if artifact_hash is None:
+                connection.execute(
+                    'DELETE FROM object_pins WHERE owner_kind = ? AND owner_id = ?', (owner_kind, owner_id)
+                )
+            else:
+                connection.execute(
+                    'DELETE FROM object_pins WHERE owner_kind = ? AND owner_id = ? AND artifact_hash = ?',
+                    (owner_kind, owner_id, artifact_hash),
+                )
+            connection.commit()
+
+    def acquire_object_lease(self, artifact_hash: str, owner_kind: str, owner_id: str, *, expires_at: str) -> str:
+        lease_id = str(uuid.uuid4())
+        with self._connection() as connection:
+            connection.execute(
+                'INSERT INTO object_leases '
+                '(lease_id, artifact_hash, owner_kind, owner_id, acquired_at, expires_at) VALUES (?, ?, ?, ?, ?, ?)',
+                (lease_id, artifact_hash, owner_kind, owner_id, utc_now_iso(), expires_at),
+            )
+            connection.commit()
+        return lease_id
+
+    def release_object_lease(self, lease_id: str) -> None:
+        with self._connection() as connection:
+            connection.execute('DELETE FROM object_leases WHERE lease_id = ?', (lease_id,))
+            connection.commit()
+
+    def get_object_record(self, artifact_hash: str) -> dict[str, Any] | None:
+        with self._connection() as connection:
+            row = connection.execute('SELECT * FROM objects WHERE artifact_hash = ?', (artifact_hash,)).fetchone()
+        return None if row is None else dict(row)
 
     def create_artifact_version(
         self,
@@ -789,13 +1510,16 @@ class StateDB:
         lineage_mode: LineageMode,
         warnings: list[dict[str, Any]],
         state: ArtifactState = ArtifactState.READY,
+        publication_id: str | None = None,
     ) -> int:
         now = utc_now_iso()
         with self._connection() as connection:
+            incarnation_id = self._live_incarnation_id(connection, node_id)
             cursor = connection.execute(
                 'INSERT INTO artifact_versions '
                 '(node_id, artifact_name, role, artifact_hash, source_hash, upstream_code_hash, upstream_data_hash, '
-                'run_id, lineage_mode, created_at, warning_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                'run_id, lineage_mode, created_at, warning_json, incarnation_id, publication_id) '
+                'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
                 (
                     node_id,
                     artifact_name,
@@ -808,37 +1532,28 @@ class StateDB:
                     lineage_mode.value,
                     now,
                     json_dumps(warnings),
+                    incarnation_id,
+                    publication_id,
                 ),
             )
             last_row_id = cursor.lastrowid
             if last_row_id is None:
                 raise RuntimeError('Failed to create artifact version.')
             version_id = int(last_row_id)
+            if publication_id is None:
+                connection.execute(
+                    'INSERT INTO artifact_heads (node_id, artifact_name, current_version_id, state, incarnation_id) '
+                    'VALUES (?, ?, ?, ?, ?) '
+                    'ON CONFLICT(node_id, artifact_name) DO UPDATE SET '
+                    'current_version_id = excluded.current_version_id, '
+                    'state = excluded.state, incarnation_id = excluded.incarnation_id',
+                    (node_id, artifact_name, version_id, state.value, incarnation_id),
+                )
             connection.execute(
-                'INSERT INTO artifact_heads (node_id, artifact_name, current_version_id, state) VALUES (?, ?, ?, ?) '
-                'ON CONFLICT(node_id, artifact_name) DO UPDATE SET current_version_id = excluded.current_version_id, '
-                'state = excluded.state',
-                (node_id, artifact_name, version_id, state.value),
-            )
-            existing = connection.execute(
-                'SELECT artifact_hash FROM cache_index '
-                'WHERE node_id = ? AND artifact_name = ? AND upstream_data_hash = ?',
-                (node_id, artifact_name, upstream_data_hash),
-            ).fetchone()
-            is_nondeterministic = 1 if existing and existing['artifact_hash'] != artifact_hash else 0
-            connection.execute(
-                'INSERT INTO cache_index '
-                '(node_id, artifact_name, upstream_data_hash, artifact_hash, is_nondeterministic, updated_at) '
-                'VALUES (?, ?, ?, ?, ?, ?) '
-                'ON CONFLICT(node_id, artifact_name, upstream_data_hash) DO UPDATE SET '
-                'artifact_hash = excluded.artifact_hash, '
-                'is_nondeterministic = MAX(cache_index.is_nondeterministic, excluded.is_nondeterministic), '
-                'updated_at = excluded.updated_at',
-                (node_id, artifact_name, upstream_data_hash, artifact_hash, is_nondeterministic, now),
-            )
-            connection.execute(
-                'INSERT INTO run_outputs (run_id, node_id, artifact_name, version_id) VALUES (?, ?, ?, ?)',
-                (run_id, node_id, artifact_name, version_id),
+                'INSERT INTO run_outputs '
+                '(run_id, node_id, artifact_name, version_id, incarnation_id, artifact_hash, artifact_role, '
+                'object_available) VALUES (?, ?, ?, ?, ?, ?, ?, 1)',
+                (run_id, node_id, artifact_name, version_id, incarnation_id, artifact_hash, role.value),
             )
             connection.commit()
             return version_id
@@ -853,8 +1568,8 @@ class StateDB:
                 'FROM artifact_heads ah '
                 'LEFT JOIN artifact_versions av ON av.version_id = ah.current_version_id '
                 'LEFT JOIN objects ao ON ao.artifact_hash = av.artifact_hash '
-                'WHERE ah.node_id = ? AND ah.artifact_name = ?',
-                (node_id, artifact_name),
+                'WHERE ah.node_id = ? AND ah.artifact_name = ? AND ah.incarnation_id IS ?',
+                (node_id, artifact_name, self._live_incarnation_id(connection, node_id)),
             ).fetchone()
         return None if row is None else self._row_to_artifact(row)
 
@@ -868,6 +1583,8 @@ class StateDB:
                 'FROM artifact_heads ah '
                 'LEFT JOIN artifact_versions av ON av.version_id = ah.current_version_id '
                 'LEFT JOIN objects ao ON ao.artifact_hash = av.artifact_hash '
+                'WHERE ah.incarnation_id IS NULL OR ah.incarnation_id IN '
+                "(SELECT incarnation_id FROM node_incarnations WHERE status = 'live') "
                 'ORDER BY ah.node_id, ah.artifact_name'
             ).fetchall()
         return [self._row_to_artifact(row) for row in rows]
@@ -882,11 +1599,25 @@ class StateDB:
         source_snapshot_json: dict[str, Any],
     ) -> None:
         with self._connection() as connection:
+            target_node_ids = {
+                value
+                for value in (
+                    target_json.get('node_id'),
+                    *target_json.get('node_ids', []),
+                    *target_json.get('plan', []),
+                )
+                if isinstance(value, str)
+            }
+            target_incarnations = {
+                node_id: incarnation_id
+                for node_id in target_node_ids
+                if (incarnation_id := self._live_incarnation_id(connection, node_id)) is not None
+            }
             connection.execute(
                 'INSERT INTO run_records '
                 '(run_id, project_id, mode, status, target_json, graph_version, '
-                'source_snapshot_json, started_at, ended_at, failure_json) '
-                'VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL)',
+                'source_snapshot_json, started_at, ended_at, failure_json, target_incarnations_json) '
+                'VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, ?)',
                 (
                     run_id,
                     project_id,
@@ -895,6 +1626,7 @@ class StateDB:
                     json_dumps(target_json),
                     graph_version,
                     json_dumps(source_snapshot_json),
+                    json_dumps(target_incarnations),
                 ),
             )
             connection.commit()
@@ -923,36 +1655,54 @@ class StateDB:
             connection.commit()
 
     def record_run_input(
-        self, run_id: str, logical_artifact_id: str, artifact_hash_at_load: str, state_at_load: str
+        self,
+        run_id: str,
+        logical_artifact_id: str,
+        artifact_hash_at_load: str,
+        state_at_load: str,
+        *,
+        producer_incarnation_id: str | None = None,
+        producer_artifact_name: str | None = None,
+        version_id: int | None = None,
     ) -> None:
         with self._connection() as connection:
             connection.execute(
                 'INSERT INTO run_inputs '
-                '(run_id, logical_artifact_id, artifact_hash_at_load, state_at_load, loaded_at) '
-                'VALUES (?, ?, ?, ?, ?)',
-                (run_id, logical_artifact_id, artifact_hash_at_load, state_at_load, utc_now_iso()),
+                '(run_id, logical_artifact_id, artifact_hash_at_load, state_at_load, loaded_at, '
+                'producer_incarnation_id, producer_artifact_name, version_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+                (
+                    run_id,
+                    logical_artifact_id,
+                    artifact_hash_at_load,
+                    state_at_load,
+                    utc_now_iso(),
+                    producer_incarnation_id,
+                    producer_artifact_name,
+                    version_id,
+                ),
             )
             connection.commit()
-
-    def get_cache_hit(self, node_id: str, artifact_name: str, upstream_data_hash: str) -> dict[str, Any] | None:
-        with self._connection() as connection:
-            row = connection.execute(
-                'SELECT artifact_hash, is_nondeterministic FROM cache_index '
-                'WHERE node_id = ? AND artifact_name = ? AND upstream_data_hash = ?',
-                (node_id, artifact_name, upstream_data_hash),
-            ).fetchone()
-        if row is None:
-            return None
-        return {'artifact_hash': row['artifact_hash'], 'is_nondeterministic': bool(row['is_nondeterministic'])}
 
     def list_run_records(self) -> list[dict[str, Any]]:
         with self._connection() as connection:
             rows = connection.execute(
                 'SELECT * FROM run_records ORDER BY COALESCE(started_at, ended_at) DESC, run_id DESC'
             ).fetchall()
+            live_incarnations = {
+                str(row['node_id']): str(row['incarnation_id'])
+                for row in connection.execute(
+                    "SELECT node_id, incarnation_id FROM node_incarnations WHERE status = 'live'"
+                ).fetchall()
+            }
         records = []
         for row in rows:
             record = dict(row)
+            target_incarnations = json.loads(str(record.pop('target_incarnations_json') or '{}'))
+            if any(
+                live_incarnations.get(node_id) != incarnation_id
+                for node_id, incarnation_id in target_incarnations.items()
+            ):
+                continue
             record['target_json'] = json.loads(str(record['target_json']))
             record['source_snapshot_json'] = json.loads(str(record['source_snapshot_json']))
             if record['failure_json']:
@@ -977,12 +1727,13 @@ class StateDB:
         error: str | None = None,
     ) -> None:
         with self._connection() as connection:
+            incarnation_id = self._live_incarnation_id(connection, node_id)
             connection.execute(
                 'INSERT INTO orchestrator_execution_meta '
                 '(node_id, run_id, status, started_at, ended_at, duration_seconds, '
                 'current_cell_json, total_cells, last_completed_cell_number, '
-                'stdout_path, stderr_path, error, updated_at) '
-                'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) '
+                'stdout_path, stderr_path, error, updated_at, incarnation_id) '
+                'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) '
                 'ON CONFLICT(node_id) DO UPDATE SET '
                 'run_id = excluded.run_id, '
                 'status = excluded.status, '
@@ -995,7 +1746,8 @@ class StateDB:
                 'stdout_path = excluded.stdout_path, '
                 'stderr_path = excluded.stderr_path, '
                 'error = excluded.error, '
-                'updated_at = excluded.updated_at',
+                'updated_at = excluded.updated_at, '
+                'incarnation_id = excluded.incarnation_id',
                 (
                     node_id,
                     run_id,
@@ -1010,6 +1762,7 @@ class StateDB:
                     stderr_path,
                     error,
                     utc_now_iso(),
+                    incarnation_id,
                 ),
             )
             connection.commit()
@@ -1017,7 +1770,11 @@ class StateDB:
     def list_orchestrator_execution_meta(self) -> dict[str, dict[str, Any]]:
         with self._connection() as connection:
             rows = connection.execute(
-                'SELECT * FROM orchestrator_execution_meta ORDER BY updated_at DESC, node_id ASC'
+                'SELECT oem.* FROM orchestrator_execution_meta oem '
+                "LEFT JOIN node_incarnations ni ON ni.node_id = oem.node_id AND ni.status = 'live' "
+                'WHERE (ni.incarnation_id IS NULL AND oem.incarnation_id IS NULL) '
+                'OR oem.incarnation_id = ni.incarnation_id '
+                'ORDER BY oem.updated_at DESC, oem.node_id ASC'
             ).fetchall()
         records: dict[str, dict[str, Any]] = {}
         for row in rows:
@@ -1039,6 +1796,10 @@ class StateDB:
             connection.execute(
                 'UPDATE run_records SET status = ?, ended_at = ? WHERE status IN (?, ?)',
                 (RunStatus.ABORTED_ON_RESTART.value, utc_now_iso(), RunStatus.QUEUED.value, RunStatus.RUNNING.value),
+            )
+            connection.execute(
+                "UPDATE publication_batches SET state = 'abandoned', abandoned_at = ? WHERE state = 'open'",
+                (utc_now_iso(),),
             )
             connection.commit()
 
