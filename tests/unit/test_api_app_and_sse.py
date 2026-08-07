@@ -15,6 +15,9 @@ from websockets.sync.server import serve
 
 import bulletjournal.api.app as api_app_module
 import bulletjournal.api.sse as sse_module
+import bulletjournal.observability.timing as timing_module
+import bulletjournal.storage.graph_store as graph_store_module
+import bulletjournal.storage.state_db as state_db_module
 from bulletjournal.config import ServerConfig
 from bulletjournal.domain.errors import ProjectValidationError
 from bulletjournal.execution.sessions import MarimoSession
@@ -140,6 +143,10 @@ def _make_app(
     return app, resolved_container
 
 
+def _server_timing_metrics(value: str) -> dict[str, float]:
+    return {name: float(duration) for item in value.split(', ') for name, duration in [item.split(';dur=', maxsplit=1)]}
+
+
 def test_create_app_opens_project_on_startup_and_stops_services(monkeypatch, tmp_path: Path) -> None:
     web_root = tmp_path / 'web'
     web_root.mkdir()
@@ -153,6 +160,116 @@ def test_create_app_opens_project_on_startup_and_stops_services(monkeypatch, tmp
     assert container.project_service.opened == [project_root]
     assert container.run_service.stop_calls == 1
     assert container.project_service.stop_calls == 1
+
+
+def test_server_timing_header_includes_all_metrics(monkeypatch, tmp_path: Path) -> None:
+    web_root = tmp_path / 'web'
+    web_root.mkdir()
+    app, _ = _make_app(monkeypatch, web_root)
+
+    with TestClient(app) as client:
+        response = client.get('/healthz')
+
+    metrics = _server_timing_metrics(response.headers['server-timing'])
+
+    assert set(metrics) == {'app'}
+    assert all(duration >= 0 for duration in metrics.values())
+
+
+def test_server_timing_collects_state_db_and_graph_store_time(monkeypatch, tmp_path: Path) -> None:
+    web_root = tmp_path / 'web'
+    web_root.mkdir()
+    project_paths = init_project_root(tmp_path / 'project')
+    app = api_app_module.create_app(project_path=project_paths.root)
+    original_measure = timing_module.measure
+
+    def delayed_measure(name: str):
+        @timing_module.contextmanager
+        def measure_with_delay():
+            with original_measure(name):
+                if name in {'db', 'disk'}:
+                    time.sleep(0.01)
+                yield
+
+        return measure_with_delay()
+
+    monkeypatch.setattr(graph_store_module, 'measure', delayed_measure)
+    monkeypatch.setattr(state_db_module, 'measure', delayed_measure)
+    monkeypatch.setattr(api_app_module, 'bundled_web_root', lambda: web_root)
+
+    with TestClient(app) as client:
+        response = client.get('/api/v1/project/snapshot')
+
+    metrics = _server_timing_metrics(response.headers['server-timing'])
+
+    assert metrics['db'] >= 10
+    assert metrics['disk'] >= 10
+
+
+def test_server_timing_collects_proxy_time(monkeypatch, tmp_path: Path) -> None:
+    web_root = tmp_path / 'web'
+    web_root.mkdir()
+
+    class FakeProcess:
+        def poll(self):
+            return None
+
+    session = SimpleNamespace(
+        node_id='demo_node',
+        host='127.0.0.1',
+        port=1234,
+        base_url='/api/v1/edit/sessions/demo',
+        process=FakeProcess(),
+    )
+    container = FakeContainer()
+    container.run_service.session_manager = SimpleNamespace(
+        get=lambda session_id: session if session_id == 'demo' else None
+    )
+
+    class FakeResponse:
+        def __init__(self) -> None:
+            self.content = b'ok'
+            self.status_code = 200
+            self.headers = {'content-type': 'text/plain'}
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def request(self, *args, **kwargs):
+            await asyncio.sleep(0.01)
+            return FakeResponse()
+
+    monkeypatch.setattr(api_app_module.httpx, 'AsyncClient', FakeClient)
+    app, _ = _make_app(monkeypatch, web_root, container=container)
+
+    with TestClient(app) as client:
+        response = client.get('/api/v1/edit/sessions/demo')
+
+    metrics = _server_timing_metrics(response.headers['server-timing'])
+
+    assert metrics['proxy'] >= 10
+
+
+def test_nested_server_timing_measurements_are_not_double_counted(monkeypatch) -> None:
+    collector, token = timing_module.begin_request_timing()
+    timestamps = iter([0.0, 3.0])
+    monkeypatch.setattr(timing_module.time, 'perf_counter', lambda: next(timestamps))
+
+    try:
+        with timing_module.measure('disk'):
+            with timing_module.measure('disk'):
+                pass
+    finally:
+        timing_module.end_request_timing(token)
+
+    assert collector.durations['disk'] == 3.0
 
 
 def test_create_app_fails_startup_when_project_open_fails(monkeypatch, tmp_path: Path) -> None:

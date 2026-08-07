@@ -12,6 +12,7 @@ from typing import Any
 from bulletjournal.config import DB_TIMEOUT_SECONDS
 from bulletjournal.domain.enums import ArtifactRole, ArtifactState, LineageMode, RunStatus, ValidationSeverity
 from bulletjournal.domain.models import AssetDeclaration, CheckpointRecord, ValidationIssue
+from bulletjournal.observability.timing import measure
 from bulletjournal.storage.migrations import MIGRATIONS
 from bulletjournal.utils import json_dumps, utc_now_iso
 
@@ -72,7 +73,7 @@ class StateDB:
 
     @contextmanager
     def _connection(self) -> Iterator[sqlite3.Connection]:
-        with closing(self._connect()) as connection, connection:
+        with measure('db'), closing(self._connect()) as connection, connection:
             yield connection
 
     def _initialize(self) -> None:

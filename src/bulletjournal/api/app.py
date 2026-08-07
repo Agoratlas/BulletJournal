@@ -21,6 +21,7 @@ from bulletjournal.api.errors import install_error_handlers
 from bulletjournal.api.routes import artifacts, assets, checkpoints, dashboards, graph, project, runs, templates
 from bulletjournal.api.sse import sse_response
 from bulletjournal.config import ServerConfig, bundled_web_root, normalize_base_path
+from bulletjournal.observability.timing import ServerTimingMiddleware, measure
 
 
 def create_app(*, project_path: Path | None = None, server_config: ServerConfig | None = None) -> FastAPI:
@@ -58,6 +59,8 @@ def create_app(*, project_path: Path | None = None, server_config: ServerConfig 
         request.scope['root_path'] = normalize_base_path(forwarded_prefix)
         return await call_next(request)
 
+    app.add_middleware(ServerTimingMiddleware)
+
     api_prefix = _route_path(base_path, '/api/v1')
     app.include_router(project.router, prefix=api_prefix)
     app.include_router(graph.router, prefix=api_prefix)
@@ -92,13 +95,14 @@ def create_app(*, project_path: Path | None = None, server_config: ServerConfig 
             target_url = f'{target_url}?{query_string}'
         body = await request.body()
         try:
-            async with httpx.AsyncClient(follow_redirects=False, timeout=30.0) as client:
-                upstream = await client.request(
-                    request.method,
-                    target_url,
-                    content=body,
-                    headers=_proxy_request_headers(request),
-                )
+            with measure('proxy'):
+                async with httpx.AsyncClient(follow_redirects=False, timeout=30.0) as client:
+                    upstream = await client.request(
+                        request.method,
+                        target_url,
+                        content=body,
+                        headers=_proxy_request_headers(request),
+                    )
         except httpx.ConnectError:
             return JSONResponse(status_code=503, content={'detail': 'Editor session is still starting.'})
         _sync_editor_session_state(app, session)

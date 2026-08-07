@@ -10,6 +10,7 @@ from typing import Any
 
 from bulletjournal.domain.enums import NodeKind
 from bulletjournal.domain.models import Edge, GraphData, LayoutEntry, Node, TemplateRef
+from bulletjournal.observability.timing import measure
 from bulletjournal.storage.atomic_write import atomic_write_text
 from bulletjournal.storage.project_fs import ProjectPaths
 from bulletjournal.utils import json_dumps, utc_now_iso
@@ -21,7 +22,7 @@ class GraphStore:
         self._lock = threading.RLock()
 
     def read(self) -> GraphData:
-        with self._lock:
+        with measure('disk'), self._lock:
             meta = self._read_dict(self.paths.graph_dir / 'meta.json')
             nodes = [self._node_from_dict(item) for item in self._read_list(self.paths.graph_dir / 'nodes.json')]
             edges = [Edge(**item) for item in self._read_list(self.paths.graph_dir / 'edges.json')]
@@ -39,7 +40,7 @@ class GraphStore:
         return self.write(graph, increment_version=False)
 
     def write(self, graph: GraphData, *, increment_version: bool = True) -> GraphData:
-        with self._lock:
+        with measure('disk'), self._lock:
             meta = dict(graph.meta)
             if increment_version:
                 meta['graph_version'] = int(meta.get('graph_version', 0)) + 1
