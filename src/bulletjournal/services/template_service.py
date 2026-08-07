@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable
+from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
@@ -16,7 +17,13 @@ from bulletjournal.templates.builtin_provider import (
     builtin_notebook_assets,
     builtin_pipeline_assets,
 )
-from bulletjournal.templates.notebook_source import rewrite_marimo_app_title, validate_rewritable_marimo_app_definition
+from bulletjournal.templates.notebook_source import (
+    MarimoAppDefinition,
+    inspect_marimo_app_definition,
+    rewrite_marimo_app_title,
+    rewrite_marimo_app_title_from_definition,
+    validate_rewritable_marimo_app_definition,
+)
 from bulletjournal.templates.provider import TemplateAsset
 from bulletjournal.templates.registry import discover_template_providers
 from bulletjournal.templates.validator import (
@@ -50,6 +57,14 @@ class PipelineTemplateSource:
     origin_revision: str
 
 
+@dataclass(slots=True)
+class _NotebookTemplateMetadata:
+    source_text: str
+    source_hash: str
+    documentation: str | None
+    app_definition: MarimoAppDefinition
+
+
 class TemplateService:
     def __init__(self) -> None:
         self._providers = discover_template_providers()
@@ -61,8 +76,13 @@ class TemplateService:
         self._asset_aliases = self._discover_aliases(self._assets_by_ref)
         self._validate_notebook_assets()
         self._validate_pipeline_assets()
+        self._notebook_metadata = self._load_notebook_metadata()
+        self._templates = self._build_template_list()
 
     def list_templates(self) -> list[dict[str, Any]]:
+        return deepcopy(self._templates)
+
+    def _build_template_list(self) -> list[dict[str, Any]]:
         templates = [
             *self._list_notebook_templates(),
             *self._list_pipeline_templates(),
@@ -71,14 +91,14 @@ class TemplateService:
 
     def resolve_template_source(self, ref: str, *, allow_inactive: bool = True) -> TemplateSource:
         asset = self._require_asset(ref, kind='notebook', allow_inactive=allow_inactive)
-        source_text = asset.read_text()
+        metadata = self._notebook_metadata[asset.ref]
         return TemplateSource(
             ref=asset.ref,
             provider=asset.provider,
             name=asset.name,
-            documentation=self._notebook_documentation(asset, source_text),
-            source_text=source_text,
-            source_hash=normalized_source_hash_text(source_text),
+            documentation=metadata.documentation,
+            source_text=metadata.source_text,
+            source_hash=metadata.source_hash,
             origin_revision=asset.origin_revision,
         )
 
@@ -153,6 +173,26 @@ class TemplateService:
     def render_notebook_template_source(source_text: str, *, node_id: str) -> str:
         return rewrite_marimo_app_title(source_text, node_id=node_id)
 
+    def render_resolved_notebook_template_source(self, ref: str, *, node_id: str) -> str:
+        asset = self._require_asset(ref, kind='notebook')
+        metadata = self._notebook_metadata[asset.ref]
+        return rewrite_marimo_app_title_from_definition(
+            metadata.source_text,
+            definition=metadata.app_definition,
+            node_id=node_id,
+        )
+
+    def render_template_source(self, template: TemplateSource, *, node_id: str) -> str:
+        template_ref = getattr(template, 'ref', None)
+        metadata = self._notebook_metadata.get(template_ref) if isinstance(template_ref, str) else None
+        if metadata is None or metadata.source_text != template.source_text:
+            return self.render_notebook_template_source(template.source_text, node_id=node_id)
+        return rewrite_marimo_app_title_from_definition(
+            metadata.source_text,
+            definition=metadata.app_definition,
+            node_id=node_id,
+        )
+
     def _validate_notebook_assets(self) -> None:
         for asset in self._assets_by_ref.values():
             if asset.kind != 'notebook':
@@ -188,7 +228,7 @@ class TemplateService:
                 continue
             if asset.ref == 'builtin/empty_notebook':
                 continue
-            source_text = asset.read_text()
+            metadata = self._notebook_metadata[asset.ref]
             templates.append(
                 {
                     'provider': asset.provider,
@@ -198,10 +238,10 @@ class TemplateService:
                     'origin_revision': asset.origin_revision,
                     'hidden': asset.hidden,
                     'title': asset.title or Path(asset.name).stem.replace('_', ' ').title(),
-                    'documentation': self._notebook_documentation(asset, source_text),
+                    'documentation': metadata.documentation,
                     'source': asset.provider,
-                    'source_text': source_text,
-                    'source_hash': normalized_source_hash_text(source_text),
+                    'source_text': metadata.source_text,
+                    'source_hash': metadata.source_hash,
                 }
             )
         return templates
@@ -281,6 +321,23 @@ class TemplateService:
         if not isinstance(documentation, str) or not documentation.strip():
             return None
         return documentation.strip()
+
+    def _load_notebook_metadata(self) -> dict[str, _NotebookTemplateMetadata]:
+        metadata_by_ref: dict[str, _NotebookTemplateMetadata] = {}
+        for asset in self._assets_by_ref.values():
+            if asset.kind != 'notebook':
+                continue
+            source_text = asset.read_text()
+            definition, error = inspect_marimo_app_definition(source_text)
+            if definition is None:
+                raise ValueError(f'Invalid notebook template `{asset.ref}`: {error}')
+            metadata_by_ref[asset.ref] = _NotebookTemplateMetadata(
+                source_text=source_text,
+                source_hash=normalized_source_hash_text(source_text),
+                documentation=self._notebook_documentation(asset, source_text),
+                app_definition=definition,
+            )
+        return metadata_by_ref
 
     @staticmethod
     def _coerce_provider_asset(

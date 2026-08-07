@@ -632,6 +632,34 @@ def test_snapshot_keeps_new_template_notebook_as_template_until_edited(tmp_path)
     assert updated_notebook['template_status'] == 'modified'
 
 
+def test_snapshot_uses_cached_template_app_definition(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    project_root = init_project_root(tmp_path / 'project').root
+    project_service = ProjectService(_FakeEventService(), TemplateService())
+    project_service.open_project(project_root)
+    graph_service = GraphService(project_service)
+    graph_service.apply_operations(
+        int(project_service.graph().meta['graph_version']),
+        [
+            {
+                'type': 'add_notebook_node',
+                'node_id': 'sample_node',
+                'title': 'Sample Node',
+                'template_ref': 'builtin/test_starter_notebook',
+            }
+        ],
+    )
+
+    def fail_parse(*args, **kwargs):
+        raise AssertionError('Snapshot must reuse the parsed template app definition.')
+
+    monkeypatch.setattr('bulletjournal.templates.notebook_source.ast.parse', fail_parse)
+
+    snapshot = project_service.snapshot()
+
+    notebook = next(node for node in snapshot['graph']['nodes'] if node['id'] == 'sample_node')
+    assert notebook['template_status'] == 'template'
+
+
 def test_default_new_notebook_includes_assets_example(tmp_path) -> None:
     project_root = init_project_root(tmp_path / 'project').root
     project_service = ProjectService(_FakeEventService(), TemplateService())

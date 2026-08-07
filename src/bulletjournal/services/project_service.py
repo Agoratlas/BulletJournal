@@ -634,8 +634,8 @@ class ProjectService:
                 resolved_template = None
             if resolved_template and interface is not None and node.kind == NodeKind.NOTEBOOK:
                 template_source = self.template_service.resolve_template_source(resolved_template.ref)
-                rendered_template_source = self.template_service.render_notebook_template_source(
-                    template_source.source_text,
+                rendered_template_source = self.template_service.render_template_source(
+                    template_source,
                     node_id=node.id,
                 )
                 expected_source_hash = normalized_source_hash_text(rendered_template_source)

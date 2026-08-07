@@ -583,14 +583,19 @@ class GraphService:
         )
         graph.nodes.append(node)
         graph.layout.append(self._layout_entry(node_id, operation))
-        source = (
-            str(source_text)
-            if source_text is not None
-            else template.source_text
-            if template is not None
-            else self.project_service.template_service.resolve_template_source('builtin/empty_notebook').source_text
-        )
-        source = self.project_service.template_service.render_notebook_template_source(source, node_id=node_id)
+        if source_text is not None:
+            source = self.project_service.template_service.render_notebook_template_source(
+                str(source_text), node_id=node_id
+            )
+        elif template is None:
+            source = self.project_service.template_service.render_resolved_notebook_template_source(
+                'builtin/empty_notebook', node_id=node_id
+            )
+        else:
+            source = self.project_service.template_service.render_template_source(
+                template,
+                node_id=node_id,
+            )
         interface = self._inline_notebook_interface(source_text=source, node_id=node_id)
         return node_id, source, interface
 

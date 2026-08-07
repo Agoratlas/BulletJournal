@@ -24,6 +24,11 @@ def rewrite_marimo_app_title(source_text: str, *, node_id: str) -> str:
     definition, error = inspect_marimo_app_definition(source_text)
     if definition is None:
         raise ValueError(error or 'Notebook template must define `app = marimo.App(...)` at the top level.')
+    return rewrite_marimo_app_title_from_definition(source_text, definition=definition, node_id=node_id)
+
+
+def rewrite_marimo_app_title_from_definition(source_text: str, *, definition: MarimoAppDefinition, node_id: str) -> str:
+    """Rewrite a source using an app definition already parsed during template discovery."""
 
     arguments = [*definition.positional_args]
     arguments.extend(f'{name}={value}' for name, value in definition.keyword_args if name != 'app_title')

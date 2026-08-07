@@ -590,6 +590,42 @@ def test_template_service_supports_provider_loaders_without_files(monkeypatch) -
     assert listed['agoratlas/iris_pipeline']['documentation'] == 'Pipeline docs.'
 
 
+def test_template_service_caches_notebook_metadata_and_template_list(monkeypatch: pytest.MonkeyPatch) -> None:
+    notebook_source = "import marimo\n\napp = marimo.App(app_title='Template')\n"
+    load_count = 0
+
+    def load_notebook_template(name: str) -> str:
+        nonlocal load_count
+        assert name == 'cached_notebook'
+        load_count += 1
+        return notebook_source
+
+    provider = SimpleNamespace(
+        provider_name='cached',
+        provider_revision='cached@1.0.0',
+        list_notebook_templates=lambda: [{'name': 'cached_notebook', 'ref': 'cached/cached_notebook'}],
+        list_pipeline_templates=lambda: [],
+        load_notebook_template=load_notebook_template,
+        load_pipeline_template=lambda name: '',
+    )
+    monkeypatch.setattr('bulletjournal.services.template_service.discover_template_providers', lambda: [provider])
+
+    service = TemplateService()
+    initial_load_count = load_count
+
+    first = service.list_templates()
+    second = service.list_templates()
+    resolved = service.resolve_template_source('cached/cached_notebook')
+    rendered = service.render_resolved_notebook_template_source('cached/cached_notebook', node_id='node')
+
+    assert initial_load_count > 0
+    assert load_count == initial_load_count
+    assert first == second
+    assert first is not second
+    assert resolved.source_text == notebook_source
+    assert "app_title='node'" in rendered
+
+
 def test_template_service_rewrites_notebook_app_title_from_node_id() -> None:
     rendered = TemplateService.render_notebook_template_source(
         "app = marimo.App(width='medium', app_title='Visible Title')\n",
