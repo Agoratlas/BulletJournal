@@ -786,6 +786,19 @@ function App() {
         return
       }
 
+      if (
+        eventType === 'notice.created'
+        || eventType === 'notice.dismissed'
+        || eventType === 'run.queued'
+        || eventType === 'run.started'
+        || eventType === 'run.progress'
+        || eventType === 'run.finished'
+        || eventType === 'run.failed'
+      ) {
+        void scheduleSnapshotRefresh()
+        return
+      }
+
       if (eventType === 'dashboard.updated') {
         if (dashboardId) {
           const cachedDashboard = queryClient.getQueryData<DashboardRecord>(['dashboard', dashboardId])
