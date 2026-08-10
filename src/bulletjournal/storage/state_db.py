@@ -336,8 +336,13 @@ class StateDB:
         current_source_hash: str,
         downstream_node_ids: Iterable[str] = (),
         execution_head: dict[str, Any] | None = None,
+        allow_superseded_input_snapshots: bool = False,
     ) -> bool:
-        """Atomically expose every staged output if identity and exact inputs still match."""
+        """Atomically expose staged outputs when their node identity is still current.
+
+        Interactive sessions may publish a stale result after an upstream input changes;
+        source and node-generation changes always reject the publication.
+        """
         with self._connection() as connection:
             batch = connection.execute(
                 'SELECT * FROM publication_batches WHERE publication_id = ?', (publication_id,)
@@ -357,6 +362,7 @@ class StateDB:
                 'SELECT * FROM run_inputs WHERE publication_id = ? AND producer_incarnation_id IS NOT NULL',
                 (publication_id,),
             ).fetchall()
+            input_snapshot_stale = any(item['state_at_load'] != ArtifactState.READY.value for item in inputs)
             for item in inputs:
                 head = connection.execute(
                     'SELECT ah.current_version_id, ah.state, av.artifact_hash, ah.incarnation_id '
@@ -370,8 +376,10 @@ class StateDB:
                     or head['artifact_hash'] != item['artifact_hash_at_load']
                     or head['state'] != item['state_at_load']
                 ):
-                    valid = False
-                    break
+                    input_snapshot_stale = True
+                    if not allow_superseded_input_snapshots:
+                        valid = False
+                        break
             if not valid:
                 connection.execute(
                     "UPDATE publication_batches SET state = 'abandoned', abandoned_at = ? WHERE publication_id = ?",
@@ -380,6 +388,7 @@ class StateDB:
                 connection.commit()
                 return False
 
+            published_state = ArtifactState.STALE.value if input_snapshot_stale else ArtifactState.READY.value
             for downstream_node_id in set(downstream_node_ids):
                 connection.execute(
                     "UPDATE artifact_heads SET state = 'stale' WHERE node_id = ? AND current_version_id IS NOT NULL",
@@ -401,13 +410,12 @@ class StateDB:
             for version in artifact_versions:
                 connection.execute(
                     'INSERT INTO artifact_heads (node_id, artifact_name, current_version_id, state, incarnation_id) '
-                    'SELECT node_id, artifact_name, version_id, '
-                    "CASE WHEN EXISTS (SELECT 1 FROM run_inputs WHERE run_id = ? AND state_at_load != 'ready') "
-                    "THEN 'stale' ELSE 'ready' END, incarnation_id FROM artifact_versions WHERE version_id = ? "
+                    'SELECT node_id, artifact_name, version_id, ?, incarnation_id '
+                    'FROM artifact_versions WHERE version_id = ? '
                     'ON CONFLICT(node_id, artifact_name) DO UPDATE SET '
                     'current_version_id = excluded.current_version_id, '
                     'state = excluded.state, incarnation_id = excluded.incarnation_id',
-                    (batch['run_id'], version['version_id']),
+                    (published_state, version['version_id']),
                 )
             asset_versions = connection.execute(
                 'SELECT asset_version_id FROM asset_versions WHERE publication_id = ? ORDER BY asset_version_id',
@@ -416,13 +424,12 @@ class StateDB:
             for version in asset_versions:
                 connection.execute(
                     'INSERT INTO asset_heads (node_id, asset_name, current_asset_version_id, state, incarnation_id) '
-                    'SELECT node_id, asset_name, asset_version_id, '
-                    "CASE WHEN EXISTS (SELECT 1 FROM run_inputs WHERE run_id = ? AND state_at_load != 'ready') "
-                    "THEN 'stale' ELSE 'ready' END, incarnation_id FROM asset_versions WHERE asset_version_id = ? "
+                    'SELECT node_id, asset_name, asset_version_id, ?, incarnation_id '
+                    'FROM asset_versions WHERE asset_version_id = ? '
                     'ON CONFLICT(node_id, asset_name) DO UPDATE SET '
                     'current_asset_version_id = excluded.current_asset_version_id, state = excluded.state, '
                     'incarnation_id = excluded.incarnation_id',
-                    (batch['run_id'], version['asset_version_id']),
+                    (published_state, version['asset_version_id']),
                 )
             if execution_head is not None:
                 connection.execute(
@@ -1668,6 +1675,13 @@ class StateDB:
         publication_id: str | None = None,
     ) -> None:
         with self._connection() as connection:
+            if publication_id is not None:
+                # A Marimo session can re-pull an input after its producer runs.
+                # Keep only the current snapshot used by this publication.
+                connection.execute(
+                    'DELETE FROM run_inputs WHERE publication_id = ? AND logical_artifact_id = ?',
+                    (publication_id, logical_artifact_id),
+                )
             connection.execute(
                 'INSERT INTO run_inputs '
                 '(run_id, logical_artifact_id, artifact_hash_at_load, state_at_load, loaded_at, '

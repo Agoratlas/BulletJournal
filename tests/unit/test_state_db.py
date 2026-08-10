@@ -475,6 +475,153 @@ def test_publication_checks_only_its_own_input_snapshot(tmp_path) -> None:
     )
 
 
+def test_publication_repull_replaces_its_input_snapshot(tmp_path) -> None:
+    db = StateDB(tmp_path / 'state.db')
+    db.reconcile_node_incarnations(
+        [
+            Node(id='producer', title='Producer', kind=NodeKind.CONSTANT, incarnation_id='producer-incarnation'),
+            Node(id='consumer', title='Consumer', kind=NodeKind.NOTEBOOK, incarnation_id='consumer-incarnation'),
+        ]
+    )
+    db.upsert_artifact_object('hash-1', 'json', 'int', 1, None, None, None)
+    db.upsert_artifact_object('hash-2', 'json', 'int', 1, None, None, None)
+    db.upsert_artifact_object('consumer-hash', 'json', 'int', 1, None, None, None)
+
+    def publish_producer(artifact_hash: str) -> int:
+        publication = db.begin_publication(
+            run_id=f'producer-{artifact_hash}', node_id='producer', source_hash='producer-source', graph_version=1
+        )
+        version_id = db.create_artifact_version(
+            node_id='producer',
+            artifact_name='value',
+            role=ArtifactRole.OUTPUT,
+            artifact_hash=artifact_hash,
+            source_hash='producer-source',
+            upstream_code_hash=artifact_hash,
+            upstream_data_hash=artifact_hash,
+            run_id=f'producer-{artifact_hash}',
+            lineage_mode=LineageMode.MANAGED,
+            warnings=[],
+            publication_id=str(publication['publication_id']),
+        )
+        assert db.commit_publication(str(publication['publication_id']), current_source_hash='producer-source')
+        return version_id
+
+    first_version = publish_producer('hash-1')
+    consumer_publication = db.begin_publication(
+        run_id='interactive-consumer', node_id='consumer', source_hash='consumer-source', graph_version=1
+    )
+    publication_id = str(consumer_publication['publication_id'])
+    db.record_run_input(
+        'interactive-consumer',
+        'producer/value',
+        'hash-1',
+        ArtifactState.READY.value,
+        producer_incarnation_id='producer-incarnation',
+        producer_artifact_name='value',
+        version_id=first_version,
+        publication_id=publication_id,
+    )
+    second_version = publish_producer('hash-2')
+    db.record_run_input(
+        'interactive-consumer',
+        'producer/value',
+        'hash-2',
+        ArtifactState.READY.value,
+        producer_incarnation_id='producer-incarnation',
+        producer_artifact_name='value',
+        version_id=second_version,
+        publication_id=publication_id,
+    )
+    db.create_artifact_version(
+        node_id='consumer',
+        artifact_name='result',
+        role=ArtifactRole.OUTPUT,
+        artifact_hash='consumer-hash',
+        source_hash='consumer-source',
+        upstream_code_hash='consumer-code',
+        upstream_data_hash='consumer-data',
+        run_id='interactive-consumer',
+        lineage_mode=LineageMode.INTERACTIVE_HEURISTIC,
+        warnings=[],
+        publication_id=publication_id,
+    )
+
+    assert db.commit_publication(publication_id, current_source_hash='consumer-source')
+    head = db.get_artifact_head('consumer', 'result')
+    assert head is not None
+    assert head['state'] == ArtifactState.READY.value
+
+
+def test_interactive_publication_commits_stale_when_input_is_not_repulled(tmp_path) -> None:
+    db = StateDB(tmp_path / 'state.db')
+    db.reconcile_node_incarnations(
+        [
+            Node(id='producer', title='Producer', kind=NodeKind.CONSTANT, incarnation_id='producer-incarnation'),
+            Node(id='consumer', title='Consumer', kind=NodeKind.NOTEBOOK, incarnation_id='consumer-incarnation'),
+        ]
+    )
+    for artifact_hash in ('hash-1', 'hash-2', 'consumer-hash'):
+        db.upsert_artifact_object(artifact_hash, 'json', 'int', 1, None, None, None)
+
+    def publish_producer(artifact_hash: str) -> int:
+        publication = db.begin_publication(
+            run_id=f'producer-{artifact_hash}', node_id='producer', source_hash='producer-source', graph_version=1
+        )
+        version_id = db.create_artifact_version(
+            node_id='producer',
+            artifact_name='value',
+            role=ArtifactRole.OUTPUT,
+            artifact_hash=artifact_hash,
+            source_hash='producer-source',
+            upstream_code_hash=artifact_hash,
+            upstream_data_hash=artifact_hash,
+            run_id=f'producer-{artifact_hash}',
+            lineage_mode=LineageMode.MANAGED,
+            warnings=[],
+            publication_id=str(publication['publication_id']),
+        )
+        assert db.commit_publication(str(publication['publication_id']), current_source_hash='producer-source')
+        return version_id
+
+    first_version = publish_producer('hash-1')
+    consumer_publication = db.begin_publication(
+        run_id='interactive-consumer', node_id='consumer', source_hash='consumer-source', graph_version=1
+    )
+    publication_id = str(consumer_publication['publication_id'])
+    db.record_run_input(
+        'interactive-consumer',
+        'producer/value',
+        'hash-1',
+        ArtifactState.READY.value,
+        producer_incarnation_id='producer-incarnation',
+        producer_artifact_name='value',
+        version_id=first_version,
+        publication_id=publication_id,
+    )
+    publish_producer('hash-2')
+    db.create_artifact_version(
+        node_id='consumer',
+        artifact_name='result',
+        role=ArtifactRole.OUTPUT,
+        artifact_hash='consumer-hash',
+        source_hash='consumer-source',
+        upstream_code_hash='consumer-code',
+        upstream_data_hash='consumer-data',
+        run_id='interactive-consumer',
+        lineage_mode=LineageMode.INTERACTIVE_HEURISTIC,
+        warnings=[],
+        publication_id=publication_id,
+    )
+
+    assert db.commit_publication(
+        publication_id, current_source_hash='consumer-source', allow_superseded_input_snapshots=True
+    )
+    head = db.get_artifact_head('consumer', 'result')
+    assert head is not None
+    assert head['state'] == ArtifactState.STALE.value
+
+
 def test_state_db_hides_dismissed_warning_but_keeps_active_errors(tmp_path) -> None:
     paths = init_project_root(tmp_path / 'project')
     db = StateDB(paths.state_db_path)

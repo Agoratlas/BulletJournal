@@ -408,6 +408,7 @@ class RuntimeContext:
                 current_source_hash=current_source_hash if current_node is not None else '',
                 downstream_node_ids=downstream,
                 execution_head=execution_head,
+                allow_superseded_input_snapshots=self.lineage_mode == LineageMode.INTERACTIVE_HEURISTIC,
             )
         if not committed:
             raise RuntimeError('Publication was superseded by a newer node generation or input version.')
