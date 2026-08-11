@@ -226,6 +226,8 @@ def test_project_archive_code_only_reconciles_state_db(tmp_path: Path) -> None:
     db.upsert_artifact_object(
         'hash-1', 'json', 'int', 2, None, None, {'kind': 'simple', 'repr': '1', 'truncated': False}
     )
+    db.pin_object('publication', 'publication-1', 'hash-1')
+    db.acquire_object_lease('hash-1', 'download', 'request-1', expires_at='2099-01-01T00:00:00Z')
     db.create_artifact_version(
         node_id='node-a',
         artifact_name='output',
@@ -304,6 +306,10 @@ def test_project_archive_code_only_reconciles_state_db(tmp_path: Path) -> None:
     assert imported_db.list_run_records() == []
     assert imported_db.list_checkpoints() == []
     assert imported_db.list_orchestrator_execution_meta() == {}
+    with imported_db._connection() as connection:
+        assert connection.execute('SELECT COUNT(*) FROM objects').fetchone()[0] == 0
+        assert connection.execute('SELECT COUNT(*) FROM object_pins').fetchone()[0] == 0
+        assert connection.execute('SELECT COUNT(*) FROM object_leases').fetchone()[0] == 0
     assert (import_root / 'objects').exists()
     assert not any((import_root / 'objects').rglob('*'))
 

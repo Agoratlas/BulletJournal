@@ -237,6 +237,8 @@ def _reconcile_staged_state_db(paths: ProjectPaths, *, mode: ProjectExportMode) 
             connection.execute('DELETE FROM asset_version_objects')
             connection.execute('DELETE FROM artifact_versions')
             connection.execute('DELETE FROM asset_versions')
+            connection.execute('DELETE FROM object_pins')
+            connection.execute('DELETE FROM object_leases')
             connection.execute('DELETE FROM objects')
             connection.execute('DELETE FROM persistent_notices WHERE code IN (?, ?)', ('run_failed', 'run_warning'))
         if mode in {ProjectExportMode.CODE_ONLY, ProjectExportMode.CODE_AND_DATA}:
