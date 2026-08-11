@@ -7,9 +7,9 @@ import pytest
 import bulletjournal.runtime.assets as runtime_assets
 import bulletjournal.runtime.context as runtime_context
 from bulletjournal.assets.types.scatter_plot import MAX_SCATTER_PLOT_POINTS
-from bulletjournal.domain.enums import ArtifactRole, ArtifactState, LineageMode
+from bulletjournal.domain.enums import ArtifactRole, ArtifactState, LineageMode, NodeKind
 from bulletjournal.domain.hashing import combine_hashes, hash_json
-from bulletjournal.domain.models import AssetDeclaration, Port
+from bulletjournal.domain.models import AssetDeclaration, Node, Port
 from bulletjournal.runtime.context import (
     _RUNTIME_CONTEXT,
     Binding,
@@ -17,6 +17,7 @@ from bulletjournal.runtime.context import (
     _format_publication_supersession,
     current_runtime_context,
 )
+from bulletjournal.storage.graph_store import GraphStore
 from bulletjournal.storage.project_fs import init_project_root
 
 
@@ -572,6 +573,176 @@ def test_runtime_context_marks_output_stale_when_loaded_input_is_no_longer_curre
     assert head is not None
     assert head['state'] == ArtifactState.STALE.value
     assert any(warning['code'] == 'outdated_input' for warning in head['warnings'])
+
+
+def test_interactive_publication_rotates_after_pull_when_node_generation_changes(tmp_path) -> None:
+    paths = init_project_root(tmp_path / 'project')
+    graph = GraphStore(paths).read()
+    graph.nodes = [
+        Node(
+            id='producer',
+            kind=NodeKind.CONSTANT,
+            title='Producer',
+            incarnation_id='producer-incarnation',
+        ),
+        Node(
+            id='consumer',
+            kind=NodeKind.NOTEBOOK,
+            title='Consumer',
+            incarnation_id='consumer-incarnation',
+        ),
+    ]
+    GraphStore(paths).write(graph)
+    context = RuntimeContext(
+        project_root=paths.root,
+        node_id='consumer',
+        run_id='run-interactive-generation-change',
+        source_hash='consumer-source-old',
+        lineage_mode=LineageMode.INTERACTIVE_HEURISTIC,
+        bindings={
+            'count': Binding(source_node='producer', source_artifact='value', data_type='int'),
+        },
+        outputs={'result': Port(name='result', data_type='int', role=ArtifactRole.OUTPUT)},
+    )
+    context.db.reconcile_node_incarnations(graph.nodes)
+    persisted = context.object_store.persist_value(42, 'int')
+    context.db.upsert_artifact_object(
+        persisted['artifact_hash'],
+        persisted['storage_kind'],
+        persisted['data_type'],
+        persisted['size_bytes'],
+        persisted.get('extension'),
+        persisted.get('mime_type'),
+        persisted.get('preview'),
+    )
+    context.db.create_artifact_version(
+        node_id='producer',
+        artifact_name='value',
+        role=ArtifactRole.OUTPUT,
+        artifact_hash=persisted['artifact_hash'],
+        source_hash='producer-source',
+        upstream_code_hash='producer-code',
+        upstream_data_hash='producer-data',
+        run_id='producer-run',
+        lineage_mode=LineageMode.MANAGED,
+        warnings=[],
+    )
+    metadata = context.resolve_pull('count')
+    context.record_pull('count', metadata)
+    old_publication_id = context.publication_id
+    incarnation = context.db.live_incarnation('consumer')
+    assert incarnation is not None
+    context.db.advance_node_incarnation(str(incarnation['incarnation_id']))
+    context.source_hash = 'consumer-source-new'
+
+    pushed = context.finalize_value_push(name='result', value=84, data_type='int', role=ArtifactRole.OUTPUT)
+
+    old_publication = context.db.publication_supersession_details(
+        str(old_publication_id), current_source_hash=context.source_hash
+    )
+    head = context.db.get_artifact_head('consumer', 'result')
+    assert pushed['state'] == ArtifactState.READY.value
+    assert head is not None
+    assert head['source_hash'] == 'consumer-source-new'
+    assert old_publication['publication_state'] == 'abandoned'
+    assert old_publication['expected_generation'] == 1
+    assert old_publication['actual_generation'] == 2
+    assert context.publication_id is None
+
+
+def test_interactive_repeated_push_replays_previous_pull_snapshot(tmp_path) -> None:
+    paths = init_project_root(tmp_path / 'project')
+    graph = GraphStore(paths).read()
+    graph.nodes = [
+        Node(
+            id='producer',
+            kind=NodeKind.CONSTANT,
+            title='Producer',
+            incarnation_id='producer-incarnation',
+        ),
+        Node(
+            id='consumer',
+            kind=NodeKind.NOTEBOOK,
+            title='Consumer',
+            incarnation_id='consumer-incarnation',
+        ),
+    ]
+    GraphStore(paths).write(graph)
+    context = RuntimeContext(
+        project_root=paths.root,
+        node_id='consumer',
+        run_id='run-interactive-repeated-push',
+        source_hash='consumer-source',
+        lineage_mode=LineageMode.INTERACTIVE_HEURISTIC,
+        bindings={
+            'count': Binding(source_node='producer', source_artifact='value', data_type='int'),
+        },
+        outputs={'result': Port(name='result', data_type='int', role=ArtifactRole.OUTPUT)},
+    )
+    context.db.reconcile_node_incarnations(graph.nodes)
+    persisted = context.object_store.persist_value(42, 'int')
+    context.db.upsert_artifact_object(
+        persisted['artifact_hash'],
+        persisted['storage_kind'],
+        persisted['data_type'],
+        persisted['size_bytes'],
+        persisted.get('extension'),
+        persisted.get('mime_type'),
+        persisted.get('preview'),
+    )
+    context.db.create_artifact_version(
+        node_id='producer',
+        artifact_name='value',
+        role=ArtifactRole.OUTPUT,
+        artifact_hash=persisted['artifact_hash'],
+        source_hash='producer-source',
+        upstream_code_hash='producer-code',
+        upstream_data_hash='producer-data',
+        run_id='producer-run',
+        lineage_mode=LineageMode.MANAGED,
+        warnings=[],
+    )
+    metadata = context.resolve_pull('count')
+    context.record_pull('count', metadata)
+    context.finalize_value_push(name='result', value=84, data_type='int', role=ArtifactRole.OUTPUT)
+    context.db.set_artifact_head_state('producer', 'value', ArtifactState.STALE)
+
+    pushed = context.finalize_value_push(name='result', value=126, data_type='int', role=ArtifactRole.OUTPUT)
+
+    head = context.db.get_artifact_head('consumer', 'result')
+    assert pushed['state'] == ArtifactState.STALE.value
+    assert head is not None
+    assert head['state'] == ArtifactState.STALE.value
+
+
+def test_failed_interactive_publication_is_detached_for_next_push(monkeypatch, tmp_path) -> None:
+    paths = init_project_root(tmp_path / 'project')
+    graph = GraphStore(paths).read()
+    graph.nodes = [
+        Node(
+            id='producer',
+            kind=NodeKind.NOTEBOOK,
+            title='Producer',
+            incarnation_id='producer-incarnation',
+        )
+    ]
+    GraphStore(paths).write(graph)
+    context = RuntimeContext(
+        project_root=paths.root,
+        node_id='producer',
+        run_id='run-interactive-rejected-publication',
+        source_hash='producer-source',
+        lineage_mode=LineageMode.INTERACTIVE_HEURISTIC,
+        bindings={},
+        outputs={'result': Port(name='result', data_type='int', role=ArtifactRole.OUTPUT)},
+    )
+    context.db.reconcile_node_incarnations(graph.nodes)
+    monkeypatch.setattr(context.db, 'commit_publication', lambda *args, **kwargs: False)
+
+    with pytest.raises(RuntimeError, match='Publication was superseded'):
+        context.finalize_value_push(name='result', value=1, data_type='int', role=ArtifactRole.OUTPUT)
+
+    assert context.publication_id is None
 
 
 def test_runtime_context_finalize_value_push_persists_dataframe_preview(tmp_path) -> None:

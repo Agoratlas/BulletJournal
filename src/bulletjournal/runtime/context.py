@@ -100,6 +100,9 @@ class RuntimeContext:
     interactive_contract_error: KeyError | None = None
     defer_publication: bool = False
     publication_id: str | None = field(init=False, default=None)
+    publication_incarnation_id: str | None = field(init=False, default=None)
+    publication_generation: int | None = field(init=False, default=None)
+    publication_source_hash: str | None = field(init=False, default=None)
 
     def __post_init__(self) -> None:
         self.paths = ProjectPaths(self.project_root)
@@ -107,16 +110,8 @@ class RuntimeContext:
         self.object_store = ObjectStore(self.paths)
         if self.project_id is None:
             self.project_id = str(load_project_json(self.paths)['project_id'])
-        incarnation = self.db.live_incarnation(self.node_id)
-        if incarnation is not None:
-            graph_version = int(GraphStore(self.paths).read().meta.get('graph_version', 0))
-            publication = self.db.begin_publication(
-                run_id=self.run_id,
-                node_id=self.node_id,
-                source_hash=self.source_hash,
-                graph_version=graph_version,
-            )
-            self.publication_id = str(publication['publication_id'])
+        if self.lineage_mode != LineageMode.INTERACTIVE_HEURISTIC:
+            self._ensure_publication()
 
     def resolve_pull(self, name: str) -> dict[str, Any]:
         self._refresh_interactive_contracts()
@@ -217,19 +212,9 @@ class RuntimeContext:
 
     def record_pull(self, name: str, metadata: dict[str, Any]) -> None:
         self.loaded_inputs[name] = metadata
-        self._ensure_publication()
-        source_node = str(metadata.get('source_node') or '')
-        source_artifact = str(metadata.get('source_artifact') or '')
-        self.db.record_run_input(
-            self.run_id,
-            f'{source_node}/{source_artifact}' if source_node else f'default:{self.node_id}/{name}',
-            metadata['artifact_hash'],
-            metadata['state'],
-            producer_incarnation_id=metadata.get('producer_incarnation_id'),
-            producer_artifact_name=source_artifact or None,
-            version_id=metadata.get('loaded_version_id'),
-            publication_id=self.publication_id,
-        )
+        publication_created = self._ensure_publication()
+        if not publication_created:
+            self._record_publication_input(name, metadata)
 
     def _lease_for_run(self, artifact_hash: str) -> None:
         self.db.acquire_object_lease(
@@ -414,21 +399,26 @@ class RuntimeContext:
             details = self.db.publication_supersession_details(
                 self.publication_id, current_source_hash=current_source_hash if current_node is not None else ''
             )
+            if self.lineage_mode == LineageMode.INTERACTIVE_HEURISTIC:
+                self._clear_publication()
             raise RuntimeError(_format_publication_supersession(details))
         if not self.defer_publication:
-            self.publication_id = None
+            self._clear_publication()
         return True
 
     def abandon_publication(self) -> None:
         if self.publication_id is not None:
             self.db.abandon_publication(self.publication_id)
 
-    def _ensure_publication(self) -> None:
+    def _ensure_publication(self) -> bool:
         if self.publication_id is not None:
-            return
+            if self.lineage_mode != LineageMode.INTERACTIVE_HEURISTIC or self._publication_is_current():
+                return False
+            self.db.abandon_publication(self.publication_id)
+            self._clear_publication()
         incarnation = self.db.live_incarnation(self.node_id)
         if incarnation is None:
-            return
+            return False
         graph_version = int(GraphStore(self.paths).read().meta.get('graph_version', 0))
         publication = self.db.begin_publication(
             run_id=self.run_id,
@@ -437,6 +427,41 @@ class RuntimeContext:
             graph_version=graph_version,
         )
         self.publication_id = str(publication['publication_id'])
+        self.publication_incarnation_id = str(publication['incarnation_id'])
+        self.publication_generation = int(publication['generation'])
+        self.publication_source_hash = self.source_hash
+        for name, metadata in self.loaded_inputs.items():
+            self._record_publication_input(name, metadata)
+        return True
+
+    def _publication_is_current(self) -> bool:
+        incarnation = self.db.live_incarnation(self.node_id)
+        return bool(
+            incarnation is not None
+            and str(incarnation['incarnation_id']) == self.publication_incarnation_id
+            and int(incarnation['generation']) == self.publication_generation
+            and self.publication_source_hash == self.source_hash
+        )
+
+    def _record_publication_input(self, name: str, metadata: dict[str, Any]) -> None:
+        source_node = str(metadata.get('source_node') or '')
+        source_artifact = str(metadata.get('source_artifact') or '')
+        self.db.record_run_input(
+            self.run_id,
+            f'{source_node}/{source_artifact}' if source_node else f'default:{self.node_id}/{name}',
+            metadata['artifact_hash'],
+            metadata['state'],
+            producer_incarnation_id=metadata.get('producer_incarnation_id'),
+            producer_artifact_name=source_artifact or None,
+            version_id=metadata.get('loaded_version_id'),
+            publication_id=self.publication_id,
+        )
+
+    def _clear_publication(self) -> None:
+        self.publication_id = None
+        self.publication_incarnation_id = None
+        self.publication_generation = None
+        self.publication_source_hash = None
 
     def _lineage_for_logical_output(self, name: str) -> tuple[str, str, list[dict[str, Any]], ArtifactState]:
         input_hashes = [self.source_hash, f'{self.node_id}/{name}']
