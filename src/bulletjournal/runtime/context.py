@@ -411,7 +411,10 @@ class RuntimeContext:
                 allow_superseded_input_snapshots=self.lineage_mode == LineageMode.INTERACTIVE_HEURISTIC,
             )
         if not committed:
-            raise RuntimeError('Publication was superseded by a newer node generation or input version.')
+            details = self.db.publication_supersession_details(
+                self.publication_id, current_source_hash=current_source_hash if current_node is not None else ''
+            )
+            raise RuntimeError(_format_publication_supersession(details))
         if not self.defer_publication:
             self.publication_id = None
         return True
@@ -556,6 +559,41 @@ class RuntimeContext:
 def _interactive_contract_key(notebook_path: Path, graph_meta: dict[str, Any]) -> tuple[float | None, str]:
     notebook_mtime = notebook_path.stat().st_mtime if notebook_path.exists() else None
     return (notebook_mtime, str(graph_meta.get('updated_at') or ''))
+
+
+def _format_publication_supersession(details: dict[str, Any]) -> str:
+    message = 'Publication was superseded by a newer node generation or input version.'
+    identity_mismatches: list[str] = []
+    if details.get('expected_source_hash') != details.get('actual_source_hash'):
+        identity_mismatches.append(
+            f'source hash expected {details.get("expected_source_hash")}, actual {details.get("actual_source_hash")}'
+        )
+    if details.get('expected_generation') != details.get('actual_generation'):
+        identity_mismatches.append(
+            f'node generation expected {details.get("expected_generation")}, actual {details.get("actual_generation")}'
+        )
+    if details.get('actual_incarnation_status') not in {None, 'live'}:
+        identity_mismatches.append(f'node incarnation status is {details.get("actual_incarnation_status")}')
+    if identity_mismatches:
+        message = f'{message} Node: {"; ".join(identity_mismatches)}.'
+
+    input_mismatches: list[str] = []
+    for item in details.get('inputs', []):
+        if (
+            item.get('expected_version_id') == item.get('actual_version_id')
+            and item.get('expected_hash') == item.get('actual_hash')
+            and item.get('expected_state') == item.get('actual_state')
+        ):
+            continue
+        input_mismatches.append(
+            f'{item.get("artifact")}: expected version {item.get("expected_version_id")} '
+            f'({item.get("expected_state")}) loaded at {item.get("loaded_at")}; '
+            f'actual version {item.get("actual_version_id")} ({item.get("actual_state")}) '
+            f'created at {item.get("actual_created_at")}'
+        )
+    if input_mismatches:
+        message = f'{message} Inputs: {"; ".join(input_mismatches)}.'
+    return message
 
 
 def _live_bindings_for_node(

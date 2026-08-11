@@ -463,6 +463,54 @@ class StateDB:
             connection.commit()
             return True
 
+    def publication_supersession_details(self, publication_id: str, *, current_source_hash: str) -> dict[str, Any]:
+        """Return the identity and input snapshots that prevented publication."""
+        with self._connection() as connection:
+            batch = connection.execute(
+                'SELECT * FROM publication_batches WHERE publication_id = ?', (publication_id,)
+            ).fetchone()
+            if batch is None:
+                return {'publication_id': publication_id, 'reason': 'publication_not_found'}
+            incarnation = connection.execute(
+                'SELECT * FROM node_incarnations WHERE incarnation_id = ?', (batch['incarnation_id'],)
+            ).fetchone()
+            inputs = connection.execute(
+                'SELECT * FROM run_inputs WHERE publication_id = ? AND producer_incarnation_id IS NOT NULL '
+                'ORDER BY logical_artifact_id',
+                (publication_id,),
+            ).fetchall()
+            input_details = []
+            for item in inputs:
+                head = connection.execute(
+                    'SELECT ah.current_version_id, ah.state, av.artifact_hash, av.created_at '
+                    'FROM artifact_heads ah LEFT JOIN artifact_versions av ON av.version_id = ah.current_version_id '
+                    'WHERE ah.incarnation_id = ? AND ah.artifact_name = ?',
+                    (item['producer_incarnation_id'], item['producer_artifact_name']),
+                ).fetchone()
+                input_details.append(
+                    {
+                        'artifact': item['logical_artifact_id'],
+                        'expected_version_id': item['version_id'],
+                        'expected_hash': item['artifact_hash_at_load'],
+                        'expected_state': item['state_at_load'],
+                        'loaded_at': item['loaded_at'],
+                        'actual_version_id': None if head is None else head['current_version_id'],
+                        'actual_hash': None if head is None else head['artifact_hash'],
+                        'actual_state': None if head is None else head['state'],
+                        'actual_created_at': None if head is None else head['created_at'],
+                    }
+                )
+        return {
+            'publication_id': publication_id,
+            'publication_state': batch['state'],
+            'expected_source_hash': batch['source_hash'],
+            'actual_source_hash': current_source_hash,
+            'expected_generation': batch['generation'],
+            'actual_generation': None if incarnation is None else incarnation['generation'],
+            'actual_incarnation_status': None if incarnation is None else incarnation['status'],
+            'inputs': input_details,
+        }
+
     def advance_node_incarnation(self, incarnation_id: str, *, node_id: str | None = None) -> int:
         with self._connection() as connection:
             if node_id is None:

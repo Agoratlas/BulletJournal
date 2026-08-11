@@ -10,7 +10,13 @@ from bulletjournal.assets.types.scatter_plot import MAX_SCATTER_PLOT_POINTS
 from bulletjournal.domain.enums import ArtifactRole, ArtifactState, LineageMode
 from bulletjournal.domain.hashing import combine_hashes, hash_json
 from bulletjournal.domain.models import AssetDeclaration, Port
-from bulletjournal.runtime.context import _RUNTIME_CONTEXT, Binding, RuntimeContext, current_runtime_context
+from bulletjournal.runtime.context import (
+    _RUNTIME_CONTEXT,
+    Binding,
+    RuntimeContext,
+    _format_publication_supersession,
+    current_runtime_context,
+)
 from bulletjournal.storage.project_fs import init_project_root
 
 
@@ -70,6 +76,35 @@ def test_runtime_context_uses_defaults_without_recording_stale_warning(tmp_path)
     assert metadata['upstream_code_hash'] == 'default'
     assert metadata['state'] == ArtifactState.READY.value
     assert metadata['warnings'] == []
+
+
+def test_publication_supersession_message_includes_input_versions_and_dates() -> None:
+    message = _format_publication_supersession(
+        {
+            'expected_source_hash': 'source-hash',
+            'actual_source_hash': 'source-hash',
+            'expected_generation': 3,
+            'actual_generation': 3,
+            'actual_incarnation_status': 'live',
+            'inputs': [
+                {
+                    'artifact': 'producer/value',
+                    'expected_version_id': 12,
+                    'expected_hash': 'old-hash',
+                    'expected_state': ArtifactState.READY.value,
+                    'loaded_at': '2026-08-11T10:00:00Z',
+                    'actual_version_id': 13,
+                    'actual_hash': 'new-hash',
+                    'actual_state': ArtifactState.READY.value,
+                    'actual_created_at': '2026-08-11T10:01:00Z',
+                }
+            ],
+        }
+    )
+
+    assert 'producer/value' in message
+    assert 'expected version 12 (ready) loaded at 2026-08-11T10:00:00Z' in message
+    assert 'actual version 13 (ready) created at 2026-08-11T10:01:00Z' in message
 
 
 def test_runtime_context_validates_pull_contract_for_default_backed_input(tmp_path) -> None:
