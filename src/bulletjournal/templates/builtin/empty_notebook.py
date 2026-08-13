@@ -9,8 +9,6 @@ with app.setup:
 
     from bulletjournal.runtime import artifacts, assets
 
-    _ = pd, assets
-
 
 @app.cell
 def _():

@@ -1552,8 +1552,8 @@ def test_invalid_notebook_changes_keep_previous_ports_and_surface_errors(tmp_pat
         for issue in snapshot['validation_issues']
         if issue['node_id'] == 'sample_node' and issue['code'] == 'invalid_syntax'
     )
-    assert syntax_issue['message'] == 'Syntax error on line 45, column 13: invalid syntax. Offending code: `broken =`.'
-    assert syntax_issue['details']['line'] == 45
+    assert syntax_issue['message'] == 'Syntax error on line 43, column 13: invalid syntax. Offending code: `broken =`.'
+    assert syntax_issue['details']['line'] == 43
     assert syntax_issue['details']['source'] == '    broken ='
     assert node['state'] == 'error'
 
