@@ -650,7 +650,7 @@ def test_template_service_preserves_other_marimo_app_arguments() -> None:
     assert rendered == "app = marimo.App(width='medium', layout_file='layout.json', app_title='sample_node')  # keep\n"
 
 
-def test_template_service_rejects_invalid_provider_notebook_app_definition(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_template_service_rewrites_multiline_provider_notebook_app_definition(monkeypatch: pytest.MonkeyPatch) -> None:
     provider = SimpleNamespace(
         provider_name='acme',
         provider_revision='0.1.0',
@@ -674,8 +674,11 @@ def test_template_service_rejects_invalid_provider_notebook_app_definition(monke
 
     monkeypatch.setattr('bulletjournal.services.template_service.discover_template_providers', lambda: [provider])
 
-    with pytest.raises(ValueError, match='Invalid notebook template `acme/broken_notebook`'):
-        TemplateService()
+    service = TemplateService()
+
+    rendered = service.render_resolved_notebook_template_source('acme/broken_notebook', node_id='renamed_notebook')
+
+    assert rendered == "import marimo\n\napp = marimo.App(width='medium', app_title='renamed_notebook')\n"
 
 
 def test_template_service_rejects_invalid_provider_notebook_artifact_names(monkeypatch: pytest.MonkeyPatch) -> None:

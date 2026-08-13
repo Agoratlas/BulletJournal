@@ -74,15 +74,14 @@ def inspect_marimo_app_definition(source_text: str) -> tuple[MarimoAppDefinition
     col_offset = getattr(statement, 'col_offset', None)
     if lineno is None or end_lineno is None or end_col_offset is None or col_offset is None:
         return None, 'Notebook template app definition could not be located.'
-    if lineno != end_lineno:
-        return None, 'Notebook template must define `app = marimo.App(...)` on a single line.'
-
     lines = source_text.splitlines(keepends=True)
-    if lineno < 1 or lineno > len(lines):
+    if lineno < 1 or end_lineno > len(lines):
         return None, 'Notebook template app definition could not be located.'
-    line = lines[lineno - 1]
-    line_without_newline = line.rstrip('\r\n')
-    newline = line[len(line_without_newline) :]
+    start_line = lines[lineno - 1]
+    end_line = lines[end_lineno - 1]
+    start_line_without_newline = start_line.rstrip('\r\n')
+    end_line_without_newline = end_line.rstrip('\r\n')
+    newline = end_line[len(end_line_without_newline) :]
 
     positional_args: list[str] = []
     for arg in call.args:
@@ -104,8 +103,8 @@ def inspect_marimo_app_definition(source_text: str) -> tuple[MarimoAppDefinition
         MarimoAppDefinition(
             lineno=lineno,
             end_lineno=end_lineno,
-            prefix=line_without_newline[:col_offset],
-            suffix=line_without_newline[end_col_offset:],
+            prefix=start_line_without_newline[:col_offset],
+            suffix=end_line_without_newline[end_col_offset:],
             newline=newline,
             positional_args=positional_args,
             keyword_args=keyword_args,
