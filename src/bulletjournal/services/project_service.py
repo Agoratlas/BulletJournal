@@ -633,13 +633,23 @@ class ProjectService:
             if resolved_template is not None and resolved_template.ref == 'builtin/empty_notebook':
                 resolved_template = None
             if resolved_template and interface is not None and node.kind == NodeKind.NOTEBOOK:
-                template_source = self.template_service.resolve_template_source(resolved_template.ref)
-                rendered_template_source = self.template_service.render_template_source(
-                    template_source,
-                    node_id=node.id,
-                )
-                expected_source_hash = normalized_source_hash_text(rendered_template_source)
-                template_status = 'template' if interface.get('source_hash') == expected_source_hash else 'modified'
+                try:
+                    template_source = self.template_service.resolve_template_source(resolved_template.ref)
+                    rendered_template_source = self.template_service.render_template_source(
+                        template_source,
+                        node_id=node.id,
+                    )
+                    expected_source_hash = normalized_source_hash_text(rendered_template_source)
+                    template_status = 'template' if interface.get('source_hash') == expected_source_hash else 'modified'
+                except FileNotFoundError:
+                    project.state_db.save_persistent_notice(
+                        issue_id=f'missing_notebook_template:{node.incarnation_id}',
+                        node_id=node.id,
+                        severity=ValidationSeverity.WARNING,
+                        code='missing_notebook_template',
+                        message=f'Notebook template `{resolved_template.ref}` is no longer available.',
+                        details={'template_ref': resolved_template.ref},
+                    )
             node_ui = dict(node.ui)
             if node.kind == NodeKind.NOTEBOOK:
                 asset_states = asset_states_by_node.get(node.id, [])
@@ -676,6 +686,7 @@ class ProjectService:
                     ),
                 }
             )
+        notices = self.notices()
         return {
             'server_time': utc_now_iso(),
             'project': {

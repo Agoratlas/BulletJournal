@@ -4,7 +4,7 @@ from pathlib import Path
 
 from bulletjournal.domain.enums import ArtifactRole, ArtifactState, LineageMode, NodeKind
 from bulletjournal.domain.hashing import combine_hashes
-from bulletjournal.domain.models import Node
+from bulletjournal.domain.models import Node, TemplateRef
 from bulletjournal.parser.source_hash import normalized_source_hash_text
 from bulletjournal.services.project_service import ProjectService
 from bulletjournal.services.template_service import TemplateService
@@ -161,3 +161,41 @@ def test_startup_reconciliation_isolates_nodes_and_starts_watcher_last(tmp_path:
     assert {'book', 'broken'} <= set(calls)
     notices = StateDB(ProjectPaths(root).state_db_path).list_persistent_notices()
     assert any(notice['code'] == 'startup_reconciliation_failed' for notice in notices)
+
+
+def test_missing_notebook_template_does_not_block_project_startup_and_is_dismissable(tmp_path: Path) -> None:
+    root = init_project_root(tmp_path / 'project').root
+    paths = ProjectPaths(root)
+    graph_store = GraphStore(paths)
+    graph = graph_store.read()
+    graph.nodes.append(
+        Node(
+            id='book',
+            kind=NodeKind.NOTEBOOK,
+            title='Book',
+            path='notebooks/book.py',
+            template=TemplateRef(
+                kind='notebook',
+                provider='agoratlas',
+                name='giant_component',
+                ref='agoratlas/graph/utils/giant_component',
+            ),
+        )
+    )
+    graph_store.write(graph)
+    paths.notebook_path('book').write_text(SOURCE, encoding='utf-8')
+
+    service = ProjectService(_Events(), TemplateService())
+    snapshot = service.open_project(root)
+
+    notebook = next(node for node in snapshot['graph']['nodes'] if node['id'] == 'book')
+    assert notebook['template']['ref'] == 'agoratlas/graph/utils/giant_component'
+    assert notebook['template_status'] is None
+    notice = next(notice for notice in snapshot['notices'] if notice['code'] == 'missing_notebook_template')
+    assert notice['node_id'] == 'book'
+    assert notice['severity'] == 'warning'
+    assert notice['details'] == {'template_ref': 'agoratlas/graph/utils/giant_component'}
+
+    service.dismiss_notice(notice['issue_id'])
+
+    assert not any(notice['code'] == 'missing_notebook_template' for notice in service.snapshot()['notices'])

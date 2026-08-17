@@ -746,6 +746,50 @@ def test_template_service_rejects_invalid_provider_pipeline(monkeypatch: pytest.
         TemplateService()
 
 
+def test_template_service_rejects_pipeline_referencing_missing_notebook_template(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = SimpleNamespace(
+        provider_name='acme',
+        provider_revision='0.1.0',
+        list_notebook_templates=lambda: [],
+        list_pipeline_templates=lambda: [
+            {
+                'name': 'broken_pipeline',
+                'ref': 'acme/broken_pipeline',
+                'title': 'Broken Pipeline',
+                'path': 'pipelines/broken_pipeline.json',
+                'hidden': False,
+            }
+        ],
+        load_notebook_template=lambda name: '',
+        load_pipeline_template=lambda name: (
+            json.dumps(
+                {
+                    'title': 'Broken Pipeline',
+                    'nodes': [
+                        {
+                            'id': 'book',
+                            'title': 'Book',
+                            'kind': 'notebook',
+                            'template_ref': 'acme/missing_notebook',
+                        }
+                    ],
+                    'edges': [],
+                    'layout': [{'node_id': 'book', 'x': 0, 'y': 0, 'w': 100, 'h': 40}],
+                }
+            )
+            if name == 'broken_pipeline'
+            else ''
+        ),
+    )
+
+    monkeypatch.setattr('bulletjournal.services.template_service.discover_template_providers', lambda: [provider])
+
+    with pytest.raises(ValueError, match='Invalid pipeline template `acme/broken_pipeline`'):
+        TemplateService()
+
+
 def test_create_app_fails_fast_for_invalid_provider_pipeline(monkeypatch: pytest.MonkeyPatch) -> None:
     provider = SimpleNamespace(
         provider_name='acme',
