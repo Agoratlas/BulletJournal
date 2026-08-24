@@ -17,7 +17,7 @@ from bulletjournal.domain.graph_rules import (
 )
 from bulletjournal.domain.models import Edge, Node, Port
 from bulletjournal.domain.type_system import types_compatible
-from bulletjournal.parser.interface_parser import parse_notebook_interface
+from bulletjournal.parser.interface_parser import parse_notebook_contract, parse_notebook_interface
 from bulletjournal.parser.validation import build_issue
 from bulletjournal.runtime.serializers import validate_runtime_value_type
 from bulletjournal.templates.builtin_provider import BUILTIN_PROVIDER, EXAMPLES_PROVIDER
@@ -234,7 +234,11 @@ def validate_pipeline_template_definition(
         if str(raw_node.get('kind') or '').strip() != NodeKind.DASHBOARD.value:
             continue
         try:
-            _validate_dashboard_template_definition(raw_node, node_rows=node_rows)
+            _validate_dashboard_template_definition(
+                raw_node,
+                node_rows=node_rows,
+                notebook_paths_by_ref=resolved_notebooks,
+            )
         except GraphValidationError as exc:
             issues.append(
                 build_issue(
@@ -478,6 +482,7 @@ def _validate_dashboard_template_definition(
     raw_node: dict[str, Any],
     *,
     node_rows: dict[str, dict[str, Any]],
+    notebook_paths_by_ref: Mapping[str, Path | TemplateAsset],
 ) -> None:
     node_id = str(raw_node.get('id') or 'dashboard').strip()
     payload = raw_node.get('dashboard')
@@ -488,6 +493,7 @@ def _validate_dashboard_template_definition(
     if not isinstance(sources, list) or not isinstance(panels, list):
         raise GraphValidationError(f'Dashboard node `{node_id}` must define list fields `sources` and `panels`.')
     source_ids: list[str] = []
+    source_assets: set[str] = set()
     for source in sources:
         if not isinstance(source, dict):
             raise GraphValidationError(f'Dashboard node `{node_id}` sources must be objects.')
@@ -501,7 +507,13 @@ def _validate_dashboard_template_definition(
             )
         if source_node_id not in source_ids:
             source_ids.append(source_node_id)
+        template_ref = str(source_node.get('template_ref') or '')
+        template_path = notebook_paths_by_ref.get(template_ref)
+        if template_path is not None:
+            contract = parse_notebook_contract(template_path, node_id=source_node_id)
+            source_assets.update(f'{source_node_id}/{declaration.name}' for declaration in contract.asset_declarations)
     seen_panel_ids: set[str] = set()
+    panel_assets: set[str] = set()
     for index, panel in enumerate(panels):
         if not isinstance(panel, dict):
             raise GraphValidationError(f'Dashboard node `{node_id}` panels must be objects.')
@@ -524,6 +536,7 @@ def _validate_dashboard_template_definition(
         if panel_id in seen_panel_ids:
             raise GraphValidationError(f'Dashboard node `{node_id}` contains duplicate panel `{panel_id}`.')
         seen_panel_ids.add(panel_id)
+        panel_assets.add(f'{panel_node_id}/{asset_name}')
         if 'modifier_overrides' in panel and not isinstance(panel.get('modifier_overrides'), dict):
             raise GraphValidationError(
                 f'Dashboard node `{node_id}` panel `{panel_id}` must define `modifier_overrides` as an object.'
@@ -537,6 +550,15 @@ def _validate_dashboard_template_definition(
                 f'Dashboard node `{node_id}` panel `{panel_id}` must define positive integer `panel_height`.'
             )
         _ = index
+    if source_assets != panel_assets:
+        details = []
+        missing_panels = sorted(source_assets - panel_assets)
+        unknown_panels = sorted(panel_assets - source_assets)
+        if missing_panels:
+            details.append('missing panels: ' + ', '.join(missing_panels))
+        if unknown_panels:
+            details.append('unknown panels: ' + ', '.join(unknown_panels))
+        raise GraphValidationError(f'Dashboard `{node_id}` asset set does not match its sources: ' + '; '.join(details))
 
 
 def _port_data_type(ports: list[dict[str, Any]], name: str) -> str | None:

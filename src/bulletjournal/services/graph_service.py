@@ -232,9 +232,6 @@ class GraphService:
             graph = self.project_service.write_graph(graph)
             for node in created_incarnations:
                 state_db.register_node_incarnation(node.incarnation_id, node.id, node.kind.value)
-            if self.project_service.dashboard_service is not None:
-                for dashboard in pending_dashboard_creates:
-                    self.project_service.dashboard_service.materialize_template_dashboard(**dashboard)
             for node_id, source in pending_notebook_creates:
                 self.project_service.require_project().paths.notebook_path(node_id).write_text(source, encoding='utf-8')
             for node_id in pending_editor_stops:
@@ -293,6 +290,9 @@ class GraphService:
                     self.project_service.dashboard_service.delete_dashboard_file(dashboard_id)
             if reparse_all:
                 self.project_service.reparse_all_notebooks()
+            if self.project_service.dashboard_service is not None:
+                for dashboard in pending_dashboard_creates:
+                    self.project_service.dashboard_service.materialize_template_dashboard(**dashboard)
             if stale_roots:
                 self.mark_nodes_and_downstream_stale(sorted(stale_roots))
                 self.restore_nodes_and_downstream_ready_if_lineage_matches(sorted(stale_roots))

@@ -419,7 +419,7 @@ def test_validate_pipeline_template_reports_graph_validation_errors(
     ]
 
 
-def test_validate_pipeline_template_accepts_dashboard_node(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_validate_pipeline_template_accepts_dashboard_node(tmp_path: Path) -> None:
     template = tmp_path / 'pipeline.json'
     _write_json(
         template,
@@ -454,11 +454,20 @@ def test_validate_pipeline_template_accepts_dashboard_node(monkeypatch: pytest.M
     )
 
     analysis_path = tmp_path / 'analysis.py'
-    analysis_path.write_text('', encoding='utf-8')
-    monkeypatch.setattr(
-        validator,
-        'parse_notebook_interface',
-        lambda path, node_id: _interface(node_id),
+    analysis_path.write_text(
+        """import marimo
+
+app = marimo.App()
+
+with app.setup:
+    from bulletjournal.runtime import assets
+
+@app.cell
+def _():
+    assets.push(assets.Markdown('notes'), name='notes', title='Notes')
+    return
+""",
+        encoding='utf-8',
     )
 
     issues = validator.validate_pipeline_template(template, notebook_paths_by_ref={'analysis.py': analysis_path})

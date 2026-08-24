@@ -371,6 +371,7 @@ class DashboardService:
                 panels=self._coerce_panels(panels, graph=graph),
             )
             self._validate_panel_sources(document)
+            self._validate_template_dashboard_assets(document)
             self._write_dashboard_document(document)
             self._sync_dashboard_node_metadata(document)
             return document.to_dict()
@@ -499,6 +500,28 @@ class DashboardService:
             raise GraphValidationError(
                 'Dashboard panels must reference notebook sources declared in `sources`: ' + ', '.join(missing)
             )
+
+    def _validate_template_dashboard_assets(self, document: DashboardDocument) -> None:
+        state_db = self.project_service.require_project().state_db
+        source_assets = {
+            f'{source.node_id}/{asset.get("asset_name")}'
+            for source in document.sources
+            for asset in state_db.list_asset_heads(node_id=source.node_id)
+            if str(asset.get('asset_name') or '').strip()
+        }
+        panel_assets = {f'{panel.node_id}/{panel.asset_name}' for panel in document.panels}
+        if source_assets == panel_assets:
+            return
+        missing_panels = sorted(source_assets - panel_assets)
+        unknown_panels = sorted(panel_assets - source_assets)
+        details = []
+        if missing_panels:
+            details.append('missing panels: ' + ', '.join(missing_panels))
+        if unknown_panels:
+            details.append('unknown panels: ' + ', '.join(unknown_panels))
+        raise GraphValidationError(
+            f'Dashboard `{document.dashboard_id}` asset set does not match its sources: ' + '; '.join(details)
+        )
 
     def _reconcile_panels(self, document: DashboardDocument) -> list[DashboardPanel]:
         existing_panels = self._normalize_panel_positions(document.panels)

@@ -936,6 +936,199 @@ def _():
     assert dashboard_payload['panels'][0]['panel_id'] == 'analysis_copy/notes'
 
 
+def test_pipeline_dashboard_materialization_preserves_template_panels_after_reparse(tmp_path) -> None:
+    project_root = init_project_root(tmp_path / 'project').root
+    project_service = ProjectService(_FakeEventService(), TemplateService())
+    project_service.open_project(project_root)
+    project_service.dashboard_service = DashboardService(project_service)
+    graph_service = GraphService(project_service)
+
+    def notebook_template(asset_name: str) -> SimpleNamespace:
+        return SimpleNamespace(
+            source_text=(
+                f"""
+import marimo
+
+app = marimo.App()
+
+with app.setup:
+    from bulletjournal.runtime import assets
+
+@app.cell
+def _():
+    assets.push(assets.Markdown('hello'), name='{asset_name}', title='{asset_name}')
+    return
+""".strip()
+                + '\n'
+            ),
+            source_hash=f'{asset_name}-hash',
+        )
+
+    template_sources = {
+        'builtin/alpha': notebook_template('alpha_asset'),
+        'builtin/beta': notebook_template('beta_asset'),
+    }
+    project_service.template_service.resolve_pipeline_template = lambda ref, allow_inactive=False: SimpleNamespace(
+        definition={
+            'nodes': [
+                {'id': 'alpha', 'title': 'Alpha', 'kind': 'notebook', 'template_ref': 'builtin/alpha'},
+                {'id': 'beta', 'title': 'Beta', 'kind': 'notebook', 'template_ref': 'builtin/beta'},
+                {
+                    'id': 'dashboard_view',
+                    'title': 'Dashboard View',
+                    'kind': 'dashboard',
+                    'dashboard': {
+                        'sources': [{'node_id': 'alpha'}, {'node_id': 'beta'}],
+                        'panels': [
+                            {
+                                'node_id': 'beta',
+                                'asset_name': 'beta_asset',
+                                'visible': False,
+                                'position': 0,
+                            },
+                            {
+                                'node_id': 'alpha',
+                                'asset_name': 'alpha_asset',
+                                'visible': True,
+                                'position': 1,
+                            },
+                        ],
+                    },
+                },
+            ],
+            'edges': [],
+            'layout': [
+                {'node_id': 'alpha', 'x': 80, 'y': 220, 'w': 320, 'h': 220},
+                {'node_id': 'beta', 'x': 440, 'y': 220, 'w': 320, 'h': 220},
+                {'node_id': 'dashboard_view', 'x': 80, 'y': 0, 'w': 360, 'h': 220},
+            ],
+        }
+    )
+    project_service.template_service.resolve_template_source = lambda ref, allow_inactive=False: template_sources[ref]
+    project_service.template_service.template_ref = lambda ref: SimpleNamespace(
+        kind='notebook',
+        provider='builtin',
+        name=ref.rsplit('/', 1)[-1],
+        ref=ref,
+        origin_revision=None,
+        to_dict=lambda: {
+            'kind': 'notebook',
+            'provider': 'builtin',
+            'name': ref.rsplit('/', 1)[-1],
+            'ref': ref,
+            'origin_revision': None,
+        },
+    )
+    project_service.template_service.pipeline_node_interfaces = lambda definition: {
+        'alpha': {'inputs': [], 'outputs': []},
+        'beta': {'inputs': [], 'outputs': []},
+        'dashboard_view': {'inputs': [], 'outputs': []},
+    }
+    project_service.template_service.list_templates = lambda: []
+
+    graph_service.apply_operations(
+        int(project_service.graph().meta['graph_version']),
+        [
+            {
+                'type': 'add_pipeline_template',
+                'template_ref': 'builtin/pipeline_with_dashboard',
+                'x': 80,
+                'y': 80,
+            }
+        ],
+    )
+
+    dashboard = project_service.dashboard_service.get_dashboard('dashboard_view')
+    assert dashboard['version'] == 1
+    assert [(panel['panel_id'], panel['visible']) for panel in dashboard['panels']] == [
+        ('beta/beta_asset', False),
+        ('alpha/alpha_asset', True),
+    ]
+
+
+def test_pipeline_dashboard_materialization_rejects_incomplete_asset_set(tmp_path) -> None:
+    project_root = init_project_root(tmp_path / 'project').root
+    project_service = ProjectService(_FakeEventService(), TemplateService())
+    project_service.open_project(project_root)
+    project_service.dashboard_service = DashboardService(project_service)
+    graph_service = GraphService(project_service)
+
+    template_source = SimpleNamespace(
+        source_text=(
+            """
+import marimo
+
+app = marimo.App()
+
+with app.setup:
+    from bulletjournal.runtime import assets
+
+@app.cell
+def _():
+    assets.push(assets.Markdown('hello'), name='included', title='Included')
+    assets.push(assets.Markdown('hello'), name='missing', title='Missing')
+    return
+""".strip()
+            + '\n'
+        ),
+        source_hash='hash',
+    )
+    project_service.template_service.resolve_pipeline_template = lambda ref, allow_inactive=False: SimpleNamespace(
+        definition={
+            'nodes': [
+                {'id': 'analysis', 'title': 'Analysis', 'kind': 'notebook', 'template_ref': 'builtin/example'},
+                {
+                    'id': 'dashboard_view',
+                    'title': 'Dashboard View',
+                    'kind': 'dashboard',
+                    'dashboard': {
+                        'sources': [{'node_id': 'analysis'}],
+                        'panels': [{'node_id': 'analysis', 'asset_name': 'included', 'position': 0}],
+                    },
+                },
+            ],
+            'edges': [],
+            'layout': [
+                {'node_id': 'analysis', 'x': 80, 'y': 220, 'w': 320, 'h': 220},
+                {'node_id': 'dashboard_view', 'x': 80, 'y': 0, 'w': 360, 'h': 220},
+            ],
+        }
+    )
+    project_service.template_service.resolve_template_source = lambda ref, allow_inactive=False: template_source
+    project_service.template_service.template_ref = lambda ref: SimpleNamespace(
+        kind='notebook',
+        provider='builtin',
+        name='example',
+        ref=ref,
+        origin_revision=None,
+        to_dict=lambda: {
+            'kind': 'notebook',
+            'provider': 'builtin',
+            'name': 'example',
+            'ref': ref,
+            'origin_revision': None,
+        },
+    )
+    project_service.template_service.pipeline_node_interfaces = lambda definition: {
+        'analysis': {'inputs': [], 'outputs': []},
+        'dashboard_view': {'inputs': [], 'outputs': []},
+    }
+    project_service.template_service.list_templates = lambda: []
+
+    with pytest.raises(GraphValidationError, match='asset set does not match its sources'):
+        graph_service.apply_operations(
+            int(project_service.graph().meta['graph_version']),
+            [
+                {
+                    'type': 'add_pipeline_template',
+                    'template_ref': 'builtin/pipeline_with_dashboard',
+                    'x': 80,
+                    'y': 80,
+                }
+            ],
+        )
+
+
 def test_graph_changes_create_automatic_checkpoint_when_last_is_older_than_ten_minutes(
     tmp_path,
     monkeypatch: pytest.MonkeyPatch,

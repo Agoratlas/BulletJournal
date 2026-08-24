@@ -790,6 +790,64 @@ def test_template_service_rejects_pipeline_referencing_missing_notebook_template
         TemplateService()
 
 
+def test_template_service_rejects_dashboard_missing_declared_notebook_asset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    notebook_source = """import marimo
+
+app = marimo.App()
+
+with app.setup:
+    from bulletjournal.runtime import assets
+
+@app.cell
+def _():
+    assets.push(assets.Markdown('summary'), name='summary', title='Summary')
+    assets.push(assets.Markdown('details'), name='details', title='Details')
+    return
+"""
+    pipeline_source = json.dumps(
+        {
+            'title': 'Outdated Dashboard',
+            'nodes': [
+                {
+                    'id': 'report',
+                    'title': 'Report',
+                    'kind': 'notebook',
+                    'template_ref': 'acme/report',
+                },
+                {
+                    'id': 'dashboard',
+                    'title': 'Dashboard',
+                    'kind': 'dashboard',
+                    'dashboard': {
+                        'sources': [{'node_id': 'report'}],
+                        'panels': [{'node_id': 'report', 'asset_name': 'summary'}],
+                    },
+                },
+            ],
+            'edges': [],
+            'layout': [
+                {'node_id': 'report', 'x': 0, 'y': 0, 'w': 100, 'h': 40},
+                {'node_id': 'dashboard', 'x': 100, 'y': 0, 'w': 100, 'h': 40},
+            ],
+        }
+    )
+    provider = SimpleNamespace(
+        provider_name='acme',
+        provider_revision='0.1.0',
+        list_notebook_templates=lambda: [{'name': 'report', 'ref': 'acme/report'}],
+        list_pipeline_templates=lambda: [{'name': 'outdated_dashboard', 'ref': 'acme/outdated_dashboard'}],
+        load_notebook_template=lambda name: notebook_source if name == 'report' else '',
+        load_pipeline_template=lambda name: pipeline_source if name == 'outdated_dashboard' else '',
+    )
+
+    monkeypatch.setattr('bulletjournal.services.template_service.discover_template_providers', lambda: [provider])
+
+    with pytest.raises(ValueError, match='missing panels: report/details'):
+        TemplateService()
+
+
 def test_create_app_fails_fast_for_invalid_provider_pipeline(monkeypatch: pytest.MonkeyPatch) -> None:
     provider = SimpleNamespace(
         provider_name='acme',
