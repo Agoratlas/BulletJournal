@@ -747,7 +747,7 @@ function buildBarChartVegaLiteSpec(
         stack: isStacked ? (isNormalized ? 'normalize' : 'zero') : false,
         scale: {
           type: yScaleType,
-          zero: yScaleType !== 'log' && !isNormalized,
+          ...(yScaleType !== 'log' ? { zero: !isNormalized } : {}),
           nice: yScaleType !== 'log',
         },
         axis: {

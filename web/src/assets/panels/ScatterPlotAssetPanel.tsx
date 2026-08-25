@@ -752,6 +752,8 @@ function buildScatterPlotVegaLiteSpec(
   const minPointSize = optionalPositiveNumberFromInput(overrides.minPointSize)
   const maxPointSize = optionalPositiveNumberFromInput(overrides.maxPointSize)
   const sizeScaling = clampNumberToRange(overrides.sizeScaling, defaultOverrides.sizeScaling, 0.1, 3)
+  const xScaleType = buildScaleType(overrides.xAxis.scale)
+  const yScaleType = buildScaleType(overrides.yAxis.scale)
   const sizeEncoding = buildScatterPlotSizeEncoding(scatterPlot, sizeType, showLegend, minPointSize, maxPointSize, sizeScaling)
   const shapeEncoding = scatterPlot.shape_column
     ? {
@@ -849,9 +851,9 @@ function buildScatterPlotVegaLiteSpec(
           ...(scatterPlot.domain ? {
             domain: [scatterPlot.domain.x.min, scatterPlot.domain.x.max],
             nice: false,
-            zero: false,
+            ...(xScaleType === 'log' ? {} : { zero: false }),
           } : {}),
-          type: buildScaleType(overrides.xAxis.scale),
+          type: xScaleType,
         },
       },
       y: {
@@ -862,9 +864,9 @@ function buildScatterPlotVegaLiteSpec(
           ...(scatterPlot.domain ? {
             domain: [scatterPlot.domain.y.min, scatterPlot.domain.y.max],
             nice: false,
-            zero: false,
+            ...(yScaleType === 'log' ? {} : { zero: false }),
           } : {}),
-          type: buildScaleType(overrides.yAxis.scale),
+          type: yScaleType,
         },
       },
       ...(shapeEncoding ? { shape: shapeEncoding } : {}),

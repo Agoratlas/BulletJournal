@@ -742,6 +742,7 @@ function buildHistogramVegaLiteSpec(
   const barWidthRatio = overrides.barWidth / 100
   const borderThickness = optionalNonNegativeNumberFromInput(overrides.borderThickness) ?? 0
   const temporalHistogram = histogram.x_value_kind === 'temporal'
+  const xScaleType = temporalHistogram ? 'linear' : buildScaleType(overrides.xAxis.scale)
   const temporalTickLimit = Math.max(
     1,
     optionalIntegerFromInput(overrides.xAxis.tickCount)
@@ -812,9 +813,9 @@ function buildHistogramVegaLiteSpec(
           ...(histogram.domain ? {
             domain: [histogram.domain.min, histogram.domain.max],
             nice: false,
-            zero: false,
+            ...(xScaleType === 'log' ? {} : { zero: false }),
           } : {}),
-          type: temporalHistogram ? 'linear' : buildScaleType(overrides.xAxis.scale),
+          type: xScaleType,
         },
       },
       x2: { field: 'adjusted_end' },

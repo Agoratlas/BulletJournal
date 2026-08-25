@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
 
 import { ChevronDown, ChevronUp, ChevronsUpDown, Funnel } from '../../components/Icons'
 import type { AssetFilter, AssetFilterKind, AssetSort, PreparedTablePayload } from '../../lib/types'
@@ -224,7 +224,17 @@ export function PreparedTable({
   onRemoveFilter: (columnId: string) => void
 }) {
   const [openFilterColumnId, setOpenFilterColumnId] = useState<string | null>(null)
+  const [columnWidthOverrides, setColumnWidthOverrides] = useState<Record<string, number>>({})
+  const [availableWidth, setAvailableWidth] = useState(0)
+  const [overflow, setOverflow] = useState({ left: false, right: false })
   const openFilterCellRef = useRef<HTMLDivElement | null>(null)
+  const tableWrapRef = useRef<HTMLDivElement | null>(null)
+  const resizeCleanupRef = useRef<(() => void) | null>(null)
+  const resolvedColumnWidths = useMemo(
+    () => resolveTableColumnWidths(table, columnWidthOverrides, availableWidth),
+    [availableWidth, columnWidthOverrides, table.columns, table.rows],
+  )
+  const tableWidth = Object.values(resolvedColumnWidths).reduce((total, width) => total + width, 0)
 
   useEffect(() => {
     if (!openFilterColumnId) {
@@ -254,9 +264,82 @@ export function PreparedTable({
     }
   }, [openFilterColumnId, table.columns])
 
+  useEffect(() => () => {
+    resizeCleanupRef.current?.()
+  }, [])
+
+  useLayoutEffect(() => {
+    const tableWrap = tableWrapRef.current
+    if (!tableWrap) {
+      return
+    }
+    const updateAvailableWidth = () => {
+      setAvailableWidth(tableWrap.clientWidth)
+    }
+    updateAvailableWidth()
+    const observer = new ResizeObserver(updateAvailableWidth)
+    observer.observe(tableWrap)
+    return () => observer.disconnect()
+  }, [])
+
+  useEffect(() => {
+    const tableWrap = tableWrapRef.current
+    if (!tableWrap) {
+      return
+    }
+    const updateOverflow = () => {
+      const maxScrollLeft = tableWrap.scrollWidth - tableWrap.clientWidth
+      setOverflow({
+        left: tableWrap.scrollLeft > 0,
+        right: maxScrollLeft > 0 && tableWrap.scrollLeft < maxScrollLeft,
+      })
+    }
+    const observer = new ResizeObserver(updateOverflow)
+    observer.observe(tableWrap)
+    tableWrap.addEventListener('scroll', updateOverflow, { passive: true })
+    updateOverflow()
+    return () => {
+      observer.disconnect()
+      tableWrap.removeEventListener('scroll', updateOverflow)
+    }
+  }, [resolvedColumnWidths, table.columns, table.rows])
+
+  function handleColumnResizeStart(event: ReactPointerEvent<HTMLButtonElement>, columnId: string) {
+    if (event.button !== 0) {
+      return
+    }
+    event.preventDefault()
+    event.stopPropagation()
+    resizeCleanupRef.current?.()
+    const startWidth = resolvedColumnWidths[columnId] ?? DEFAULT_COLUMN_WIDTH
+    const startX = event.clientX
+    const handlePointerMove = (moveEvent: PointerEvent) => {
+      setColumnWidthOverrides((current) => ({
+        ...current,
+        [columnId]: Math.max(MIN_COLUMN_WIDTH, Math.round(startWidth + moveEvent.clientX - startX)),
+      }))
+    }
+    const cleanup = () => {
+      window.removeEventListener('pointermove', handlePointerMove)
+      window.removeEventListener('pointerup', cleanup)
+      resizeCleanupRef.current = null
+    }
+    resizeCleanupRef.current = cleanup
+    window.addEventListener('pointermove', handlePointerMove)
+    window.addEventListener('pointerup', cleanup)
+  }
+
   return (
-    <div className="table-wrap asset-table-wrap">
-      <table className="preview-table asset-table">
+    <div className={`asset-table-overflow-shell${overflow.left ? ' has-left-overflow' : ''}${overflow.right ? ' has-right-overflow' : ''}`}>
+      <span className="asset-table-overflow-shadow is-left" aria-hidden="true" />
+      <span className="asset-table-overflow-shadow is-right" aria-hidden="true" />
+      <div ref={tableWrapRef} className="table-wrap asset-table-wrap">
+        <table className="preview-table asset-table" style={{ width: `${tableWidth}px` }}>
+          <colgroup>
+            {table.columns.map((column) => (
+              <col key={column.id} style={{ width: `${resolvedColumnWidths[column.id] ?? DEFAULT_COLUMN_WIDTH}px` }} />
+            ))}
+          </colgroup>
         <thead>
           <tr>
             {table.columns.map((column) => {
@@ -321,6 +404,13 @@ export function PreparedTable({
                       />
                     ) : null}
                   </div>
+                  <button
+                    type="button"
+                    className="asset-table-column-resize-handle"
+                    aria-label={`Resize ${column.title} column`}
+                    title={`Resize ${column.title} column`}
+                    onPointerDown={(event) => handleColumnResizeStart(event, column.id)}
+                  />
                 </th>
               )
             })}
@@ -330,7 +420,7 @@ export function PreparedTable({
           {table.rows.length ? table.rows.map((row, index) => (
             <tr key={index}>
               {table.columns.map((column) => (
-                <td key={column.id}>{formatCellValue(row[column.id])}</td>
+                <td key={column.id}>{renderCellValue(row[column.id])}</td>
               ))}
             </tr>
           )) : (
@@ -339,9 +429,74 @@ export function PreparedTable({
             </tr>
           )}
         </tbody>
-      </table>
+        </table>
+      </div>
     </div>
   )
+}
+
+const DEFAULT_COLUMN_WIDTH = 100
+const MIN_COLUMN_WIDTH = 48
+const MAX_AUTOMATIC_COLUMN_WIDTH = 220
+const APPROXIMATE_CHARACTER_WIDTH = 7
+const CELL_HORIZONTAL_PADDING = 16
+
+function resolveTableColumnWidths(
+  table: PreparedTablePayload,
+  overrides: Record<string, number>,
+  availableWidth: number,
+): Record<string, number> {
+  if (!table.columns.length) {
+    return {}
+  }
+  const preferredWidths = Object.fromEntries(table.columns.map((column) => {
+    const headerLength = Math.max(column.title.length, column.data_type.length)
+    const contentLength = table.rows.reduce(
+      (longest, row) => Math.max(longest, formatCellValue(row[column.id]).length),
+      0,
+    )
+    return [
+      column.id,
+      Math.min(
+        MAX_AUTOMATIC_COLUMN_WIDTH,
+        Math.max(DEFAULT_COLUMN_WIDTH, (Math.max(headerLength, contentLength) * APPROXIMATE_CHARACTER_WIDTH) + CELL_HORIZONTAL_PADDING),
+      ),
+    ]
+  }))
+  const widths = Object.fromEntries(table.columns.map((column) => [
+    column.id,
+    overrides[column.id] ?? preferredWidths[column.id] ?? DEFAULT_COLUMN_WIDTH,
+  ]))
+  const automaticColumns = table.columns.filter((column) => overrides[column.id] === undefined)
+  const currentTotal = Object.values(widths).reduce((total, width) => total + width, 0)
+  let remainingExtra = Math.max(0, Math.floor(availableWidth - currentTotal))
+  for (const [index, column] of automaticColumns.entries()) {
+    if (remainingExtra <= 0) {
+      break
+    }
+    const columnsRemaining = automaticColumns.length - index
+    const extra = Math.ceil(remainingExtra / columnsRemaining)
+    widths[column.id] = (preferredWidths[column.id] ?? DEFAULT_COLUMN_WIDTH) + extra
+    remainingExtra -= extra
+  }
+  return widths
+}
+
+function renderCellValue(value: unknown) {
+  const text = formatCellValue(value)
+  if (isHttpUrl(text)) {
+    return <a className="asset-table-cell-link" href={text} target="_blank" rel="noreferrer">{text}</a>
+  }
+  return text
+}
+
+function isHttpUrl(value: string): boolean {
+  try {
+    const url = new URL(value)
+    return (url.protocol === 'http:' || url.protocol === 'https:') && url.href === value
+  } catch {
+    return false
+  }
 }
 
 function formatCellValue(value: unknown): string {

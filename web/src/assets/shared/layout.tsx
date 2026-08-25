@@ -211,11 +211,30 @@ export function ResizableDatavizContent({
   )
 }
 
-export function PanelSettingsSection({ title, children }: { title: string; children: ReactNode }) {
+export function PanelSettingsSection({
+  title,
+  children,
+  defaultExpanded = true,
+}: {
+  title: string
+  children: ReactNode
+  defaultExpanded?: boolean
+}) {
+  const [isExpanded, setIsExpanded] = useState(defaultExpanded)
+  const sectionId = useId()
   return (
-    <section className="asset-dataviz-settings-section">
-      <h3>{title}</h3>
-      <div className="asset-dataviz-settings-fields">{children}</div>
+    <section className={`asset-dataviz-settings-section${isExpanded ? ' is-expanded' : ' is-collapsed'}`}>
+      <button
+        type="button"
+        className="asset-dataviz-settings-section-toggle"
+        aria-expanded={isExpanded}
+        aria-controls={sectionId}
+        onClick={() => setIsExpanded((current) => !current)}
+      >
+        <ChevronDown width={16} height={16} />
+        <span>{title}</span>
+      </button>
+      {isExpanded ? <div id={sectionId} className="asset-dataviz-settings-fields">{children}</div> : null}
     </section>
   )
 }
@@ -303,7 +322,7 @@ export function AxisOverridesSection({
   allowLogScale?: boolean
 }) {
   return (
-    <PanelSettingsSection title={title}>
+    <PanelSettingsSection title={title} defaultExpanded={false}>
       <label className="asset-dataviz-field">
         <span className={modifierFieldLabelClassName(!valuesEqual(overrides.labelSize, defaultOverrides.labelSize))}>Label size</span>
         <DeferredModifierInput
@@ -401,7 +420,7 @@ export function TitleOverridesSection({
 }) {
   const resolvedText = overrides.text.trim() || defaultText
   return (
-    <PanelSettingsSection title={title}>
+    <PanelSettingsSection title={title} defaultExpanded={false}>
       <label className="asset-dataviz-field">
         <span className={modifierFieldLabelClassName(!valuesEqual(overrides.size, defaultOverrides.size))}>Size</span>
         <DeferredModifierInput
