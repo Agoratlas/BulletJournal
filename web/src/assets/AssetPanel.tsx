@@ -76,11 +76,11 @@ export function AssetPanel({
   }
 
   if (asset.asset_type === 'markdown') {
-    return <MarkdownAssetPanel asset={asset} panelInfo={panelInfo} onReadyStateChange={onReadyStateChange} sectionId={sectionId} />
+    return <MarkdownAssetPanel asset={asset} panelInfo={panelInfo} viewerMode={viewerMode} onReadyStateChange={onReadyStateChange} sectionId={sectionId} frameVariant={frameVariant} />
   }
 
   if (asset.asset_type === 'iframe') {
-    return <IframeAssetPanel asset={asset} panelInfo={panelInfo} onReadyStateChange={onReadyStateChange} sectionId={sectionId} />
+    return <IframeAssetPanel asset={asset} panelInfo={panelInfo} viewerMode={viewerMode} onReadyStateChange={onReadyStateChange} sectionId={sectionId} frameVariant={frameVariant} />
   }
 
   if (asset.asset_type === 'collection') {

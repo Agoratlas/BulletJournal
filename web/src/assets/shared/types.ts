@@ -171,6 +171,7 @@ export type AssetPanelProps = {
 export type SimpleAssetPanelProps = {
   asset: AssetRecord
   panelInfo: AssetPanelInfo
+  viewerMode?: 'notebook' | 'dashboard'
   onReadyStateChange?: (ready: boolean) => void
   sectionId?: string
   frameVariant?: AssetPanelFrameVariant

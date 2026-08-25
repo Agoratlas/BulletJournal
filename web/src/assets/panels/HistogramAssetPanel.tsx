@@ -444,7 +444,7 @@ export function HistogramAssetPanel({
   )
 
   return (
-    <AssetPanelFrame asset={asset} panelInfo={panelInfo} settingsTitle="Modifier overrides" settingsBody={settingsBody} settingsActive={hasSettingsOverrides} sectionId={sectionId} frameVariant={frameVariant}>
+    <AssetPanelFrame asset={asset} panelInfo={panelInfo} settingsTitle="Modifier overrides" settingsBody={settingsBody} settingsActive={hasSettingsOverrides} sectionId={sectionId} frameVariant={frameVariant} showExportActions={viewerMode === 'dashboard'}>
       <div className="asset-dataframe-panel asset-histogram-panel">
         {overrideIncompatible ? <OverrideIncompatibleNotice onReset={onPersistedStateChange ? handleResetOverrides : undefined} /> : null}
         <PrepareErrorsNotice errors={prepareErrors} />

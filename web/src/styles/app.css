@@ -4750,6 +4750,48 @@ input.invalid {
   width: min(360px, calc(100vw - 48px));
 }
 
+.asset-panel-export-popover {
+  width: min(320px, calc(100vw - 48px));
+}
+
+.asset-panel-export-warning,
+.asset-panel-export-status {
+  margin: 0 0 10px;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.asset-panel-export-warning {
+  color: var(--muted);
+}
+
+.asset-panel-export-status {
+  margin: 10px 0 0;
+  color: var(--muted);
+}
+
+.asset-panel-export-actions {
+  display: grid;
+  gap: 3px;
+}
+
+.asset-panel-export-actions button {
+  width: 100%;
+  min-height: 34px;
+  padding: 7px 9px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.asset-panel-export-actions button:hover,
+.asset-panel-export-actions button:focus-visible {
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
 .asset-dataviz-settings-panel {
   display: grid;
   gap: 14px;

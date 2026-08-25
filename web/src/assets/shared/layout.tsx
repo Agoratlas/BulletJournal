@@ -1,7 +1,17 @@
 import { useEffect, useId, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
 
-import { ChevronDown, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, Cog } from '../../components/Icons'
+import { ChevronDown, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, Cog, Download } from '../../components/Icons'
 import type { AssetFilter, AssetSort, AssetRecord, PreparedTablePayload } from '../../lib/types'
+import {
+  assetExportFilename,
+  copyPng,
+  copyText,
+  downloadPng,
+  downloadSvg,
+  downloadText,
+  tableToCsv,
+  tableToMarkdown,
+} from './exports'
 import {
   clampPanelHeight,
   modifierFieldLabelClassName,
@@ -22,6 +32,8 @@ export function AssetPanelFrame({
   headerCenter,
   sectionId,
   frameVariant = 'card',
+  showExportActions = false,
+  dataFramePreview,
   children,
 }: {
   asset: AssetRecord
@@ -32,10 +44,13 @@ export function AssetPanelFrame({
   headerCenter?: ReactNode
   sectionId?: string
   frameVariant?: AssetPanelFrameVariant
+  showExportActions?: boolean
+  dataFramePreview?: PreparedTablePayload | null
   children: ReactNode
 }) {
+  const frameRef = useRef<HTMLElement | null>(null)
   return (
-    <section id={sectionId} className={frameVariant === 'inline' ? 'asset-panel-frame-inline' : 'panel asset-panel-card'}>
+    <section ref={frameRef} id={sectionId} className={frameVariant === 'inline' ? 'asset-panel-frame-inline' : 'panel asset-panel-card'}>
       <div className={`asset-panel-header${headerCenter ? ' has-center-content' : ''}`}>
         <div className="asset-panel-heading">
           <div className="asset-panel-title-row">
@@ -45,7 +60,7 @@ export function AssetPanelFrame({
           {asset.description ? <p className="asset-panel-description">{asset.description}</p> : null}
         </div>
         {headerCenter ? <div className="asset-panel-header-center">{headerCenter}</div> : null}
-        <AssetPanelHeaderActions panelInfo={panelInfo} settingsTitle={settingsTitle} settingsBody={settingsBody} settingsActive={settingsActive} />
+        <AssetPanelHeaderActions asset={asset} frameRef={frameRef} showExportActions={showExportActions} dataFramePreview={dataFramePreview} panelInfo={panelInfo} settingsTitle={settingsTitle} settingsBody={settingsBody} settingsActive={settingsActive} />
       </div>
       {children}
     </section>
@@ -53,18 +68,55 @@ export function AssetPanelFrame({
 }
 
 function AssetPanelHeaderActions({
+  asset,
+  frameRef,
+  showExportActions,
+  dataFramePreview,
   panelInfo,
   settingsTitle,
   settingsBody,
   settingsActive,
 }: {
+  asset: AssetRecord
+  frameRef: { current: HTMLElement | null }
+  showExportActions: boolean
+  dataFramePreview?: PreparedTablePayload | null
   panelInfo: AssetPanelInfo
   settingsTitle?: string
   settingsBody?: ReactNode
   settingsActive: boolean
 }) {
-  const [openMenu, setOpenMenu] = useState<'info' | 'settings' | null>(null)
+  const [openMenu, setOpenMenu] = useState<'export' | 'info' | 'settings' | null>(null)
+  const [exportError, setExportError] = useState<string | null>(null)
   const actionsRef = useRef<HTMLDivElement | null>(null)
+  const exportKind = asset.asset_type === 'markdown' || asset.asset_type === 'iframe' || asset.asset_type === 'dataframe'
+    ? asset.asset_type
+    : ['bar_chart', 'histogram', 'pie_chart', 'scatter_plot'].includes(asset.asset_type ?? '') ? 'vega' : null
+  const exportTitle = asset.asset_name
+  const markdownText = typeof asset.definition?.markdown_text === 'string' ? asset.definition.markdown_text : null
+  const iframeUrl = typeof asset.definition?.iframe_url === 'string' ? asset.definition.iframe_url : null
+  const hasExportActions = exportKind === 'vega'
+    || (exportKind === 'dataframe' && dataFramePreview !== null && dataFramePreview !== undefined)
+    || (exportKind === 'markdown' && markdownText !== null)
+    || (exportKind === 'iframe' && iframeUrl !== null)
+
+  async function runExport(action: () => void | Promise<void>) {
+    setExportError(null)
+    try {
+      await action()
+      setOpenMenu(null)
+    } catch (error) {
+      setExportError(error instanceof Error ? error.message : 'The export failed.')
+    }
+  }
+
+  function renderedSvg(): SVGSVGElement {
+    const svg = frameRef.current?.querySelector('.vega-embed svg')
+    if (!(svg instanceof SVGSVGElement)) {
+      throw new Error('The chart is not ready to export yet.')
+    }
+    return svg
+  }
 
   useEffect(() => {
     if (openMenu === null || typeof document === 'undefined') {
@@ -82,6 +134,56 @@ function AssetPanelHeaderActions({
 
   return (
     <div ref={actionsRef} className="asset-panel-header-actions">
+      {showExportActions && hasExportActions ? (
+        <details className="asset-panel-action-menu" open={openMenu === 'export'}>
+          <summary
+            className="asset-panel-action-button"
+            aria-label="Export asset"
+            title="Export asset"
+            onClick={(event) => {
+              event.preventDefault()
+              setExportError(null)
+              setOpenMenu((current) => current === 'export' ? null : 'export')
+            }}
+          >
+            <Download width={14} height={14} />
+          </summary>
+          <div className="asset-panel-action-popover asset-panel-export-popover">
+            {exportKind === 'dataframe' && dataFramePreview ? (
+              <p className="asset-panel-export-warning">⚠️ This will only export the currently displayed preview ({dataFramePreview.rows.length} rows)</p>
+            ) : null}
+            <div className="asset-panel-export-actions">
+              {exportKind === 'vega' ? (
+                <>
+                  <button type="button" onClick={() => void runExport(() => copyPng(renderedSvg()))}>Copy PNG to clipboard</button>
+                  <button type="button" onClick={() => void runExport(() => downloadPng(renderedSvg(), assetExportFilename(exportTitle, 'png')))}>Download PNG</button>
+                  <button type="button" onClick={() => void runExport(() => downloadSvg(renderedSvg(), assetExportFilename(exportTitle, 'svg')))}>Download SVG</button>
+                </>
+              ) : null}
+              {exportKind === 'dataframe' && dataFramePreview ? (
+                <>
+                  <button type="button" onClick={() => void runExport(() => copyText(tableToMarkdown(dataFramePreview.columns.map((column) => column.id), dataFramePreview.rows)))}>Copy Markdown</button>
+                  <button type="button" onClick={() => void runExport(() => downloadText(tableToCsv(dataFramePreview.columns.map((column) => column.id), dataFramePreview.rows), assetExportFilename(exportTitle, 'csv'), 'text/csv;charset=utf-8'))}>Download CSV</button>
+                </>
+              ) : null}
+              {exportKind === 'markdown' && markdownText !== null ? (
+                <button type="button" onClick={() => void runExport(() => copyText(markdownText))}>Copy Markdown</button>
+              ) : null}
+              {exportKind === 'iframe' && iframeUrl !== null ? (
+                <>
+                  <button type="button" onClick={() => void runExport(() => copyText(iframeUrl))}>Copy URL</button>
+                  <button type="button" onClick={() => {
+                    window.open(iframeUrl, '_blank', 'noopener,noreferrer')
+                    setOpenMenu(null)
+                  }}>Open in new tab</button>
+                </>
+              ) : null}
+            </div>
+            {exportError ? <p className="asset-panel-export-status" role="alert">{exportError}</p> : null}
+          </div>
+        </details>
+      ) : null}
+
       <details className="asset-panel-action-menu" open={openMenu === 'info'}>
         <summary
           className="asset-panel-action-button"

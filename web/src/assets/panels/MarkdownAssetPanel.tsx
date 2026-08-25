@@ -4,7 +4,7 @@ import { SimpleMarkdown } from '../../components/SimpleMarkdown'
 import { AssetPanelFrame } from '../shared/layout'
 import type { SimpleAssetPanelProps } from '../shared/types'
 
-export function MarkdownAssetPanel({ asset, panelInfo, onReadyStateChange, sectionId, frameVariant }: SimpleAssetPanelProps) {
+export function MarkdownAssetPanel({ asset, panelInfo, viewerMode = 'notebook', onReadyStateChange, sectionId, frameVariant }: SimpleAssetPanelProps) {
   const markdownText = typeof asset.definition?.markdown_text === 'string' ? asset.definition.markdown_text : null
 
   useEffect(() => {
@@ -13,7 +13,7 @@ export function MarkdownAssetPanel({ asset, panelInfo, onReadyStateChange, secti
 
   if (!markdownText) {
     return (
-      <AssetPanelFrame asset={asset} panelInfo={panelInfo} sectionId={sectionId} frameVariant={frameVariant}>
+      <AssetPanelFrame asset={asset} panelInfo={panelInfo} sectionId={sectionId} frameVariant={frameVariant} showExportActions={viewerMode === 'dashboard'}>
         <div className="asset-panel-placeholder">
           <p>This Markdown asset is missing its text payload.</p>
         </div>
@@ -22,7 +22,7 @@ export function MarkdownAssetPanel({ asset, panelInfo, onReadyStateChange, secti
   }
 
   return (
-    <AssetPanelFrame asset={asset} panelInfo={panelInfo} sectionId={sectionId} frameVariant={frameVariant}>
+    <AssetPanelFrame asset={asset} panelInfo={panelInfo} sectionId={sectionId} frameVariant={frameVariant} showExportActions={viewerMode === 'dashboard'}>
       <div className="asset-markdown-panel">
         <SimpleMarkdown text={markdownText} />
       </div>
