@@ -2557,6 +2557,34 @@ def test_add_float_constant_node_accepts_round_number_initial_value(tmp_path) ->
     assert payload['preview']['editor_text'] == '3.0'
 
 
+def test_constant_value_rejects_null(tmp_path) -> None:
+    project_root = init_project_root(tmp_path / 'project').root
+    app = create_app(project_path=project_root)
+    client = TestClient(app)
+
+    opened = client.get('/api/v1/project/snapshot')
+    graph_version = opened.json()['graph']['meta']['graph_version']
+    created = client.patch(
+        '/api/v1/graph',
+        json={
+            'graph_version': graph_version,
+            'operations': [
+                {
+                    'type': 'add_constant_node',
+                    'node_id': 'value',
+                    'data_type': 'str',
+                }
+            ],
+        },
+    )
+    assert created.status_code == 200
+
+    updated = client.post('/api/v1/constants/value/value', json={'value': None, 'value_json': 'null'})
+
+    assert updated.status_code == 400
+    assert 'cannot have a null value' in updated.json()['detail']
+
+
 def test_constant_value_json_preserves_nested_round_floats(tmp_path) -> None:
     project_root = init_project_root(tmp_path / 'project').root
     app = create_app(project_path=project_root)

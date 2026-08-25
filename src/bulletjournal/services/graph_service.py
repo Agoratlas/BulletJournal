@@ -112,6 +112,10 @@ class GraphService:
                     node_id, artifact_name = self._add_constant_node(graph, operation)
                     pending_input_heads.append((node_id, artifact_name))
                     created_incarnations.append(next(node for node in graph.nodes if node.id == node_id))
+                    if operation.get('value') is None and operation.get('value_json') is not None:
+                        raise GraphValidationError(
+                            'Constant blocks cannot have a null value. Leave the value unset instead.'
+                        )
                     if operation.get('value') is not None or operation.get('value_json') is not None:
                         pending_constant_values.append(
                             (node_id, operation.get('value'), _constant_value_json(operation))
@@ -245,6 +249,11 @@ class GraphService:
                     artifact_name,
                     ArtifactState.PENDING,
                 )
+            constant_value_node_ids = {node_id for node_id, _, _ in pending_constant_values}
+            for node_id, _artifact_name in pending_input_heads:
+                node = next(entry for entry in graph.nodes if entry.id == node_id)
+                if node.kind == NodeKind.CONSTANT and node_id not in constant_value_node_ids:
+                    self.project_service.record_undefined_constant_notice(node)
             for node_id, value, value_json in pending_constant_values:
                 from bulletjournal.services.artifact_service import ArtifactService  # local import to avoid cycle
 

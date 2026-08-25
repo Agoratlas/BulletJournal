@@ -10,7 +10,7 @@ from enum import StrEnum
 from pathlib import Path, PurePosixPath
 
 from bulletjournal.config import GRAPH_SCHEMA_VERSION, PROJECT_SCHEMA_VERSION
-from bulletjournal.domain.enums import ArtifactState
+from bulletjournal.domain.enums import ArtifactState, NodeKind
 from bulletjournal.domain.errors import ProjectValidationError
 from bulletjournal.storage.project_fs import (
     ProjectPaths,
@@ -41,10 +41,12 @@ REQUIRED_EXPORT_DIRECTORIES = {
     'metadata',
     'checkpoints',
 }
+CODE_AND_CONSTANTS_MAX_BYTES = 1_000_000
 
 
 class ProjectExportMode(StrEnum):
     CODE_ONLY = 'code_only'
+    CODE_AND_CONSTANTS = 'code_and_constants'
     CODE_AND_DATA = 'code_and_data'
     FULL = 'full'
 
@@ -173,6 +175,8 @@ def _stage_project_for_export(paths: ProjectPaths, staged_root: Path, *, mode: P
     shutil.copy2(paths.pyproject_path, staged_paths.pyproject_path)
     shutil.copy2(paths.uv_lock_path, staged_paths.uv_lock_path)
 
+    if mode == ProjectExportMode.CODE_AND_CONSTANTS:
+        _copy_exportable_constant_objects(paths, staged_paths)
     if mode in {ProjectExportMode.CODE_AND_DATA, ProjectExportMode.FULL}:
         _copy_directory(paths.object_store_dir, staged_paths.object_store_dir)
         _copy_directory(paths.uploads_dir, staged_paths.uploads_dir)
@@ -195,6 +199,39 @@ def _copy_directory(source: Path, destination: Path) -> None:
         shutil.copy2(child, target)
 
 
+def _exportable_constant_versions(paths: ProjectPaths) -> list[tuple[int, str]]:
+    nodes = json.loads((paths.graph_dir / 'nodes.json').read_text(encoding='utf-8'))
+    constant_ids = {
+        str(node['id'])
+        for node in nodes
+        if isinstance(node, dict) and node.get('kind') == NodeKind.CONSTANT.value and isinstance(node.get('id'), str)
+    }
+    with sqlite3.connect(paths.state_db_path) as connection:
+        rows = connection.execute(
+            'SELECT ah.node_id, ah.current_version_id, av.artifact_hash FROM artifact_heads ah '
+            'JOIN artifact_versions av ON av.version_id = ah.current_version_id '
+            'JOIN objects ao ON ao.artifact_hash = av.artifact_hash '
+            'WHERE ao.size_bytes <= ? '
+            'ORDER BY ah.current_version_id',
+            (CODE_AND_CONSTANTS_MAX_BYTES,),
+        ).fetchall()
+    return [
+        (int(version_id), str(artifact_hash))
+        for node_id, version_id, artifact_hash in rows
+        if str(node_id) in constant_ids
+    ]
+
+
+def _copy_exportable_constant_objects(source_paths: ProjectPaths, staged_paths: ProjectPaths) -> None:
+    for _, artifact_hash in _exportable_constant_versions(source_paths):
+        source = source_paths.object_store_dir / artifact_hash[:2] / artifact_hash[2:]
+        if not source.is_file():
+            continue
+        destination = staged_paths.object_store_dir / artifact_hash[:2] / artifact_hash[2:]
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, destination)
+
+
 def _copy_sqlite_database(source: Path, destination: Path) -> None:
     destination.parent.mkdir(parents=True, exist_ok=True)
     with sqlite3.connect(source) as source_connection, sqlite3.connect(destination) as destination_connection:
@@ -215,9 +252,18 @@ def _reconcile_staged_state_db(paths: ProjectPaths, *, mode: ProjectExportMode) 
     with sqlite3.connect(paths.state_db_path) as connection:
         connection.execute('PRAGMA foreign_keys = ON')
         connection.execute('UPDATE orchestrator_execution_meta SET stdout_path = NULL, stderr_path = NULL')
-        if mode == ProjectExportMode.CODE_ONLY:
+        if mode in {ProjectExportMode.CODE_ONLY, ProjectExportMode.CODE_AND_CONSTANTS}:
+            preserved_versions = (
+                _exportable_constant_versions(paths) if mode == ProjectExportMode.CODE_AND_CONSTANTS else []
+            )
+            connection.execute('CREATE TEMP TABLE export_constant_versions (version_id INTEGER PRIMARY KEY)')
+            connection.executemany(
+                'INSERT INTO export_constant_versions (version_id) VALUES (?)',
+                [(version_id,) for version_id, _ in preserved_versions],
+            )
             connection.execute(
-                'UPDATE artifact_heads SET current_version_id = NULL, state = ?',
+                'UPDATE artifact_heads SET current_version_id = NULL, state = ? '
+                'WHERE current_version_id NOT IN (SELECT version_id FROM export_constant_versions)',
                 (ArtifactState.PENDING.value,),
             )
             connection.execute(
@@ -235,13 +281,22 @@ def _reconcile_staged_state_db(paths: ProjectPaths, *, mode: ProjectExportMode) 
             connection.execute('DELETE FROM orchestrator_execution_meta')
             connection.execute('DELETE FROM run_records')
             connection.execute('DELETE FROM asset_version_objects')
-            connection.execute('DELETE FROM artifact_versions')
+            connection.execute(
+                'DELETE FROM artifact_versions '
+                'WHERE version_id NOT IN (SELECT version_id FROM export_constant_versions)'
+            )
             connection.execute('DELETE FROM asset_versions')
             connection.execute('DELETE FROM object_pins')
             connection.execute('DELETE FROM object_leases')
-            connection.execute('DELETE FROM objects')
+            connection.execute(
+                'DELETE FROM objects WHERE artifact_hash NOT IN (SELECT artifact_hash FROM artifact_versions)'
+            )
             connection.execute('DELETE FROM persistent_notices WHERE code IN (?, ?)', ('run_failed', 'run_warning'))
-        if mode in {ProjectExportMode.CODE_ONLY, ProjectExportMode.CODE_AND_DATA}:
+        if mode in {
+            ProjectExportMode.CODE_ONLY,
+            ProjectExportMode.CODE_AND_CONSTANTS,
+            ProjectExportMode.CODE_AND_DATA,
+        }:
             connection.execute('DELETE FROM checkpoints')
         else:
             rows = connection.execute('SELECT checkpoint_id FROM checkpoints ORDER BY checkpoint_id').fetchall()

@@ -96,6 +96,7 @@ class ArtifactService:
             mime_type=mime_type,
             original_filename=filename,
         )
+        self.project_service.dismiss_undefined_constant_notice(node_id)
         if upload_warning:
             result['upload_warning'] = upload_warning
         return result
@@ -121,13 +122,17 @@ class ArtifactService:
                 f'Constant block `{node_id}` expects `{data_type}` and must be populated from an uploaded file.'
             )
         value = _resolve_constant_value(data_type=data_type, value=value, value_json=value_json)
+        if value is None:
+            raise InvalidRequestError(
+                'Constant blocks cannot have a null value. Clear the value to leave the block unset.'
+            )
         if data_type == 'pandas.Series' and isinstance(value, list):
             value = pd.Series(value)
         try:
             persisted = self.project_service.require_project().object_store.persist_value(value, data_type)
         except TypeError as exc:
             raise InvalidRequestError(str(exc)) from exc
-        return self._save_managed_artifact(
+        result = self._save_managed_artifact(
             node_id=node_id,
             artifact_name=constant_artifact_name(node),
             persisted=persisted,
@@ -135,6 +140,8 @@ class ArtifactService:
             propagate_downstream_stale=propagate_downstream_stale,
             interrupt_active_run=interrupt_active_run,
         )
+        self.project_service.dismiss_undefined_constant_notice(node_id)
+        return result
 
     def clear_constant_value(
         self,
@@ -157,6 +164,7 @@ class ArtifactService:
         project.state_db.advance_node_incarnation(str(incarnation['incarnation_id']))
         project.state_db.delete_artifact_state(node_id, artifact_name)
         project.state_db.ensure_artifact_head(node_id, artifact_name, ArtifactState.PENDING)
+        self.project_service.record_undefined_constant_notice(node)
         if interrupt_active_run and self.project_service.run_service is not None:
             self.project_service.run_service.interrupt_active_run_if_nodes_affected(
                 [node_id],

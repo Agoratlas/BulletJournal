@@ -661,6 +661,22 @@ def test_install_script_runner_progress_hooks_tracks_scheduler_progress(
     from marimo._runtime.app import script_runner as marimo_script_runner
 
     writes: list[dict[str, object]] = []
+    notebook = tmp_path / 'sample_notebook.py'
+    notebook.write_text(
+        (
+            'import marimo\n\n'
+            'app = marimo.App()\n\n'
+            '@app.cell\n'
+            'def _():\n'
+            '    x = 1\n'
+            '    return (x,)\n\n'
+            '@app.cell\n'
+            'def _(x):\n'
+            '    y = x + 1\n'
+            '    return (y,)\n'
+        ),
+        encoding='utf-8',
+    )
 
     class FakeScheduler:
         def __init__(self, cells: list[str]) -> None:
@@ -706,7 +722,7 @@ def test_install_script_runner_progress_hooks_tracks_scheduler_progress(
     monkeypatch.setattr(worker_main, '_write_progress', lambda path, payload: writes.append(payload))
 
     worker_main._install_script_runner_progress_hooks(
-        notebook_path=tmp_path / 'sample_notebook.py',
+        notebook_path=notebook,
         progress_path=tmp_path / 'progress.json',
     )
 
@@ -726,10 +742,143 @@ def test_install_script_runner_progress_hooks_tracks_scheduler_progress(
     ]
 
 
+def test_install_script_runner_progress_hooks_skips_already_reported_setup_cell(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from marimo._runtime.app import script_runner as marimo_script_runner
+
+    writes: list[dict[str, object]] = []
+    notebook = tmp_path / 'sample_notebook.py'
+    notebook.write_text(
+        (
+            'import marimo\n\n'
+            'app = marimo.App()\n\n'
+            'with app.setup:\n'
+            '    import time\n\n'
+            '@app.cell\n'
+            'def _():\n'
+            '    x = 1\n'
+            '    return (x,)\n\n'
+            '@app.cell\n'
+            'def _(x):\n'
+            '    y = x + 1\n'
+            '    return (y,)\n'
+        ),
+        encoding='utf-8',
+    )
+
+    class FakeScheduler:
+        def __init__(self) -> None:
+            self._cells_to_run = deque(['setup', 'cell-1', 'cell-2'])
+
+        def pending(self) -> bool:
+            return bool(self._cells_to_run)
+
+        def pop_cell(self) -> str:
+            return self._cells_to_run.popleft()
+
+        @property
+        def cells_to_run(self) -> deque[str]:
+            return self._cells_to_run
+
+    class FakeRunner:
+        def __init__(self) -> None:
+            self.app = SimpleNamespace(
+                graph=SimpleNamespace(
+                    cells={
+                        'cell-1': SimpleNamespace(code='x = 1'),
+                        'cell-2': SimpleNamespace(code='y = 2'),
+                    }
+                )
+            )
+            self._scheduler = FakeScheduler()
+
+        def _run_synchronous(self, post_execute_hooks):
+            _ = post_execute_hooks
+            return [self._scheduler.pop_cell() for _ in range(3)]
+
+        async def _run_asynchronous(self, post_execute_hooks):
+            _ = post_execute_hooks
+            return [self._scheduler.pop_cell() for _ in range(3)]
+
+    monkeypatch.setattr(marimo_script_runner, 'AppScriptRunner', FakeRunner)
+    monkeypatch.setattr(worker_main, '_write_progress', lambda path, payload: writes.append(payload))
+
+    worker_main._install_script_runner_progress_hooks(
+        notebook_path=notebook,
+        progress_path=tmp_path / 'progress.json',
+    )
+
+    assert FakeRunner()._run_synchronous([]) == ['setup', 'cell-1', 'cell-2']
+    assert writes == [
+        {'cell_id': 'cell-1', 'cell_number': 2, 'total_cells': 3, 'cell_code': 'x = 1'},
+        {'cell_id': 'cell-2', 'cell_number': 3, 'total_cells': 3, 'cell_code': 'y = 2'},
+    ]
+
+
+def test_worker_main_writes_setup_progress_before_notebook_execution(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    project_root = init_project_root(tmp_path / 'project').root
+    notebook_path = project_root / 'notebooks' / 'sample_node.py'
+    notebook_path.write_text(
+        (
+            'import marimo\n\n'
+            'app = marimo.App()\n\n'
+            'with app.setup(hide_code=True):\n'
+            '    import time\n\n'
+            '@app.cell\n'
+            'def _():\n'
+            '    return\n'
+        ),
+        encoding='utf-8',
+    )
+    progress_path = tmp_path / 'progress.json'
+    result_path = tmp_path / 'result.json'
+    manifest_path = tmp_path / 'manifest.json'
+    manifest_path.write_text(
+        json.dumps(
+            {
+                'project_root': str(project_root),
+                'node_id': 'sample_node',
+                'notebook_path': str(notebook_path),
+                'run_id': 'run-123',
+                'source_hash': 'hash',
+                'lineage_mode': LineageMode.MANAGED.value,
+                'bindings': {},
+                'outputs': {},
+                'progress_path': str(progress_path),
+                'result_path': str(result_path),
+            }
+        ),
+        encoding='utf-8',
+    )
+
+    def fake_execute_notebook(path: Path, *, progress_path: Path | None = None) -> dict[str, object]:
+        _ = path
+        assert progress_path is not None
+        assert json.loads(progress_path.read_text(encoding='utf-8')) == {
+            'cell_id': 'setup',
+            'cell_number': 1,
+            'total_cells': 2,
+            'cell_code': 'with app.setup(hide_code=True):\n    import time',
+        }
+        return {'result': None}
+
+    monkeypatch.setattr(worker_main, '_install_script_runner_progress_hooks', lambda **kwargs: None)
+    monkeypatch.setattr(worker_main, 'execute_notebook', fake_execute_notebook)
+
+    assert worker_main.main([str(manifest_path)]) == 0
+    assert json.loads(result_path.read_text(encoding='utf-8'))['status'] == 'ok'
+
+
 def test_install_script_runner_progress_hooks_requires_supported_scheduler_shape(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     from marimo._runtime.app import script_runner as marimo_script_runner
+
+    notebook = tmp_path / 'sample_notebook.py'
+    notebook.write_text('import marimo\n\napp = marimo.App()\n', encoding='utf-8')
 
     class FakeRunner:
         def _run_synchronous(self, post_execute_hooks):
@@ -743,7 +892,7 @@ def test_install_script_runner_progress_hooks_requires_supported_scheduler_shape
     monkeypatch.setattr(marimo_script_runner, 'AppScriptRunner', FakeRunner)
 
     worker_main._install_script_runner_progress_hooks(
-        notebook_path=tmp_path / 'sample_notebook.py',
+        notebook_path=notebook,
         progress_path=tmp_path / 'progress.json',
     )
 

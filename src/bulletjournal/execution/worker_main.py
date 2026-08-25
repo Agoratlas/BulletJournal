@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import json
 import sys
 import traceback
@@ -23,6 +24,83 @@ def _write_progress(
     progress_path.write_text(json.dumps(payload), encoding='utf-8')
 
 
+def _notebook_progress_details(notebook_path: Path) -> tuple[dict[str, object] | None, int, bool]:
+    source = notebook_path.read_text(encoding='utf-8')
+    module = ast.parse(source, filename=str(notebook_path))
+    setup_block = next((node for node in module.body if _is_app_setup_block(node)), None)
+    enabled_cells = [node for node in module.body if _is_app_cell(node) and not _is_disabled_app_cell(node)]
+    has_setup = setup_block is not None
+    total_cells = len(enabled_cells) + int(has_setup)
+    if setup_block is None:
+        return None, total_cells, False
+    return (
+        {
+            'cell_id': 'setup',
+            'cell_number': 1,
+            'total_cells': total_cells,
+            'cell_code': ast.get_source_segment(source, setup_block) or '',
+        },
+        total_cells,
+        True,
+    )
+
+
+def _is_app_setup_block(node: ast.stmt) -> bool:
+    if not isinstance(node, ast.With) or len(node.items) != 1:
+        return False
+    context_expr = node.items[0].context_expr
+    if isinstance(context_expr, ast.Attribute):
+        return (
+            isinstance(context_expr.value, ast.Name) and context_expr.value.id == 'app' and context_expr.attr == 'setup'
+        )
+    return (
+        isinstance(context_expr, ast.Call)
+        and isinstance(context_expr.func, ast.Attribute)
+        and isinstance(context_expr.func.value, ast.Name)
+        and context_expr.func.value.id == 'app'
+        and context_expr.func.attr == 'setup'
+    )
+
+
+def _is_app_cell(node: ast.stmt) -> bool:
+    if not isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
+        return False
+    return any(
+        (
+            isinstance(decorator, ast.Attribute)
+            and isinstance(decorator.value, ast.Name)
+            and decorator.value.id == 'app'
+            and decorator.attr == 'cell'
+        )
+        or (
+            isinstance(decorator, ast.Call)
+            and isinstance(decorator.func, ast.Attribute)
+            and isinstance(decorator.func.value, ast.Name)
+            and decorator.func.value.id == 'app'
+            and decorator.func.attr == 'cell'
+        )
+        for decorator in node.decorator_list
+    )
+
+
+def _is_disabled_app_cell(node: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
+    for decorator in node.decorator_list:
+        if not isinstance(decorator, ast.Call):
+            continue
+        if not (
+            isinstance(decorator.func, ast.Attribute)
+            and isinstance(decorator.func.value, ast.Name)
+            and decorator.func.value.id == 'app'
+            and decorator.func.attr == 'cell'
+        ):
+            continue
+        return any(
+            keyword.arg == 'disabled' and isinstance(keyword.value, ast.Constant) and keyword.value.value is True
+            for keyword in decorator.keywords
+        )
+    return False
+
+
 def _install_script_runner_progress_hooks(
     *,
     notebook_path: Path,
@@ -30,8 +108,9 @@ def _install_script_runner_progress_hooks(
 ) -> None:
     if progress_path is None:
         return
-    _ = notebook_path
     from marimo._runtime.app.script_runner import AppScriptRunner
+
+    _, total_cells, has_setup = _notebook_progress_details(notebook_path)
 
     original_run_synchronous = getattr(
         AppScriptRunner,
@@ -58,12 +137,14 @@ def _install_script_runner_progress_hooks(
         if getattr(scheduler, '_bulletjournal_progress_wrapped', False):
             return
 
-        total_cells = len(cells_to_run)
-        execution_index = 0
+        # Marimo imports and executes setup before it constructs the script runner.
+        execution_index = 1 if has_setup else 0
 
         def wrapped_pop_cell():
             nonlocal execution_index
             cell_id = pop_cell()
+            if has_setup and str(cell_id) == 'setup':
+                return cell_id
             execution_index += 1
             graph = runner.app.graph
             cell_impl = graph.cells[cell_id]
@@ -147,6 +228,10 @@ def main(argv: list[str] | None = None) -> int:
             defer_publication=True,
         )
         progress_path = Path(manifest.progress_path) if manifest.progress_path else None
+        if progress_path is not None:
+            setup_progress, _, _ = _notebook_progress_details(Path(manifest.notebook_path))
+            if setup_progress is not None:
+                _write_progress(progress_path, setup_progress)
         _install_script_runner_progress_hooks(
             notebook_path=Path(manifest.notebook_path),
             progress_path=progress_path,

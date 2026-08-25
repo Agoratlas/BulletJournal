@@ -875,9 +875,7 @@ class RunService:
         raw_warnings = result.get('warnings')
         if not isinstance(raw_warnings, list):
             return
-        graph = self.project_service.graph()
-        node = next((entry for entry in graph.nodes if entry.id == node_id), None)
-        node_label = _describe_node_label(node.title, node.id) if node is not None else _format_markdown_code(node_id)
+        node_label = _format_markdown_code(node_id)
         for index, warning in enumerate(raw_warnings, start=1):
             if not isinstance(warning, dict):
                 continue

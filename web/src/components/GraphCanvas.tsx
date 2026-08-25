@@ -77,7 +77,7 @@ type GraphCanvasProps = {
 }
 
 const NON_RUNNABLE_NODE_KINDS = new Set(['constant', 'file_input', 'organizer', 'area', 'dashboard'])
-const GRAPH_MIN_ZOOM = 0.18
+const GRAPH_MIN_ZOOM = 0.10
 const GRAPH_MAX_ZOOM = 1.35
 const GRAPH_DEFAULT_ZOOM = 0.78
 const GRAPH_FIT_PADDING = 0.12
@@ -562,6 +562,26 @@ function constantPreviewLayout(value: string): { text: string; fontSize: number 
   return { text, fontSize: 11 }
 }
 
+function namedConstantLabelFontSize(value: string): number {
+  const length = value.trim().length
+  if (length <= 6) {
+    return 17
+  }
+  if (length <= 8) {
+    return 15
+  }
+  if (length <= 10) {
+    return 13
+  }
+  if (length <= 13) {
+    return 11
+  }
+  if (length <= 17) {
+    return 9
+  }
+  return 8
+}
+
 const BulletJournalNodeCard = memo(({ data, selected }: NodeProps<BulletJournalNodeData>) => {
   const { node, snapshot, onSelect, onNodeContextMenu, onPortContextMenu, onEditConstantNode, onEditFileNode, onEditOrganizerNode, onEditAreaNode, onOpenEditor, onKillEditor, onRunNode, onOpenArtifacts } = data
   const inputs = inputsForNode(node)
@@ -808,6 +828,7 @@ const BulletJournalNodeCard = memo(({ data, selected }: NodeProps<BulletJournalN
       ? isCompatibleWithIntent(snapshot, node, outputPort, 'output', connectionIntent)
       : true
     const preview = compactConstantPreview(node, snapshot)
+    const showsName = ['file', 'pandas.DataFrame'].includes(outputPort?.data_type ?? node.ui?.data_type ?? '')
 
     function handleOutputContextMenu(event: React.MouseEvent) {
       if (!outputPort) {
@@ -821,7 +842,7 @@ const BulletJournalNodeCard = memo(({ data, selected }: NodeProps<BulletJournalN
     return (
       <div
         className={`rf-node constant-node state-${node.state} ${node.ui?.frozen ? 'is-frozen' : ''} ${selected ? 'is-selected' : ''} ${hasBlockingValidationIssues ? 'has-validation-error' : ''} ${noticeClassName} ${hoveredNoticeClassName}`}
-        title={validationSummary || `${preview.text} (${outputPort?.data_type ?? node.ui?.data_type ?? 'object'})`}
+        title={validationSummary || `${showsName ? node.title : preview.text} (${outputPort?.data_type ?? node.ui?.data_type ?? 'object'})`}
         style={{ '--constant-type-color': typeColor } as CSSProperties}
         onDoubleClick={(event) => {
           event.stopPropagation()
@@ -834,7 +855,9 @@ const BulletJournalNodeCard = memo(({ data, selected }: NodeProps<BulletJournalN
         }}
       >
         <div className={`rf-constant-content ${isConnecting && !isConnectionStart && !matchesConnectionIntent ? 'incompatible' : ''}`}>
-          <span className="rf-constant-preview" style={{ fontSize: `${preview.fontSize}px` }}>{preview.text}</span>
+          <span className={`rf-constant-preview ${showsName ? 'named-constant-label' : ''}`} style={{ fontSize: `${showsName ? namedConstantLabelFontSize(node.title) : preview.fontSize}px` }}>
+            {showsName && preview.text !== '-' ? node.title : preview.text}
+          </span>
           {outputPort ? (
             <Handle
               type="source"

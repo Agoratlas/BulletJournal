@@ -13,6 +13,7 @@ import bulletjournal.storage.project_archive as project_archive_module
 from bulletjournal.api.app import create_app
 from bulletjournal.domain.enums import ArtifactRole, ArtifactState, LineageMode
 from bulletjournal.domain.errors import ProjectValidationError
+from bulletjournal.services.graph_service import GraphService
 from bulletjournal.services.template_service import TemplateService
 from bulletjournal.storage.project_archive import ProjectExportMode, export_project_archive, import_project_archive
 from bulletjournal.storage.project_fs import ProjectPaths, init_project_root
@@ -329,6 +330,68 @@ def test_project_archive_code_and_data_removes_checkpoint_rows(tmp_path: Path) -
     imported_db = StateDB(import_root / 'metadata' / 'state.db')
 
     assert imported_db.list_checkpoints() == []
+
+
+def test_project_archive_code_and_constants_preserves_small_constant_values(tmp_path: Path) -> None:
+    project_root = init_project_root(tmp_path / 'project', project_id='study-a').root
+    paths = ProjectPaths(project_root)
+    app = create_app(project_path=project_root)
+    container = app.state.container
+    GraphService(container.project_service).apply_operations(
+        int(container.project_service.graph().meta['graph_version']),
+        [
+            {
+                'type': 'add_constant_node',
+                'node_id': 'threshold',
+                'title': 'Threshold',
+                'data_type': 'int',
+                'value': 7,
+                'value_json': '7',
+            }
+        ],
+    )
+    archive_path = tmp_path / 'code-plus-constants.zip'
+
+    export_project_archive(project_root, archive_path, mode=ProjectExportMode.CODE_AND_CONSTANTS)
+    import_root = tmp_path / 'imported'
+    import_project_archive(archive_path, import_root)
+    imported_db = StateDB(import_root / 'metadata' / 'state.db')
+    head = imported_db.get_artifact_head('threshold', 'value')
+
+    assert head is not None
+    assert head['state'] == ArtifactState.READY.value
+    assert head['artifact_hash'] is not None
+    assert (import_root / 'objects' / head['artifact_hash'][:2] / head['artifact_hash'][2:]).is_file()
+
+
+def test_project_archive_code_and_constants_omits_large_constant_values(tmp_path: Path, monkeypatch) -> None:
+    project_root = init_project_root(tmp_path / 'project', project_id='study-a').root
+    app = create_app(project_path=project_root)
+    container = app.state.container
+    monkeypatch.setattr(project_archive_module, 'CODE_AND_CONSTANTS_MAX_BYTES', 2)
+    GraphService(container.project_service).apply_operations(
+        int(container.project_service.graph().meta['graph_version']),
+        [
+            {
+                'type': 'add_constant_node',
+                'node_id': 'message',
+                'title': 'Message',
+                'data_type': 'str',
+                'value': 'long value',
+                'value_json': '"long value"',
+            }
+        ],
+    )
+    archive_path = tmp_path / 'code-plus-constants.zip'
+
+    export_project_archive(project_root, archive_path, mode=ProjectExportMode.CODE_AND_CONSTANTS)
+    import_root = tmp_path / 'imported'
+    import_project_archive(archive_path, import_root)
+    head = StateDB(import_root / 'metadata' / 'state.db').get_artifact_head('message', 'value')
+
+    assert head is not None
+    assert head['state'] == ArtifactState.PENDING.value
+    assert head['artifact_hash'] is None
 
 
 def test_project_archive_import_rejects_nested_project_root(tmp_path: Path) -> None:

@@ -521,6 +521,22 @@ class ProjectService:
             raise RuntimeError(f'Failed to load persisted notice `{issue_id}`.')
         return notice
 
+    def record_undefined_constant_notice(self, node: Node) -> None:
+        incarnation = self.require_project().state_db.live_incarnation(node.id)
+        if incarnation is None:
+            raise NotFoundError(f'Node `{node.id}` has no live incarnation.')
+        self.record_notice(
+            issue_id=f'constant_undefined:{node.incarnation_id}:{incarnation["generation"]}',
+            node_id=node.id,
+            severity=ValidationSeverity.WARNING,
+            code='constant_undefined',
+            message=f'Constant {_format_markdown_code(node.title)} is undefined.',
+            details={'node_id': node.id},
+        )
+
+    def dismiss_undefined_constant_notice(self, node_id: str) -> None:
+        self.require_project().state_db.dismiss_persistent_notices_for_node(node_id, ['constant_undefined'])
+
     def block_is_frozen(self, node: Node) -> bool:
         return bool(node.ui.get('frozen'))
 

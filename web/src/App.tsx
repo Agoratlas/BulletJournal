@@ -3357,6 +3357,7 @@ function App() {
     if (payload.dataType === 'file' || payload.dataType === 'pandas.DataFrame') {
       if (payload.uploadFile) {
         const result = await uploadConstantFile(nodeId, payload.uploadFile, payload.dataframeFormat)
+        await renameNodeForUploadedConstant(nodeId, payload.uploadFile, payload.dataType)
         if (result.warning) {
           reportClientWarning(`constant-upload:${nodeId}:warning`, 'constant_upload_warning', result.warning, { nodeId })
         }
@@ -3414,13 +3415,18 @@ function App() {
     const { x, y, presetConstantType, connectToInput } = pendingBlockCreation
     setPendingBlockCreation(null)
     const nodeId = connectToInput ? nextAvailableConstantNodeId(connectToInput.portName) : nextAvailableNodeId('constant')
+    const title = connectToInput
+      ? `Constant ${connectToInput.portName}`
+      : payload.uploadFile
+        ? uploadedConstantTitle(payload.uploadFile, payload.dataType)
+        : 'Constant'
     const initialValue = await resolveConstantEditorValue(payload)
     const layoutX = connectToInput ? x : snapToGrid(x - CONSTANT_NODE_WIDTH / 2)
     const layoutY = connectToInput ? y : snapToGrid(y - CONSTANT_NODE_HEIGHT / 2)
     const addOperation: GraphPatchOperation = {
       type: 'add_constant_node',
       node_id: nodeId,
-      title: 'Constant',
+      title,
       data_type: payload.dataType ?? presetConstantType ?? 'int',
       ...(initialValue === undefined
         ? {}
@@ -3451,6 +3457,18 @@ function App() {
       }
     }
     await refreshSnapshot()
+  }
+
+  function uploadedConstantTitle(file: File, dataType: ConstantValueType): string {
+    return dataType === 'file' ? file.name : file.name.replace(/\.[^.]+$/, '') || file.name
+  }
+
+  async function renameNodeForUploadedConstant(nodeId: string, file: File, dataType: ConstantValueType) {
+    const title = uploadedConstantTitle(file, dataType)
+    if (liveSnapshot?.graph.nodes.find((entry) => entry.id === nodeId)?.title === title) {
+      return
+    }
+    await mutateGraph([{ type: 'update_node_title', node_id: nodeId, title } satisfies GraphPatchOperation])
   }
 
   function handlePaletteDragStart(entry: PaletteEntry, position?: { x: number; y: number }) {

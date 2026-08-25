@@ -123,6 +123,30 @@ def test_constant_value_can_be_loaded_for_copying(tmp_path) -> None:
     assert ArtifactService(project_service).get_constant_value('value') == {'count': 42}
 
 
+def test_empty_constant_records_notice_and_setting_value_dismisses_it(tmp_path) -> None:
+    project_root = init_project_root(tmp_path / 'project').root
+    project_service = ProjectService(_FakeEventService(), TemplateService())
+    project_service.open_project(project_root)
+    graph_service = GraphService(project_service)
+    created = graph_service.apply_operations(
+        int(project_service.graph().meta['graph_version']),
+        [{'type': 'add_constant_node', 'node_id': 'value', 'title': 'Value', 'data_type': 'int'}],
+    )
+
+    notices = project_service.notices()
+    notice = next(entry for entry in notices if entry['code'] == 'constant_undefined')
+    assert notice['node_id'] == 'value'
+    assert notice['message'] == 'Constant `Value` is undefined.'
+
+    from bulletjournal.services.artifact_service import ArtifactService
+
+    ArtifactService(project_service).set_constant_value('value', 42)
+    assert all(entry['code'] != 'constant_undefined' for entry in project_service.notices())
+
+    ArtifactService(project_service).clear_constant_value('value')
+    assert any(entry['code'] == 'constant_undefined' for entry in project_service.notices())
+
+
 def _attach_checkpoint_service(project_service: ProjectService) -> CheckpointService:
     checkpoint_service = CheckpointService(project_service)
     project_service.checkpoint_service = checkpoint_service

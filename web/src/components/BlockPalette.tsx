@@ -268,7 +268,7 @@ function ensureChildDirectory(parent: PaletteDirectoryNode, label: string): Pale
 }
 
 function createPaletteDragPreview(entry: PaletteEntry, previewScale: number): HTMLDivElement {
-  const scale = Math.max(previewScale, 0.18)
+  const scale = Math.max(previewScale, 0.10)
   const previewBlocks = entry.previewBlocks?.length ? entry.previewBlocks : [defaultPreviewBlock(entry)]
   const preview = document.createElement('div')
   preview.className = `palette-drag-preview kind-${entry.kind}`
