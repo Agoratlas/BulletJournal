@@ -3,7 +3,7 @@ import { useQuery } from '@tanstack/react-query'
 import embed, { type Result as VegaEmbedResult, type VisualizationSpec } from 'vega-embed'
 
 import { prepareAsset } from '../../lib/api'
-import type { AssetFilter, AssetSort, PreparedHistogramPayload } from '../../lib/types'
+import type { AssetFilter, AssetHighlight, AssetSort, PreparedHistogramPayload } from '../../lib/types'
 import {
   buildAxisSpec,
   buildChartPadding,
@@ -42,6 +42,7 @@ import {
   modifierDefaultValue,
   modifierTitle,
   nextSortForColumn,
+  replaceHighlightsForColumn,
   normalizePanelHeight,
   optionalIntegerFromInput,
   optionalNonNegativeNumberFromInput,
@@ -94,6 +95,7 @@ export function HistogramAssetPanel({
   const [pageSize, setPageSize] = useState(initialState.page.size)
   const [sort, setSort] = useState<AssetSort | null>(initialState.sort)
   const [filters, setFilters] = useState<AssetFilter[]>(initialState.filters)
+  const [highlights, setHighlights] = useState<AssetHighlight[]>(initialState.highlights ?? [])
   const [binCount, setBinCount] = useState(initialState.binCount ?? 20)
   const [binCountInput, setBinCountInput] = useState(String(initialState.binCount ?? 20))
   const [timeGranularity, setTimeGranularity] = useState<TimeHistogramGranularity>(initialState.granularity ?? 'auto')
@@ -109,16 +111,18 @@ export function HistogramAssetPanel({
   )
   const isApplyingPersistedStateRef = useRef(false)
   const filtersKey = JSON.stringify(filters)
+  const highlightsKey = JSON.stringify(highlights)
   const selectionKey = selectedBarIndexes.join(',')
   const externalStateKey = useMemo(
     () => histogramStateKey(initialState),
-    [initialState.binCount, initialState.filters, initialState.granularity, initialState.page.index, initialState.page.size, initialState.sort?.column, initialState.sort?.direction],
+    [initialState.binCount, initialState.filters, initialState.granularity, initialState.highlights, initialState.page.index, initialState.page.size, initialState.sort?.column, initialState.sort?.direction],
   )
   const externalChartOverridesKey = useMemo(() => stableValueKey(initialChartOverrides), [initialChartOverrides])
   const localStateKey = histogramStateKey({
     page: { index: pageIndex, size: pageSize },
     sort,
     filters,
+    highlights,
     binCount: isTemporalHistogram ? null : binCount,
     granularity: isTemporalHistogram ? timeGranularity : null,
   })
@@ -128,10 +132,11 @@ export function HistogramAssetPanel({
       page: { index: pageIndex, size: pageSize },
       sort: sort ? [sort] : [],
       filters,
+      highlights,
       ...(isTemporalHistogram ? { granularity: timeGranularity } : { bin_count: binCount }),
       ...serializeHistogramChartModifierValues(chartOverrides),
     }, asset.default_modifiers),
-    [asset.default_modifiers, binCount, chartOverrides, filters, isTemporalHistogram, pageIndex, pageSize, sort, timeGranularity],
+    [asset.default_modifiers, binCount, chartOverrides, filters, highlights, isTemporalHistogram, pageIndex, pageSize, sort, timeGranularity],
   )
   const overrideValidationKey = requiresOverrideValidation ? stableValueKey(modifierOverrides) : null
 
@@ -144,6 +149,7 @@ export function HistogramAssetPanel({
     setPageSize(initialState.page.size)
     setSort(initialState.sort)
     setFilters(initialState.filters)
+    setHighlights(initialState.highlights ?? [])
     setBinCount(initialState.binCount ?? 20)
     setBinCountInput(String(initialState.binCount ?? 20))
     setTimeGranularity(initialState.granularity ?? 'auto')
@@ -180,6 +186,7 @@ export function HistogramAssetPanel({
       sort?.column ?? null,
       sort?.direction ?? null,
       filtersKey,
+      highlightsKey,
       isTemporalHistogram ? timeGranularity : binCount,
       selectionKey,
       persistedState?.override_schema_hash ?? null,
@@ -212,6 +219,9 @@ export function HistogramAssetPanel({
   const resolvedPage = table?.page ?? { index: pageIndex, size: pageSize }
   const resolvedSort = table?.sort?.[0] ?? null
   const resolvedFilters = Array.isArray(response?.resolved_modifiers.filters) ? response.resolved_modifiers.filters : filters
+  const resolvedHighlights = Array.isArray(response?.resolved_modifiers.highlights)
+    ? response.resolved_modifiers.highlights as AssetHighlight[]
+    : highlights
   const resolvedBinCount = typeof response?.resolved_modifiers.bin_count === 'number' ? response.resolved_modifiers.bin_count : binCount
   const resolvedTimeGranularity = granularityFromValue(response?.resolved_modifiers.granularity) ?? timeGranularity
   const availableColumns = modifierColumns.length
@@ -299,6 +309,7 @@ export function HistogramAssetPanel({
     setPageSize(resetState.page.size)
     setSort(resetState.sort)
     setFilters(resetState.filters)
+    setHighlights(resetState.highlights ?? [])
     setBinCount(resetState.binCount ?? 20)
     setBinCountInput(String(resetState.binCount ?? 20))
     setTimeGranularity(resetState.granularity ?? 'auto')
@@ -480,6 +491,7 @@ export function HistogramAssetPanel({
             columns={availableColumns}
             activeSort={resolvedSort}
             activeFilters={resolvedFilters}
+            activeHighlights={resolvedHighlights}
             viewerMode={viewerMode}
             disabled={overrideIncompatible || overrideValidationBlocked || prepareQuery.isFetching}
             totalRows={baseRows}
@@ -513,6 +525,10 @@ export function HistogramAssetPanel({
             onRemoveFilter={(columnId) => {
               setPageIndex(0)
               setFilters((current) => removeFilter(current, columnId))
+            }}
+            onApplyHighlights={(columnId, nextHighlights) => {
+              setPageIndex(0)
+              setHighlights((current) => replaceHighlightsForColumn(current, columnId, nextHighlights))
             }}
             onClearFilters={handleClearTableFilters}
           />

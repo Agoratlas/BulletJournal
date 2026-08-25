@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
 
-import { ChevronDown, ChevronUp, ChevronsUpDown, Funnel } from '../../components/Icons'
-import type { AssetFilter, AssetFilterKind, AssetSort, PreparedTablePayload } from '../../lib/types'
+import { ChevronDown, ChevronUp, ChevronsUpDown, Funnel, Palette } from '../../components/Icons'
+import type { AssetFilter, AssetFilterKind, AssetHighlight, AssetSort, PreparedTablePayload } from '../../lib/types'
 import {
   buildFilterFromInputs,
   dataTypeCategory,
@@ -204,26 +204,87 @@ function DataFrameHeaderFilterMenu({
   )
 }
 
+function DataFrameHeaderHighlightMenu({
+  column,
+  activeHighlights,
+  disabled,
+  onApplyHighlights,
+  onClose,
+}: {
+  column: ModifierColumn
+  activeHighlights: AssetHighlight[]
+  disabled: boolean
+  onApplyHighlights: (columnId: string, highlights: AssetHighlight[]) => void
+  onClose: () => void
+}) {
+  const initial = activeHighlights[0]
+  const draft = filterDraftFromColumn(column, initial)
+  const [kind, setKind] = useState<AssetFilterKind>(draft.kind)
+  const [rangeLower, setRangeLower] = useState(draft.rangeLower)
+  const [rangeUpper, setRangeUpper] = useState(draft.rangeUpper)
+  const [valueInput, setValueInput] = useState(draft.valueInput)
+  const [includeNull, setIncludeNull] = useState(draft.includeNull)
+  const [regexPattern, setRegexPattern] = useState(draft.regexPattern)
+  const [regexCaseSensitive, setRegexCaseSensitive] = useState(draft.regexCaseSensitive)
+  const [color, setColor] = useState(initial?.highlight_color ?? '#f0bd20')
+  const [scope, setScope] = useState<'cell' | 'row'>(initial?.highlight_scope ?? 'cell')
+  const [error, setError] = useState<string | null>(null)
+  const category = dataTypeCategory(column.dataType)
+  function apply() {
+    try {
+      const filter = buildFilterFromInputs({ column, kind, rangeLower, rangeUpper, valueInput, includeNull, regexPattern, regexCaseSensitive })
+      onApplyHighlights(column.id, [{ ...filter, highlight_color: color, highlight_scope: scope }])
+      onClose()
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : 'Could not apply this highlight.')
+    }
+  }
+  return (
+    <div className="asset-table-filter-menu" onClick={(event) => event.stopPropagation()}>
+      <select value={kind} onChange={(event) => setKind(event.target.value as AssetFilterKind)} disabled={disabled} aria-label={`Highlight type for ${column.title}`}>
+        {column.filterKinds.map((entry) => <option key={entry} value={entry}>{filterKindLabel(entry)}</option>)}
+      </select>
+      {kind === 'range' ? <div className="asset-table-filter-range-fields"><input value={rangeLower} onChange={(event) => setRangeLower(event.target.value)} placeholder={rangeFilterPlaceholder(column.dataType, 'lower')} inputMode={category === 'numeric' ? 'decimal' : undefined} /><span>-</span><input value={rangeUpper} onChange={(event) => setRangeUpper(event.target.value)} placeholder={rangeFilterPlaceholder(column.dataType, 'upper')} inputMode={category === 'numeric' ? 'decimal' : undefined} /></div> : null}
+      {kind === 'value' ? <><input value={valueInput} onChange={(event) => setValueInput(event.target.value)} placeholder={valueFilterPlaceholder(column.dataType)} inputMode={category === 'numeric' ? 'decimal' : undefined} /><label className="asset-table-filter-checkbox"><input type="checkbox" checked={includeNull} onChange={(event) => setIncludeNull(event.target.checked)} /><span>Include empty</span></label></> : null}
+      {kind === 'regex' ? <><input value={regexPattern} onChange={(event) => setRegexPattern(event.target.value)} placeholder="Pattern" /><label className="asset-table-filter-checkbox"><input type="checkbox" checked={regexCaseSensitive} onChange={(event) => setRegexCaseSensitive(event.target.checked)} /><span>Case-sensitive</span></label></> : null}
+      <div className="asset-table-highlight-style">
+        <input type="color" value={color} onChange={(event) => setColor(event.target.value)} disabled={disabled} aria-label={`Highlight color for ${column.title}`} />
+        <select value={scope} onChange={(event) => setScope(event.target.value as 'cell' | 'row')} disabled={disabled} aria-label={`Highlight scope for ${column.title}`}>
+          <option value="cell">Cell only</option>
+          <option value="row">Entire row</option>
+        </select>
+      </div>
+      {error ? <p className="asset-table-filter-error">{error}</p> : null}
+      <div className="asset-table-filter-menu-actions"><button type="button" className="ghost asset-inline-action asset-table-filter-clear" disabled={disabled || !activeHighlights.length} onClick={() => { onApplyHighlights(column.id, []); onClose() }}>Clear</button><button type="button" className="secondary asset-table-filter-apply" onClick={apply} disabled={disabled}>Apply</button></div>
+    </div>
+  )
+}
+
 export function PreparedTable({
   table,
   columns,
   activeSort,
   activeFilters,
+  activeHighlights,
   disabled,
   onToggleSort,
   onApplyFilter,
   onRemoveFilter,
+  onApplyHighlights,
 }: {
   table: PreparedTablePayload
   columns: ModifierColumn[]
   activeSort: AssetSort | null
   activeFilters: AssetFilter[]
+  activeHighlights: AssetHighlight[]
   disabled: boolean
   onToggleSort: (column: string) => void
   onApplyFilter: (filter: AssetFilter) => void
   onRemoveFilter: (columnId: string) => void
+  onApplyHighlights?: (columnId: string, highlights: AssetHighlight[]) => void
 }) {
   const [openFilterColumnId, setOpenFilterColumnId] = useState<string | null>(null)
+  const [openHighlightColumnId, setOpenHighlightColumnId] = useState<string | null>(null)
   const [columnWidthOverrides, setColumnWidthOverrides] = useState<Record<string, number>>({})
   const [availableWidth, setAvailableWidth] = useState(0)
   const [overflow, setOverflow] = useState({ left: false, right: false })
@@ -237,7 +298,7 @@ export function PreparedTable({
   const tableWidth = Object.values(resolvedColumnWidths).reduce((total, width) => total + width, 0)
 
   useEffect(() => {
-    if (!openFilterColumnId) {
+    if (!openFilterColumnId && !openHighlightColumnId) {
       return
     }
     const handlePointerDown = (event: PointerEvent) => {
@@ -256,7 +317,7 @@ export function PreparedTable({
       window.removeEventListener('pointerdown', handlePointerDown)
       window.removeEventListener('keydown', handleKeyDown)
     }
-  }, [openFilterColumnId])
+  }, [openFilterColumnId, openHighlightColumnId])
 
   useEffect(() => {
     if (openFilterColumnId && !table.columns.some((column) => column.id === openFilterColumnId)) {
@@ -352,6 +413,8 @@ export function PreparedTable({
               const isActive = activeSort?.column === column.id
               const activeFilter = activeFilters.find((entry) => entry.column === column.id) ?? null
               const isFilterOpen = openFilterColumnId === column.id
+              const columnHighlights = activeHighlights.filter((entry) => entry.column === column.id)
+              const isHighlightOpen = openHighlightColumnId === column.id
               return (
                 <th key={column.id}>
                   <div className="asset-table-header-cell" ref={isFilterOpen ? openFilterCellRef : undefined}>
@@ -379,6 +442,7 @@ export function PreparedTable({
                             )}
                           </button>
                         ) : null}
+                        {filterColumn.filterKinds.length && onApplyHighlights ? <button type="button" className={`asset-table-header-action asset-table-highlight-toggle${columnHighlights.length ? ' has-active-highlight' : ''}`} onClick={() => setOpenHighlightColumnId((current) => current === column.id ? null : column.id)} disabled={disabled} aria-label={`${columnHighlights.length ? 'Edit' : 'Add'} highlight for ${column.title}`} title={`Highlight ${column.title}`}><Palette width={16} height={16} /></button> : null}
                         {filterColumn.filterKinds.length ? (
                           <button
                             type="button"
@@ -403,6 +467,7 @@ export function PreparedTable({
                         onClose={() => setOpenFilterColumnId(null)}
                       />
                     ) : null}
+                    {isHighlightOpen && filterColumn.filterKinds.length && onApplyHighlights ? <DataFrameHeaderHighlightMenu column={filterColumn} activeHighlights={columnHighlights} disabled={disabled} onApplyHighlights={onApplyHighlights} onClose={() => setOpenHighlightColumnId(null)} /> : null}
                   </div>
                   <button
                     type="button"
@@ -420,7 +485,7 @@ export function PreparedTable({
           {table.rows.length ? table.rows.map((row, index) => (
             <tr key={index}>
               {table.columns.map((column) => (
-                <td key={column.id}>{renderCellValue(row[column.id])}</td>
+                <td key={column.id} style={cellHighlightStyle(table, index, column.id)}>{renderCellValue(row[column.id])}</td>
               ))}
             </tr>
           )) : (
@@ -433,6 +498,11 @@ export function PreparedTable({
       </div>
     </div>
   )
+}
+
+function cellHighlightStyle(table: PreparedTablePayload, row: number, column: string) {
+  const highlight = table.cell_highlights?.find((entry) => entry.row === row && entry.column === column)
+  return highlight ? { backgroundColor: `color-mix(in srgb, ${highlight.color} 40%, transparent)` } : undefined
 }
 
 const DEFAULT_COLUMN_WIDTH = 100

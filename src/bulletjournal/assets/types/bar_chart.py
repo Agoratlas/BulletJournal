@@ -23,6 +23,7 @@ from bulletjournal.assets.prepare_utils import (
     json_safe_value,
     prepared_table_payload,
     resolve_filters,
+    resolve_highlights,
     resolve_page,
     resolve_sort,
 )
@@ -46,6 +47,7 @@ from bulletjournal.assets.types.pie_chart import (
 from bulletjournal.assets.validation import (
     merge_nested_dicts,
     validate_axis_modifier_defaults,
+    validate_highlights,
     validate_modifier_defaults,
     validate_number,
     validate_title_modifier_defaults,
@@ -148,6 +150,7 @@ def validate_bar_chart_modifier_defaults(value: dict[str, object] | None) -> Non
             'x_axis',
             'y_axis',
             'title',
+            'highlights',
         },
         context='Bar chart assets',
     )
@@ -307,6 +310,8 @@ def serialize_bar_chart(
     title: str,
     description: str | None,
 ) -> SerializedAssetVersion:
+    if asset.modifier_defaults and 'highlights' in asset.modifier_defaults:
+        validate_highlights(asset.modifier_defaults['highlights'], dataframe=asset.dataframe)
     persisted = object_store.persist_value(asset.dataframe, 'pandas.DataFrame')
     column_definitions = dataframe_column_definitions(asset.dataframe)
     normalized_aggregation = normalize_bar_chart_aggregation(asset.aggregation)
@@ -326,6 +331,7 @@ def serialize_bar_chart(
         'page': {'index': 0, 'size': 10},
         'sort': [],
         'filters': [],
+        'highlights': [],
         **merge_nested_dicts(
             bar_chart_modifier_defaults(
                 title=title,
@@ -414,6 +420,7 @@ def prepare_bar_chart(
     resolved_page = resolve_page(default_modifiers, modifier_overrides)
     resolved_sort = resolve_sort(default_modifiers, modifier_overrides, column_id_map)
     resolved_filters = resolve_filters(default_modifiers, modifier_overrides, column_id_map, schema)
+    resolved_highlights = resolve_highlights(default_modifiers, modifier_overrides, column_id_map, schema)
     resolved_category_order = resolve_category_order(
         default_modifiers,
         modifier_overrides,
@@ -468,11 +475,14 @@ def prepare_bar_chart(
             column_names=column_names,
             resolved_page=resolved_page,
             resolved_sort=resolved_sort,
+            resolved_highlights=resolved_highlights,
+            column_id_map=column_id_map,
         ),
     }, {
         'page': resolved_page,
         'sort': resolved_sort,
         'filters': resolved_filters,
+        'highlights': resolved_highlights,
     }
 
 

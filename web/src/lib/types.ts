@@ -229,6 +229,11 @@ export type AssetRegexFilter = {
 
 export type AssetFilter = AssetRangeFilter | AssetValueFilter | AssetRegexFilter
 
+export type AssetHighlight = AssetFilter & {
+  highlight_color: string
+  highlight_scope: 'cell' | 'row'
+}
+
 export type PreparedTableColumn = {
   id: string
   title: string
@@ -247,6 +252,11 @@ export type PreparedTablePayload = {
   }
   sort: AssetSort[]
   rows: Array<Record<string, unknown>>
+  cell_highlights: Array<{
+    row: number
+    column: string
+    color: string
+  }>
 }
 
 export type PreparedHistogramBin = {
@@ -362,6 +372,7 @@ export type AssetPrepareResponse = {
     }
     sort?: AssetSort[]
     filters?: AssetFilter[]
+    highlights?: AssetHighlight[]
     bin_count?: number
     granularity?: string
     [key: string]: unknown

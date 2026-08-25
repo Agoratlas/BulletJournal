@@ -62,7 +62,24 @@ chart = assets.Histogram(
 
 Interactive assets also have controls in their asset panel and dashboard panel. Dashboard panel changes are saved for that panel and override the notebook defaults without changing the notebook. Changes on a notebook's assets page are included when that page is saved as a dashboard. Resetting a panel returns it to the notebook defaults.
 
-Paging, sorting, and filtering are panel modifiers. They cannot be passed to an asset constructor. Chart clicks, selected slices, selected points, and selected ranges are temporary interactions rather than saved modifiers.
+Paging, sorting, and filtering are panel modifiers. Chart clicks, selected slices, selected points, and selected ranges are temporary interactions rather than saved modifiers.
+
+`highlights` can be passed to a table or chart asset constructor to color matching table cells or rows. Highlight predicates use the same `range`, `value`, and `regex` syntax as filters. Rules run in order; for a matching cell, the first rule wins. The configured hex color is rendered as a 40% transparent background.
+
+```python
+assets.DataFrame(
+    frame,
+    highlights=[
+        {
+            'kind': 'range',
+            'column': 'duration',
+            'lower': 120,
+            'highlight_color': '#ef4444',
+            'highlight_scope': 'cell',  # or 'row'
+        },
+    ],
+)
+```
 
 ## Shared interactive modifiers
 

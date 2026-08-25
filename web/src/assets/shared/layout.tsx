@@ -1,7 +1,7 @@
 import { useEffect, useId, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
 
 import { ChevronDown, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, Cog, Download } from '../../components/Icons'
-import type { AssetFilter, AssetSort, AssetRecord, PreparedTablePayload } from '../../lib/types'
+import type { AssetFilter, AssetHighlight, AssetSort, AssetRecord, PreparedTablePayload } from '../../lib/types'
 import {
   assetExportFilename,
   copyPng,
@@ -613,6 +613,7 @@ export function PreparedAssetTableSection({
   columns,
   activeSort,
   activeFilters,
+  activeHighlights,
   viewerMode = 'notebook',
   disabled,
   totalRows,
@@ -638,12 +639,14 @@ export function PreparedAssetTableSection({
   onToggleSort,
   onApplyFilter,
   onRemoveFilter,
+  onApplyHighlights,
   onClearFilters,
 }: {
   table: PreparedTablePayload
   columns: ModifierColumn[]
   activeSort: AssetSort | null
   activeFilters: AssetFilter[]
+  activeHighlights?: AssetHighlight[]
   viewerMode?: 'notebook' | 'dashboard'
   disabled: boolean
   totalRows: number
@@ -669,6 +672,7 @@ export function PreparedAssetTableSection({
   onToggleSort: (column: string) => void
   onApplyFilter: (filter: AssetFilter) => void
   onRemoveFilter: (columnId: string) => void
+  onApplyHighlights?: (columnId: string, highlights: AssetHighlight[]) => void
   onClearFilters?: () => void
 }) {
   const hasActiveFilters = activeFilters.length > 0
@@ -705,10 +709,12 @@ export function PreparedAssetTableSection({
             columns={columns}
             activeSort={activeSort}
             activeFilters={activeFilters}
+            activeHighlights={activeHighlights ?? []}
             disabled={disabled}
             onToggleSort={onToggleSort}
             onApplyFilter={onApplyFilter}
             onRemoveFilter={onRemoveFilter}
+            onApplyHighlights={onApplyHighlights}
           />
           <div className="asset-dataframe-toolbar">
             <div className="asset-dataframe-stats">

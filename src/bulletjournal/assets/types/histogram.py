@@ -18,6 +18,7 @@ from bulletjournal.assets.prepare_utils import (
     numeric_plot_domain,
     prepared_table_payload,
     resolve_filters,
+    resolve_highlights,
     resolve_page,
     resolve_sort,
 )
@@ -33,6 +34,7 @@ from bulletjournal.assets.serialization import (
 from bulletjournal.assets.validation import (
     merge_nested_dicts,
     validate_axis_modifier_defaults,
+    validate_highlights,
     validate_modifier_defaults,
     validate_number,
     validate_title_modifier_defaults,
@@ -109,7 +111,7 @@ class Histogram(BaseAsset):
 def validate_histogram_modifier_defaults(value: dict[str, object] | None) -> None:
     validate_modifier_defaults(
         value,
-        allowed_keys={'bar_width', 'border_thickness', 'x_axis', 'y_axis', 'title'},
+        allowed_keys={'bar_width', 'border_thickness', 'x_axis', 'y_axis', 'title', 'highlights'},
         context='Histogram assets',
     )
     if value is None:
@@ -229,6 +231,8 @@ def serialize_histogram(
     title: str,
     description: str | None,
 ) -> SerializedAssetVersion:
+    if asset.modifier_defaults and 'highlights' in asset.modifier_defaults:
+        validate_highlights(asset.modifier_defaults['highlights'], dataframe=asset.dataframe)
     persisted = object_store.persist_value(asset.dataframe, 'pandas.DataFrame')
     column_definitions = dataframe_column_definitions(asset.dataframe)
     histogram_category = histogram_value_category(asset.dataframe[asset.x])
@@ -240,6 +244,7 @@ def serialize_histogram(
         'page': {'index': 0, 'size': 10},
         'sort': [],
         'filters': [],
+        'highlights': [],
         **merge_nested_dicts(
             histogram_chart_modifier_defaults(
                 title=title,
@@ -308,6 +313,7 @@ def prepare_histogram(
     resolved_page = resolve_page(default_modifiers, modifier_overrides)
     resolved_sort = resolve_sort(default_modifiers, modifier_overrides, column_id_map)
     resolved_filters = resolve_filters(default_modifiers, modifier_overrides, column_id_map, schema)
+    resolved_highlights = resolve_highlights(default_modifiers, modifier_overrides, column_id_map, schema)
     filtered_frame = frame_with_filters(frame, resolved_filters, column_id_map)
     selection_ranges = resolve_histogram_selection_ranges(
         transient_modifiers,
@@ -345,11 +351,14 @@ def prepare_histogram(
             column_names=column_names,
             resolved_page=resolved_page,
             resolved_sort=resolved_sort,
+            resolved_highlights=resolved_highlights,
+            column_id_map=column_id_map,
         ),
     }, {
         'page': resolved_page,
         'sort': resolved_sort,
         'filters': resolved_filters,
+        'highlights': resolved_highlights,
         **resolved_bucket_modifiers,
     }
 

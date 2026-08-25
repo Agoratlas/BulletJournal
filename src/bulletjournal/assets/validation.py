@@ -1,8 +1,29 @@
 from __future__ import annotations
 
+import re
 from typing import Any
 
 import pandas as pd
+
+HIGHLIGHT_COLOR_PATTERN = re.compile(r'^#[0-9a-fA-F]{6}$')
+
+
+def validate_highlights(value: object, *, dataframe: pd.DataFrame, label: str = 'Highlights') -> None:
+    if not isinstance(value, list):
+        raise TypeError(f'{label} must be a list.')
+    for entry in value:
+        if not isinstance(entry, dict):
+            raise TypeError(f'{label} entries must be dicts.')
+        column = entry.get('column')
+        if not isinstance(column, str) or column not in dataframe.columns:
+            raise ValueError(f'{label} entry references unknown column `{column}`.')
+        if entry.get('kind') not in {'range', 'value', 'regex'}:
+            raise TypeError(f'{label} entries require kind `range`, `value`, or `regex`.')
+        if entry.get('highlight_scope', 'cell') not in {'cell', 'row'}:
+            raise TypeError(f'{label} entry scope must be `cell` or `row`.')
+        color = entry.get('highlight_color')
+        if not isinstance(color, str) or not HIGHLIGHT_COLOR_PATTERN.fullmatch(color):
+            raise TypeError(f'{label} entry color must be a six-digit hex color.')
 
 
 def validate_optional_asset_column(dataframe: pd.DataFrame, column: str | None, *, label: str) -> None:

@@ -3,7 +3,7 @@ import { useQuery } from '@tanstack/react-query'
 import embed, { type Result as VegaEmbedResult, type VisualizationSpec } from 'vega-embed'
 
 import { prepareAsset } from '../../lib/api'
-import type { AssetFilter, AssetSort, PreparedBarChartPayload } from '../../lib/types'
+import type { AssetFilter, AssetHighlight, AssetSort, PreparedBarChartPayload } from '../../lib/types'
 import {
   buildAxisSpec,
   buildChartPadding,
@@ -38,6 +38,7 @@ import {
   modifierColumnsFromSchema,
   modifierTitle,
   nextSortForColumn,
+  replaceHighlightsForColumn,
   normalizePanelHeight,
   optionalNonNegativeNumberFromInput,
   optionalNumberFromInput,
@@ -95,6 +96,7 @@ export function BarChartAssetPanel({
   const [pageSize, setPageSize] = useState(initialTableState.page.size)
   const [sort, setSort] = useState<AssetSort | null>(initialTableState.sort)
   const [filters, setFilters] = useState<AssetFilter[]>(initialTableState.filters)
+  const [highlights, setHighlights] = useState<AssetHighlight[]>(initialTableState.highlights ?? [])
   const [chartOverrides, setChartOverrides] = useState<BarChartChartOverrides>(initialChartOverrides)
   const [selectedCategories, setSelectedCategories] = useState<BarChartSelectionValue[]>([])
   const [pageInput, setPageInput] = useState(String(initialTableState.page.index + 1))
@@ -106,16 +108,18 @@ export function BarChartAssetPanel({
   )
   const isApplyingPersistedStateRef = useRef(false)
   const filtersKey = JSON.stringify(filters)
+  const highlightsKey = JSON.stringify(highlights)
   const selectionKey = stableValueKey(selectedCategories)
   const externalStateKey = useMemo(
     () => tableStateKey(initialTableState),
-    [initialTableState.filters, initialTableState.page.index, initialTableState.page.size, initialTableState.sort?.column, initialTableState.sort?.direction],
+    [initialTableState.filters, initialTableState.highlights, initialTableState.page.index, initialTableState.page.size, initialTableState.sort?.column, initialTableState.sort?.direction],
   )
   const externalChartOverridesKey = useMemo(() => stableValueKey(initialChartOverrides), [initialChartOverrides])
   const localStateKey = tableStateKey({
     page: { index: pageIndex, size: pageSize },
     sort,
     filters,
+    highlights,
   })
   const localChartOverridesKey = stableValueKey(chartOverrides)
   const modifierOverrides = useMemo(
@@ -123,9 +127,10 @@ export function BarChartAssetPanel({
       page: { index: pageIndex, size: pageSize },
       sort: sort ? [sort] : [],
       filters,
+      highlights,
       ...serializeBarChartModifierValues(chartOverrides),
     }, asset.default_modifiers),
-    [asset.default_modifiers, chartOverrides, filters, pageIndex, pageSize, sort],
+    [asset.default_modifiers, chartOverrides, filters, highlights, pageIndex, pageSize, sort],
   )
   const overrideValidationKey = requiresOverrideValidation ? stableValueKey(modifierOverrides) : null
 
@@ -138,6 +143,7 @@ export function BarChartAssetPanel({
     setPageSize(initialTableState.page.size)
     setSort(initialTableState.sort)
     setFilters(initialTableState.filters)
+    setHighlights(initialTableState.highlights ?? [])
     setSelectedCategories([])
     setPageInput(String(initialTableState.page.index + 1))
   }, [asset.current_asset_version_id, externalStateKey])
@@ -171,6 +177,7 @@ export function BarChartAssetPanel({
       sort?.column ?? null,
       sort?.direction ?? null,
       filtersKey,
+      highlightsKey,
       selectionKey,
       persistedState?.override_schema_hash ?? null,
       overrideValidationKey,
@@ -203,6 +210,9 @@ export function BarChartAssetPanel({
   const resolvedPage = table?.page ?? { index: pageIndex, size: pageSize }
   const resolvedSort = table?.sort?.[0] ?? null
   const resolvedFilters = Array.isArray(response?.resolved_modifiers.filters) ? response.resolved_modifiers.filters : filters
+  const resolvedHighlights = Array.isArray(response?.resolved_modifiers.highlights)
+    ? response.resolved_modifiers.highlights as AssetHighlight[]
+    : highlights
   const availableColumns = modifierColumns.length
     ? modifierColumns
     : (table?.columns ?? []).map((column) => ({
@@ -277,6 +287,7 @@ export function BarChartAssetPanel({
     setPageSize(resetState.page.size)
     setSort(resetState.sort)
     setFilters(resetState.filters)
+    setHighlights(resetState.highlights ?? [])
     setChartOverrides(chartOverrideDefaults)
     setSelectedCategories([])
     setPageInput(String(resetState.page.index + 1))
@@ -450,6 +461,7 @@ export function BarChartAssetPanel({
             columns={availableColumns}
             activeSort={resolvedSort}
             activeFilters={resolvedFilters}
+            activeHighlights={resolvedHighlights}
             viewerMode={viewerMode}
             disabled={overrideIncompatible || overrideValidationBlocked || prepareQuery.isFetching}
             totalRows={baseRows}
@@ -483,6 +495,10 @@ export function BarChartAssetPanel({
             onRemoveFilter={(columnId) => {
               setPageIndex(0)
               setFilters((current) => removeFilter(current, columnId))
+            }}
+            onApplyHighlights={(columnId, nextHighlights) => {
+              setPageIndex(0)
+              setHighlights((current) => replaceHighlightsForColumn(current, columnId, nextHighlights))
             }}
             onClearFilters={handleClearTableFilters}
           />

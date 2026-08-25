@@ -12,6 +12,7 @@ from bulletjournal.domain.errors import InvalidRequestError
 
 ALLOWED_PAGE_SIZES = {10, 25, 50, 100}
 DEFAULT_PAGE_SIZE = 25
+HIGHLIGHT_COLOR_PATTERN = re.compile(r'^#[0-9a-fA-F]{6}$')
 
 
 def backing_dataset_object(objects: object) -> dict[str, Any]:
@@ -30,12 +31,21 @@ def prepared_table_payload(
     column_names: list[str],
     resolved_page: dict[str, int],
     resolved_sort: list[dict[str, str]],
+    resolved_highlights: list[dict[str, Any]] | None = None,
+    column_id_map: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     rows_total_frame = frame.select(pl.len().alias('rows_total')).collect()
     rows_total = int(rows_total_frame['rows_total'][0]) if rows_total_frame.height else 0
     page_index = resolved_page['index']
     page_size = resolved_page['size']
-    rows = frame.slice(page_index * page_size, page_size).collect().to_dicts()
+    page_frame = frame.slice(page_index * page_size, page_size)
+    rows = page_frame.collect().to_dicts()
+    cell_highlights = prepared_cell_highlights(
+        page_frame,
+        resolved_highlights or [],
+        column_names=column_names,
+        column_id_map=column_id_map or {str(name): name for name in column_names},
+    )
     return {
         'kind': 'table',
         'rows_total': rows_total,
@@ -52,6 +62,7 @@ def prepared_table_payload(
         'page': resolved_page,
         'sort': resolved_sort,
         'rows': [{str(key): json_safe_value(value) for key, value in row.items()} for row in rows],
+        'cell_highlights': cell_highlights,
     }
 
 
@@ -153,6 +164,45 @@ def resolve_filters(
     return resolved
 
 
+def resolve_highlights(
+    default_modifiers: dict[str, Any],
+    modifier_overrides: dict[str, Any],
+    column_id_map: dict[str, Any],
+    schema: pl.Schema,
+) -> list[dict[str, Any]]:
+    candidate = default_modifiers.get('highlights') if isinstance(default_modifiers, dict) else []
+    if 'highlights' in modifier_overrides:
+        candidate = modifier_overrides['highlights']
+    if candidate in (None, []):
+        return []
+    if not isinstance(candidate, list):
+        raise InvalidRequestError('modifier_overrides.highlights must be an array.')
+    resolved: list[dict[str, Any]] = []
+    for entry in candidate:
+        if not isinstance(entry, dict):
+            raise InvalidRequestError('modifier_overrides.highlights entries must be objects.')
+        column = entry.get('column')
+        if not isinstance(column, str) or column not in column_id_map:
+            raise InvalidRequestError(f'Unknown highlight column `{column}`.')
+        kind = entry.get('kind')
+        if kind not in {'range', 'value', 'regex'}:
+            raise InvalidRequestError('Highlight kind must be `range`, `value`, or `regex`.')
+        scope = entry.get('highlight_scope', 'cell')
+        if scope not in {'cell', 'row'}:
+            raise InvalidRequestError('Highlight scope must be `cell` or `row`.')
+        color = entry.get('highlight_color')
+        if not isinstance(color, str) or not HIGHLIGHT_COLOR_PATTERN.fullmatch(color):
+            raise InvalidRequestError('Highlight color must be a six-digit hex color such as `#ff0000`.')
+        resolved.append(
+            {
+                **resolve_filter_entry(column=column, kind=str(kind), dtype=schema[column_id_map[column]], entry=entry),
+                'highlight_scope': scope,
+                'highlight_color': color.lower(),
+            }
+        )
+    return resolved
+
+
 def resolve_filter_entry(
     *,
     column: str,
@@ -214,29 +264,63 @@ def resolve_filter_entry(
 
 
 def apply_filter(frame: pl.LazyFrame, filter_entry: dict[str, Any], column_id_map: dict[str, Any]) -> pl.LazyFrame:
-    column_name = column_id_map[filter_entry['column']]
-    expression = pl.col(column_name)
+    return frame.filter(filter_predicate(filter_entry, column_id_map))
+
+
+def filter_predicate(filter_entry: dict[str, Any], column_id_map: dict[str, Any]) -> pl.Expr:
+    expression = pl.col(column_id_map[filter_entry['column']])
     kind = filter_entry['kind']
     if kind == 'range':
         value_type = str(filter_entry.get('value_type') or '')
         lower = restore_filter_value(filter_entry.get('lower'), value_type=value_type)
         upper = restore_filter_value(filter_entry.get('upper'), value_type=value_type)
         if lower is not None:
-            frame = frame.filter(expression >= lower)
+            predicate = expression >= lower
+        else:
+            predicate = pl.lit(True)
         if upper is not None:
-            frame = frame.filter(expression <= upper)
-        return frame
+            predicate = predicate & (expression <= upper)
+        return predicate.fill_null(False)
     if kind == 'value':
         value_type = str(filter_entry.get('value_type') or '')
         values = [restore_filter_value(item, value_type=value_type) for item in filter_entry.get('values', [])]
         predicate = expression.is_in(values).fill_null(False) if values else pl.lit(False)
         if bool(filter_entry.get('include_null', False)):
             predicate = predicate | expression.is_null()
-        return frame.filter(predicate)
+        return predicate.fill_null(False)
     pattern = str(filter_entry['pattern'])
     if not bool(filter_entry.get('case_sensitive', False)):
         pattern = f'(?i){pattern}'
-    return frame.filter(expression.cast(pl.Utf8).str.contains(pattern).fill_null(False))
+    return expression.cast(pl.Utf8).str.contains(pattern).fill_null(False)
+
+
+def prepared_cell_highlights(
+    page_frame: pl.LazyFrame,
+    resolved_highlights: list[dict[str, Any]],
+    *,
+    column_names: list[str],
+    column_id_map: dict[str, Any],
+) -> list[dict[str, Any]]:
+    if not resolved_highlights:
+        return []
+    matches = page_frame.select(
+        [filter_predicate(rule, column_id_map).alias(str(index)) for index, rule in enumerate(resolved_highlights)]
+    ).collect()
+    claimed: set[tuple[int, str]] = set()
+    highlights: list[dict[str, Any]] = []
+    column_ids = [str(column) for column in column_names]
+    for rule_index, rule in enumerate(resolved_highlights):
+        for row_index, matched in enumerate(matches[str(rule_index)].to_list()):
+            if not matched:
+                continue
+            target_columns = column_ids if rule['highlight_scope'] == 'row' else [rule['column']]
+            for column in target_columns:
+                key = (row_index, column)
+                if key in claimed:
+                    continue
+                claimed.add(key)
+                highlights.append({'row': row_index, 'column': column, 'color': rule['highlight_color']})
+    return highlights
 
 
 def coerce_page_index(value: object) -> int:

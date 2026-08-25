@@ -81,6 +81,15 @@ def dataset_modifier_schema(
             'default_value': default_modifiers['filters'],
             'columns': column_definitions,
         },
+        {
+            'id': 'highlights',
+            'title': 'Highlights',
+            'kind': 'highlights',
+            'category': 'saved_query',
+            'server_targets': ['table'],
+            'default_value': default_modifiers['highlights'],
+            'columns': column_definitions,
+        },
     ]
 
 

@@ -383,6 +383,68 @@ def _():
     date_payload = prepared_date_filter.json()
     assert [row['value'] for row in date_payload['payloads']['table']['rows']] == [10, 9, 8]
 
+    prepared_highlights = client.post(
+        '/api/v1/assets/asset_node/table/prepare',
+        json={
+            'modifier_overrides': {
+                'sort': [{'column': 'value', 'direction': 'asc'}],
+                'highlights': [
+                    {
+                        'kind': 'range',
+                        'column': 'value',
+                        'lower': 3,
+                        'upper': 5,
+                        'highlight_color': '#ff0000',
+                        'highlight_scope': 'cell',
+                    },
+                    {
+                        'kind': 'range',
+                        'column': 'value',
+                        'lower': 4,
+                        'upper': 6,
+                        'highlight_color': '#00ff00',
+                        'highlight_scope': 'row',
+                    },
+                ],
+            }
+        },
+    )
+
+    assert prepared_highlights.status_code == 200
+    highlights_payload = prepared_highlights.json()
+    assert highlights_payload['resolved_modifiers']['highlights'] == [
+        {
+            'kind': 'range',
+            'column': 'value',
+            'value_type': 'numeric',
+            'lower': 3,
+            'upper': 5,
+            'highlight_color': '#ff0000',
+            'highlight_scope': 'cell',
+        },
+        {
+            'kind': 'range',
+            'column': 'value',
+            'value_type': 'numeric',
+            'lower': 4,
+            'upper': 6,
+            'highlight_color': '#00ff00',
+            'highlight_scope': 'row',
+        },
+    ]
+    assert highlights_payload['payloads']['table']['cell_highlights'] == [
+        {'row': 2, 'column': 'value', 'color': '#ff0000'},
+        {'row': 3, 'column': 'value', 'color': '#ff0000'},
+        {'row': 4, 'column': 'value', 'color': '#ff0000'},
+        {'row': 3, 'column': 'label', 'color': '#00ff00'},
+        {'row': 3, 'column': 'created', 'color': '#00ff00'},
+        {'row': 4, 'column': 'label', 'color': '#00ff00'},
+        {'row': 4, 'column': 'created', 'color': '#00ff00'},
+        {'row': 5, 'column': 'value', 'color': '#00ff00'},
+        {'row': 5, 'column': 'label', 'color': '#00ff00'},
+        {'row': 5, 'column': 'created', 'color': '#00ff00'},
+    ]
+
 
 def test_histogram_asset_prepare_returns_chart_and_linked_table(tmp_path) -> None:
     project_root = init_project_root(tmp_path / 'project').root

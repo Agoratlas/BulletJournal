@@ -17,6 +17,7 @@ from bulletjournal.assets.prepare_utils import (
     numeric_plot_domain,
     prepared_table_payload,
     resolve_filters,
+    resolve_highlights,
     resolve_page,
     resolve_sort,
 )
@@ -32,6 +33,7 @@ from bulletjournal.assets.serialization import (
 from bulletjournal.assets.validation import (
     merge_nested_dicts,
     validate_axis_modifier_defaults,
+    validate_highlights,
     validate_modifier_defaults,
     validate_number,
     validate_optional_asset_column,
@@ -121,6 +123,7 @@ def validate_scatter_plot_modifier_defaults(value: dict[str, object] | None) -> 
             'x_axis',
             'y_axis',
             'title',
+            'highlights',
         },
         context='Scatter plot assets',
     )
@@ -243,12 +246,15 @@ def serialize_scatter_plot(
     title: str,
     description: str | None,
 ) -> SerializedAssetVersion:
+    if asset.modifier_defaults and 'highlights' in asset.modifier_defaults:
+        validate_highlights(asset.modifier_defaults['highlights'], dataframe=asset.dataframe)
     persisted = object_store.persist_value(asset.dataframe, 'pandas.DataFrame')
     column_definitions = dataframe_column_definitions(asset.dataframe)
     default_modifiers = {
         'page': {'index': 0, 'size': 10},
         'sort': [],
         'filters': [],
+        'highlights': [],
         **merge_nested_dicts(
             scatter_plot_modifier_defaults(title=title, x_column=str(asset.x), y_column=str(asset.y)),
             asset.modifier_defaults,
@@ -335,6 +341,7 @@ def prepare_scatter_plot(
     resolved_page = resolve_page(default_modifiers, modifier_overrides)
     resolved_sort = resolve_sort(default_modifiers, modifier_overrides, column_id_map)
     resolved_filters = resolve_filters(default_modifiers, modifier_overrides, column_id_map, schema)
+    resolved_highlights = resolve_highlights(default_modifiers, modifier_overrides, column_id_map, schema)
     filtered_frame = frame_with_filters(frame, resolved_filters, column_id_map)
     selection_bounds = resolve_scatter_plot_selection_bounds(
         transient_modifiers,
@@ -378,11 +385,14 @@ def prepare_scatter_plot(
             column_names=column_names,
             resolved_page=resolved_page,
             resolved_sort=resolved_sort,
+            resolved_highlights=resolved_highlights,
+            column_id_map=column_id_map,
         ),
     }, {
         'page': resolved_page,
         'sort': resolved_sort,
         'filters': resolved_filters,
+        'highlights': resolved_highlights,
     }
 
 

@@ -35,7 +35,42 @@ def _():
 
 @app.cell
 def _(movies_df):
-    duration_hist = assets.Histogram(movies_df[movies_df['duration'] < 180], x='duration')
+    duration_hist = assets.Histogram(
+        movies_df[movies_df['duration'] < 180],
+        x='duration',
+        highlights=[
+            {
+                'kind': 'range',
+                'column': 'duration',
+                'upper': 79,
+                'highlight_color': '#22c55e',
+                'highlight_scope': 'cell',
+            },
+            {
+                'kind': 'range',
+                'column': 'duration',
+                'lower': 80,
+                'upper': 100,
+                'highlight_color': '#eab308',
+                'highlight_scope': 'cell',
+            },
+            {
+                'kind': 'range',
+                'column': 'duration',
+                'lower': 100,
+                'upper': 120,
+                'highlight_color': '#f97316',
+                'highlight_scope': 'cell',
+            },
+            {
+                'kind': 'range',
+                'column': 'duration',
+                'lower': 120,
+                'highlight_color': '#ef4444',
+                'highlight_scope': 'cell',
+            },
+        ],
+    )
 
     assets.push(duration_hist, name='duration_hist', title='Distribution of movie durations (<3h)')
     return

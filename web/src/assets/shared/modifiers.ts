@@ -1,4 +1,4 @@
-import type { AssetFilter, AssetFilterKind, AssetSort } from '../../lib/types'
+import type { AssetFilter, AssetFilterKind, AssetHighlight, AssetSort } from '../../lib/types'
 import type {
   BarChartChartOverrides,
   BarChartGroupMode,
@@ -30,7 +30,8 @@ export function initialTableStateFromModifiers(
     ?? { index: 0, size: defaultPageSize }
   const sort = sortFromValue(mergedModifierValue(defaultModifiers.sort, modifierOverrides.sort)) ?? null
   const filters = filtersFromValue(mergedModifierValue(defaultModifiers.filters, modifierOverrides.filters)) ?? []
-  return { page, sort, filters }
+  const highlights = highlightsFromValue(mergedModifierValue(defaultModifiers.highlights, modifierOverrides.highlights)) ?? []
+  return { page, sort, filters, highlights }
 }
 
 export function initialHistogramStateFromModifiers(
@@ -484,6 +485,30 @@ export function filtersFromValue(value: unknown): AssetFilter[] | null {
   return filters
 }
 
+export function highlightsFromValue(value: unknown): AssetHighlight[] | null {
+  if (value === undefined) {
+    return null
+  }
+  if (!Array.isArray(value)) {
+    return []
+  }
+  return value.flatMap((entry) => {
+    if (!entry || typeof entry !== 'object') {
+      return []
+    }
+    const record = entry as Record<string, unknown>
+    if (
+      typeof record.highlight_color !== 'string'
+      || !/^#[0-9a-f]{6}$/i.test(record.highlight_color)
+      || (record.highlight_scope !== 'cell' && record.highlight_scope !== 'row')
+    ) {
+      return []
+    }
+    const [filter] = filtersFromValue([record]) ?? []
+    return filter ? [{ ...filter, highlight_color: record.highlight_color, highlight_scope: record.highlight_scope }] : []
+  })
+}
+
 export function modifierColumnsFromSchema(modifierSchema: Array<Record<string, unknown>>): ModifierColumn[] {
   const filtersEntry = modifierSchema.find((entry) => entry.id === 'filters')
   if (!filtersEntry || !Array.isArray(filtersEntry.columns)) {
@@ -537,6 +562,7 @@ export function tableStateKey(state: TableState): string {
     page: state.page,
     sort: state.sort,
     filters: state.filters,
+    highlights: state.highlights ?? [],
   })
 }
 
@@ -545,6 +571,7 @@ export function histogramStateKey(state: HistogramState): string {
     page: state.page,
     sort: state.sort,
     filters: state.filters,
+    highlights: state.highlights ?? [],
     binCount: state.binCount,
     granularity: state.granularity,
   })
@@ -667,6 +694,10 @@ export function nextSortForColumn(current: AssetSort | null, column: string): As
 
 export function upsertFilter(current: AssetFilter[], filter: AssetFilter): AssetFilter[] {
   return [...current.filter((entry) => entry.column !== filter.column), filter]
+}
+
+export function replaceHighlightsForColumn(current: AssetHighlight[], column: string, next: AssetHighlight[]): AssetHighlight[] {
+  return [...current.filter((entry) => entry.column !== column), ...next]
 }
 
 export function removeFilter(current: AssetFilter[], columnId: string): AssetFilter[] {

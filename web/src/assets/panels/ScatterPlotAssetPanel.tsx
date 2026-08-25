@@ -3,7 +3,7 @@ import { useQuery } from '@tanstack/react-query'
 import embed, { type Result as VegaEmbedResult, type VisualizationSpec } from 'vega-embed'
 
 import { prepareAsset } from '../../lib/api'
-import type { AssetFilter, AssetSort, PreparedScatterPlotPayload } from '../../lib/types'
+import type { AssetFilter, AssetHighlight, AssetSort, PreparedScatterPlotPayload } from '../../lib/types'
 import {
   buildAxisSpec,
   buildChartPadding,
@@ -38,6 +38,7 @@ import {
   modifierFieldLabelClassName,
   modifierTitle,
   nextSortForColumn,
+  replaceHighlightsForColumn,
   clampNumberToRange,
   normalizePanelHeight,
   optionalPositiveNumberFromInput,
@@ -101,6 +102,7 @@ export function ScatterPlotAssetPanel({
   const [pageSize, setPageSize] = useState(initialTableState.page.size)
   const [sort, setSort] = useState<AssetSort | null>(initialTableState.sort)
   const [filters, setFilters] = useState<AssetFilter[]>(initialTableState.filters)
+  const [highlights, setHighlights] = useState<AssetHighlight[]>(initialTableState.highlights ?? [])
   const [chartOverrides, setChartOverrides] = useState<ScatterPlotChartOverrides>(initialChartOverrides)
   const [selectedBounds, setSelectedBounds] = useState<ScatterPlotSelectionBounds | null>(null)
   const [selectedPointRowIndex, setSelectedPointRowIndex] = useState<number | null>(null)
@@ -114,16 +116,18 @@ export function ScatterPlotAssetPanel({
   )
   const isApplyingPersistedStateRef = useRef(false)
   const filtersKey = JSON.stringify(filters)
+  const highlightsKey = JSON.stringify(highlights)
   const selectionKey = stableValueKey({ selectedBounds, selectedPointRowIndex, selectedLegend })
   const externalStateKey = useMemo(
     () => tableStateKey(initialTableState),
-    [initialTableState.filters, initialTableState.page.index, initialTableState.page.size, initialTableState.sort?.column, initialTableState.sort?.direction],
+    [initialTableState.filters, initialTableState.highlights, initialTableState.page.index, initialTableState.page.size, initialTableState.sort?.column, initialTableState.sort?.direction],
   )
   const externalChartOverridesKey = useMemo(() => stableValueKey(initialChartOverrides), [initialChartOverrides])
   const localStateKey = tableStateKey({
     page: { index: pageIndex, size: pageSize },
     sort,
     filters,
+    highlights,
   })
   const localChartOverridesKey = stableValueKey(chartOverrides)
   const modifierOverrides = useMemo(
@@ -131,9 +135,10 @@ export function ScatterPlotAssetPanel({
       page: { index: pageIndex, size: pageSize },
       sort: sort ? [sort] : [],
       filters,
+      highlights,
       ...serializeScatterPlotChartModifierValues(chartOverrides),
     }, asset.default_modifiers),
-    [asset.default_modifiers, chartOverrides, filters, pageIndex, pageSize, sort],
+    [asset.default_modifiers, chartOverrides, filters, highlights, pageIndex, pageSize, sort],
   )
   const overrideValidationKey = requiresOverrideValidation ? stableValueKey(modifierOverrides) : null
 
@@ -146,6 +151,7 @@ export function ScatterPlotAssetPanel({
     setPageSize(initialTableState.page.size)
     setSort(initialTableState.sort)
     setFilters(initialTableState.filters)
+    setHighlights(initialTableState.highlights ?? [])
     setSelectedBounds(null)
     setSelectedPointRowIndex(null)
     setSelectedLegend(null)
@@ -183,6 +189,7 @@ export function ScatterPlotAssetPanel({
       sort?.column ?? null,
       sort?.direction ?? null,
       filtersKey,
+      highlightsKey,
       selectionKey,
       persistedState?.override_schema_hash ?? null,
       overrideValidationKey,
@@ -215,6 +222,9 @@ export function ScatterPlotAssetPanel({
   const resolvedPage = table?.page ?? { index: pageIndex, size: pageSize }
   const resolvedSort = table?.sort?.[0] ?? null
   const resolvedFilters = Array.isArray(response?.resolved_modifiers.filters) ? response.resolved_modifiers.filters : filters
+  const resolvedHighlights = Array.isArray(response?.resolved_modifiers.highlights)
+    ? response.resolved_modifiers.highlights as AssetHighlight[]
+    : highlights
   const availableColumns = modifierColumns.length
     ? modifierColumns
     : (table?.columns ?? []).map((column) => ({
@@ -303,6 +313,7 @@ export function ScatterPlotAssetPanel({
     setPageSize(resetState.page.size)
     setSort(resetState.sort)
     setFilters(resetState.filters)
+    setHighlights(resetState.highlights ?? [])
     setChartOverrides(chartOverrideDefaults)
     setSelectedBounds(null)
     setSelectedPointRowIndex(null)
@@ -485,6 +496,7 @@ export function ScatterPlotAssetPanel({
             columns={availableColumns}
             activeSort={resolvedSort}
             activeFilters={resolvedFilters}
+            activeHighlights={resolvedHighlights}
             viewerMode={viewerMode}
             disabled={overrideIncompatible || overrideValidationBlocked || prepareQuery.isFetching}
             totalRows={baseRows}
@@ -518,6 +530,10 @@ export function ScatterPlotAssetPanel({
             onRemoveFilter={(columnId) => {
               setPageIndex(0)
               setFilters((current) => removeFilter(current, columnId))
+            }}
+            onApplyHighlights={(columnId, nextHighlights) => {
+              setPageIndex(0)
+              setHighlights((current) => replaceHighlightsForColumn(current, columnId, nextHighlights))
             }}
             onClearFilters={handleClearTableFilters}
           />

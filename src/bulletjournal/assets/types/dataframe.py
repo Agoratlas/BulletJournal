@@ -13,6 +13,7 @@ from bulletjournal.assets.prepare_utils import (
     frame_with_sort,
     prepared_table_payload,
     resolve_filters,
+    resolve_highlights,
     resolve_page,
     resolve_sort,
 )
@@ -23,11 +24,13 @@ from bulletjournal.assets.serialization import (
     dataframe_column_definitions,
     dataset_modifier_schema,
 )
+from bulletjournal.assets.validation import validate_highlights
 
 
 @dataclass(slots=True)
 class DataFrame(BaseAsset):
     dataframe: pd.DataFrame
+    highlights: list[dict[str, object]] | None = None
 
     asset_type_id = 'dataframe'
     interactive = True
@@ -35,6 +38,8 @@ class DataFrame(BaseAsset):
     def __post_init__(self) -> None:
         if not isinstance(self.dataframe, pd.DataFrame):
             raise TypeError('DataFrame assets require a pandas.DataFrame payload.')
+        if self.highlights is not None:
+            validate_highlights(self.highlights, dataframe=self.dataframe)
 
 
 def serialize_dataframe(
@@ -50,6 +55,7 @@ def serialize_dataframe(
         'page': {'index': 0, 'size': 25},
         'sort': [],
         'filters': [],
+        'highlights': asset.highlights or [],
     }
     modifier_schema = dataset_modifier_schema(
         column_definitions,
@@ -93,6 +99,7 @@ def prepare_dataframe(
     resolved_page = resolve_page(default_modifiers, modifier_overrides)
     resolved_sort = resolve_sort(default_modifiers, modifier_overrides, column_id_map)
     resolved_filters = resolve_filters(default_modifiers, modifier_overrides, column_id_map, schema)
+    resolved_highlights = resolve_highlights(default_modifiers, modifier_overrides, column_id_map, schema)
     table_frame = frame_with_filters(frame, resolved_filters, column_id_map)
     table_frame = frame_with_sort(table_frame, resolved_sort, column_id_map)
     return {
@@ -102,9 +109,12 @@ def prepare_dataframe(
             column_names=column_names,
             resolved_page=resolved_page,
             resolved_sort=resolved_sort,
+            resolved_highlights=resolved_highlights,
+            column_id_map=column_id_map,
         )
     }, {
         'page': resolved_page,
         'sort': resolved_sort,
         'filters': resolved_filters,
+        'highlights': resolved_highlights,
     }

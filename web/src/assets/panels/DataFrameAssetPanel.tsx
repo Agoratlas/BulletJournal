@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 
 import { prepareAsset } from '../../lib/api'
-import type { AssetFilter, AssetSort } from '../../lib/types'
+import type { AssetFilter, AssetHighlight, AssetSort } from '../../lib/types'
 import {
   AssetPanelFrame,
   ErrorPlaceholder,
@@ -18,6 +18,7 @@ import {
   modifierColumnsFromSchema,
   nextSortForColumn,
   removeFilter,
+  replaceHighlightsForColumn,
   stableValueKey,
   tableStateKey,
   upsertFilter,
@@ -52,6 +53,7 @@ export function DataFrameAssetPanel({
   const [pageSize, setPageSize] = useState(initialTableState.page.size)
   const [sort, setSort] = useState<AssetSort | null>(initialTableState.sort)
   const [filters, setFilters] = useState<AssetFilter[]>(initialTableState.filters)
+  const [highlights, setHighlights] = useState<AssetHighlight[]>(initialTableState.highlights ?? [])
   const [pageInput, setPageInput] = useState(String(initialTableState.page.index + 1))
   const requiresOverrideValidation = Boolean(
     persistedState
@@ -61,22 +63,25 @@ export function DataFrameAssetPanel({
   )
   const isApplyingPersistedStateRef = useRef(false)
   const filtersKey = JSON.stringify(filters)
+  const highlightsKey = JSON.stringify(highlights)
   const externalStateKey = useMemo(
     () => tableStateKey(initialTableState),
-    [initialTableState.filters, initialTableState.page.index, initialTableState.page.size, initialTableState.sort?.column, initialTableState.sort?.direction],
+    [initialTableState.filters, initialTableState.highlights, initialTableState.page.index, initialTableState.page.size, initialTableState.sort?.column, initialTableState.sort?.direction],
   )
   const localStateKey = tableStateKey({
     page: { index: pageIndex, size: pageSize },
     sort,
     filters,
+    highlights,
   })
   const modifierOverrides = useMemo(
     () => buildModifierOverridesRecord({
       page: { index: pageIndex, size: pageSize },
       sort: sort ? [sort] : [],
       filters,
+      highlights,
     }, asset.default_modifiers),
-    [asset.default_modifiers, filters, pageIndex, pageSize, sort],
+    [asset.default_modifiers, filters, highlights, pageIndex, pageSize, sort],
   )
   const overrideValidationKey = requiresOverrideValidation ? stableValueKey(modifierOverrides) : null
 
@@ -89,6 +94,7 @@ export function DataFrameAssetPanel({
     setPageSize(initialTableState.page.size)
     setSort(initialTableState.sort)
     setFilters(initialTableState.filters)
+    setHighlights(initialTableState.highlights ?? [])
     setPageInput(String(initialTableState.page.index + 1))
   }, [asset.current_asset_version_id, externalStateKey])
 
@@ -109,6 +115,7 @@ export function DataFrameAssetPanel({
       sort?.column ?? null,
       sort?.direction ?? null,
       filtersKey,
+      highlightsKey,
       persistedState?.override_schema_hash ?? null,
       overrideValidationKey,
       stableValueKey(preparePanelContext),
@@ -134,6 +141,9 @@ export function DataFrameAssetPanel({
   const resolvedPage = table?.page ?? { index: pageIndex, size: pageSize }
   const resolvedSort = table?.sort?.[0] ?? null
   const resolvedFilters = Array.isArray(response?.resolved_modifiers.filters) ? response.resolved_modifiers.filters : filters
+  const resolvedHighlights = Array.isArray(response?.resolved_modifiers.highlights)
+    ? response.resolved_modifiers.highlights as AssetHighlight[]
+    : highlights
   const availableColumns = modifierColumns.length
     ? modifierColumns
     : (table?.columns ?? []).map((column) => ({
@@ -192,6 +202,7 @@ export function DataFrameAssetPanel({
     setPageSize(resetState.page.size)
     setSort(resetState.sort)
     setFilters(resetState.filters)
+    setHighlights(resetState.highlights ?? [])
     setPageInput(String(resetState.page.index + 1))
     onPersistedStateChange?.({
       modifier_overrides: {},
@@ -221,6 +232,7 @@ export function DataFrameAssetPanel({
             columns={availableColumns}
             activeSort={resolvedSort}
             activeFilters={resolvedFilters}
+            activeHighlights={resolvedHighlights}
             viewerMode={viewerMode}
             disabled={overrideIncompatible || overrideValidationBlocked || prepareQuery.isFetching}
             totalRows={baseRows}
@@ -254,6 +266,10 @@ export function DataFrameAssetPanel({
             onRemoveFilter={(columnId) => {
               setPageIndex(0)
               setFilters((current) => removeFilter(current, columnId))
+            }}
+            onApplyHighlights={(columnId, nextHighlights) => {
+              setPageIndex(0)
+              setHighlights((current) => replaceHighlightsForColumn(current, columnId, nextHighlights))
             }}
             onClearFilters={handleClearTableFilters}
           />

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -231,6 +232,9 @@ class AssetPrepareService:
         if kind == 'filters':
             cls._validate_filters_override(key=key, value=value, schema_entry=schema_entry)
             return
+        if kind == 'highlights':
+            cls._validate_highlights_override(key=key, value=value, schema_entry=schema_entry)
+            return
         if kind == 'enum':
             cls._validate_enum_override(key=key, value=value, schema_entry=schema_entry)
             return
@@ -311,6 +315,34 @@ class AssetPrepareService:
             case_sensitive = entry.get('case_sensitive', False)
             if not isinstance(case_sensitive, bool):
                 raise InvalidRequestError(f'Regex filter `{column}` case_sensitive must be boolean.')
+
+    @classmethod
+    def _validate_highlights_override(cls, *, key: str, value: Any, schema_entry: dict[str, Any]) -> None:
+        if not isinstance(value, list):
+            raise InvalidRequestError(f'modifier_overrides.{key} must be an array.')
+        columns_by_id = {
+            column['id']: column
+            for column in schema_entry.get('columns', [])
+            if isinstance(column, dict) and isinstance(column.get('id'), str)
+        }
+        for entry in value:
+            if not isinstance(entry, dict):
+                raise InvalidRequestError(f'modifier_overrides.{key} entries must be objects.')
+            column = entry.get('column')
+            if not isinstance(column, str) or column not in columns_by_id:
+                raise InvalidRequestError(f'Unknown highlight column `{column}`.')
+            kind = entry.get('kind')
+            allowed_kinds = columns_by_id[column].get('filter_kinds')
+            if kind not in {'range', 'value', 'regex'}:
+                raise InvalidRequestError('Highlight kind must be `range`, `value`, or `regex`.')
+            if isinstance(allowed_kinds, list) and kind not in allowed_kinds:
+                raise InvalidRequestError(f'Highlight kind `{kind}` is not supported for column `{column}`.')
+            if entry.get('highlight_scope', 'cell') not in {'cell', 'row'}:
+                raise InvalidRequestError('Highlight scope must be `cell` or `row`.')
+            color = entry.get('highlight_color')
+            if not isinstance(color, str) or not re.fullmatch(r'#[0-9a-fA-F]{6}', color):
+                raise InvalidRequestError('Highlight color must be a six-digit hex color such as `#ff0000`.')
+            cls._validate_filters_override(key=key, value=[entry], schema_entry={**schema_entry, 'kind': 'filters'})
 
     @classmethod
     def _validate_enum_override(cls, *, key: str, value: Any, schema_entry: dict[str, Any]) -> None:
