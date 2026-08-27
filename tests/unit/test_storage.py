@@ -162,6 +162,15 @@ def test_object_store_allows_empty_optional_artifacts(tmp_path) -> None:
     assert persisted['preview'] == {'kind': 'empty'}
 
 
+def test_object_store_loads_empty_optional_dataframe_artifacts(tmp_path) -> None:
+    paths = init_project_root(tmp_path / 'project')
+    store = ObjectStore(paths)
+
+    persisted = store.persist_value(None, 'pandas.DataFrame')
+
+    assert store.load_value(persisted['artifact_hash'], 'pandas.DataFrame') is None
+
+
 def test_object_store_rejects_wrong_export_type(tmp_path) -> None:
     paths = init_project_root(tmp_path / 'project')
     store = ObjectStore(paths)

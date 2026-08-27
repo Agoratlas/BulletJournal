@@ -94,6 +94,8 @@ def serialize_value(value: Any, data_type: str) -> dict[str, Any]:
 
 def deserialize_value(payload: bytes, data_type: str) -> Any:
     value: Any
+    if payload == b'null':
+        return None
     if data_type in {'int', 'float', 'bool', 'str', 'list', 'dict'}:
         value = json.loads(payload.decode('utf-8'))
     elif data_type == 'pandas.DataFrame':
@@ -103,8 +105,6 @@ def deserialize_value(payload: bytes, data_type: str) -> Any:
         value = frame.iloc[:, 0]
     else:
         value = pickle.loads(gzip.decompress(payload))  # noqa: S301
-    if value is None:
-        return None
     validate_runtime_value_type(value, data_type, operation='import')
     return value
 
