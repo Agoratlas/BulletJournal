@@ -363,6 +363,21 @@ export async function prepareAsset(
   })
 }
 
+export async function prepareArtifactDataFrame(
+  nodeId: string,
+  artifactName: string,
+  payload: {
+    asset_version_id?: number | null
+    modifier_overrides?: Record<string, unknown>
+    transient_modifiers?: Record<string, unknown>
+  },
+): Promise<AssetPrepareResponse> {
+  return request(`/api/v1/artifacts/${encodeURIComponent(nodeId)}/${encodeURIComponent(artifactName)}/prepare`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
 export async function getDashboard(dashboardId: string): Promise<DashboardRecord> {
   return request(`/api/v1/dashboards/${encodeURIComponent(dashboardId)}`)
 }

@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
+import { createPortal } from 'react-dom'
 
 import { ChevronDown, ChevronUp, ChevronsUpDown, Funnel, Palette } from '../../components/Icons'
 import type { AssetFilter, AssetFilterKind, AssetHighlight, AssetSort, PreparedTablePayload } from '../../lib/types'
@@ -50,7 +51,7 @@ function DataFrameHeaderFilterMenu({
     setRegexPattern(nextDraft.regexPattern)
     setRegexCaseSensitive(nextDraft.regexCaseSensitive)
     setEditorError(null)
-  }, [activeFilter, column])
+  }, [activeFilter, column.dataType, column.id])
 
   function applyCurrentFilter() {
     try {
@@ -288,7 +289,9 @@ export function PreparedTable({
   const [columnWidthOverrides, setColumnWidthOverrides] = useState<Record<string, number>>({})
   const [availableWidth, setAvailableWidth] = useState(0)
   const [overflow, setOverflow] = useState({ left: false, right: false })
-  const openFilterCellRef = useRef<HTMLDivElement | null>(null)
+  const [openMenuPosition, setOpenMenuPosition] = useState<{ left: number; top: number } | null>(null)
+  const openMenuAnchorRef = useRef<HTMLDivElement | null>(null)
+  const openMenuRef = useRef<HTMLDivElement | null>(null)
   const tableWrapRef = useRef<HTMLDivElement | null>(null)
   const resizeCleanupRef = useRef<(() => void) | null>(null)
   const resolvedColumnWidths = useMemo(
@@ -302,13 +305,18 @@ export function PreparedTable({
       return
     }
     const handlePointerDown = (event: PointerEvent) => {
-      if (openFilterCellRef.current && !openFilterCellRef.current.contains(event.target as globalThis.Node)) {
+      if (
+        !openMenuAnchorRef.current?.contains(event.target as globalThis.Node)
+        && !openMenuRef.current?.contains(event.target as globalThis.Node)
+      ) {
         setOpenFilterColumnId(null)
+        setOpenHighlightColumnId(null)
       }
     }
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
         setOpenFilterColumnId(null)
+        setOpenHighlightColumnId(null)
       }
     }
     window.addEventListener('pointerdown', handlePointerDown)
@@ -316,6 +324,31 @@ export function PreparedTable({
     return () => {
       window.removeEventListener('pointerdown', handlePointerDown)
       window.removeEventListener('keydown', handleKeyDown)
+    }
+  }, [openFilterColumnId, openHighlightColumnId])
+
+  useLayoutEffect(() => {
+    if (!openFilterColumnId && !openHighlightColumnId) {
+      setOpenMenuPosition(null)
+      return
+    }
+    const updatePosition = () => {
+      const anchor = openMenuAnchorRef.current
+      if (!anchor) {
+        return
+      }
+      const rect = anchor.getBoundingClientRect()
+      setOpenMenuPosition({
+        left: Math.min(rect.left, window.innerWidth - 272),
+        top: rect.bottom + 6,
+      })
+    }
+    updatePosition()
+    window.addEventListener('resize', updatePosition)
+    window.addEventListener('scroll', updatePosition, true)
+    return () => {
+      window.removeEventListener('resize', updatePosition)
+      window.removeEventListener('scroll', updatePosition, true)
     }
   }, [openFilterColumnId, openHighlightColumnId])
 
@@ -412,12 +445,10 @@ export function PreparedTable({
               }
               const isActive = activeSort?.column === column.id
               const activeFilter = activeFilters.find((entry) => entry.column === column.id) ?? null
-              const isFilterOpen = openFilterColumnId === column.id
               const columnHighlights = activeHighlights.filter((entry) => entry.column === column.id)
-              const isHighlightOpen = openHighlightColumnId === column.id
               return (
                 <th key={column.id}>
-                  <div className="asset-table-header-cell" ref={isFilterOpen ? openFilterCellRef : undefined}>
+                  <div className="asset-table-header-cell">
                     <div className="asset-table-header-main">
                       <div className="asset-table-header-label">
                         <span className="asset-table-column-title" title={column.title}>{column.title}</span>
@@ -442,12 +473,20 @@ export function PreparedTable({
                             )}
                           </button>
                         ) : null}
-                        {filterColumn.filterKinds.length && onApplyHighlights ? <button type="button" className={`asset-table-header-action asset-table-highlight-toggle${columnHighlights.length ? ' has-active-highlight' : ''}`} onClick={() => setOpenHighlightColumnId((current) => current === column.id ? null : column.id)} disabled={disabled} aria-label={`${columnHighlights.length ? 'Edit' : 'Add'} highlight for ${column.title}`} title={`Highlight ${column.title}`}><Palette width={16} height={16} /></button> : null}
+                        {filterColumn.filterKinds.length && onApplyHighlights ? <button type="button" className={`asset-table-header-action asset-table-highlight-toggle${columnHighlights.length ? ' has-active-highlight' : ''}`} onClick={(event) => {
+                          openMenuAnchorRef.current = event.currentTarget.closest<HTMLDivElement>('.asset-table-header-cell')
+                          setOpenFilterColumnId(null)
+                          setOpenHighlightColumnId((current) => current === column.id ? null : column.id)
+                        }} disabled={disabled} aria-label={`${columnHighlights.length ? 'Edit' : 'Add'} highlight for ${column.title}`} title={`Highlight ${column.title}`}><Palette width={16} height={16} /></button> : null}
                         {filterColumn.filterKinds.length ? (
                           <button
                             type="button"
                             className={`asset-table-header-action asset-table-filter-toggle${activeFilter ? ' has-active-filter' : ''}`}
-                            onClick={() => setOpenFilterColumnId((current) => current === column.id ? null : column.id)}
+                            onClick={(event) => {
+                              openMenuAnchorRef.current = event.currentTarget.closest<HTMLDivElement>('.asset-table-header-cell')
+                              setOpenHighlightColumnId(null)
+                              setOpenFilterColumnId((current) => current === column.id ? null : column.id)
+                            }}
                             disabled={disabled}
                             aria-label={`${activeFilter ? 'Edit' : 'Add'} filter for ${column.title}`}
                             title={activeFilter ? formatFilterSummary(activeFilter, columns) : `Filter ${column.title}`}
@@ -457,17 +496,6 @@ export function PreparedTable({
                         ) : null}
                       </div>
                     </div>
-                    {isFilterOpen && filterColumn.filterKinds.length ? (
-                      <DataFrameHeaderFilterMenu
-                        column={filterColumn}
-                        activeFilter={activeFilter}
-                        disabled={disabled}
-                        onApplyFilter={onApplyFilter}
-                        onRemoveFilter={onRemoveFilter}
-                        onClose={() => setOpenFilterColumnId(null)}
-                      />
-                    ) : null}
-                    {isHighlightOpen && filterColumn.filterKinds.length && onApplyHighlights ? <DataFrameHeaderHighlightMenu column={filterColumn} activeHighlights={columnHighlights} disabled={disabled} onApplyHighlights={onApplyHighlights} onClose={() => setOpenHighlightColumnId(null)} /> : null}
                   </div>
                   <button
                     type="button"
@@ -496,6 +524,37 @@ export function PreparedTable({
         </tbody>
         </table>
       </div>
+      {openMenuPosition && typeof document !== 'undefined' ? createPortal(
+        <div ref={openMenuRef} className="asset-table-filter-menu-portal" style={openMenuPosition}>
+          {openFilterColumnId ? (() => {
+            const column = table.columns.find((entry) => entry.id === openFilterColumnId)
+            if (!column) {
+              return null
+            }
+            const filterColumn = columns.find((entry) => entry.id === column.id) ?? {
+              id: column.id,
+              title: column.title,
+              dataType: column.data_type,
+              filterKinds: column.filter_kinds ?? filterKindsForDataType(column.data_type),
+            }
+            return <DataFrameHeaderFilterMenu column={filterColumn} activeFilter={activeFilters.find((entry) => entry.column === column.id) ?? null} disabled={disabled} onApplyFilter={onApplyFilter} onRemoveFilter={onRemoveFilter} onClose={() => setOpenFilterColumnId(null)} />
+          })() : null}
+          {openHighlightColumnId && onApplyHighlights ? (() => {
+            const column = table.columns.find((entry) => entry.id === openHighlightColumnId)
+            if (!column) {
+              return null
+            }
+            const filterColumn = columns.find((entry) => entry.id === column.id) ?? {
+              id: column.id,
+              title: column.title,
+              dataType: column.data_type,
+              filterKinds: column.filter_kinds ?? filterKindsForDataType(column.data_type),
+            }
+            return <DataFrameHeaderHighlightMenu column={filterColumn} activeHighlights={activeHighlights.filter((entry) => entry.column === column.id)} disabled={disabled} onApplyHighlights={onApplyHighlights} onClose={() => setOpenHighlightColumnId(null)} />
+          })() : null}
+        </div>,
+        document.body,
+      ) : null}
     </div>
   )
 }

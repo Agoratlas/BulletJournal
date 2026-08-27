@@ -36,6 +36,7 @@ export function DataFrameAssetPanel({
   onReadyStateChange,
   sectionId,
   frameVariant,
+  prepare,
 }: InteractiveAssetPanelProps) {
   const prepareNodeId = prepareTarget?.nodeId ?? nodeId
   const prepareAssetName = prepareTarget?.assetName ?? asset.asset_name
@@ -120,7 +121,7 @@ export function DataFrameAssetPanel({
       overrideValidationKey,
       stableValueKey(preparePanelContext),
     ],
-    queryFn: () => prepareAsset(prepareNodeId, prepareAssetName, {
+    queryFn: () => (prepare ?? prepareAsset)(prepareNodeId, prepareAssetName, {
       asset_version_id: asset.current_asset_version_id,
       modifier_overrides: modifierOverrides,
       transient_modifiers: {},

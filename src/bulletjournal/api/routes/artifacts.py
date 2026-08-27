@@ -8,6 +8,7 @@ from starlette.background import BackgroundTask
 
 from bulletjournal.api.schemas import (
     ArtifactStateChangeRequest,
+    AssetPrepareRequest,
     ConstantValueUpdateRequest,
     NodeOutputsStateChangeRequest,
 )
@@ -60,6 +61,17 @@ def artifact_content(node_id: str, artifact_name: str, request: Request):
         file_info['path'],
         media_type=file_info['mime_type'],
         background=BackgroundTask(project.state_db.release_object_lease, file_info['lease_id']),
+    )
+
+
+@router.post('/artifacts/{node_id}/{artifact_name}/prepare')
+def prepare_artifact_dataframe(node_id: str, artifact_name: str, payload: AssetPrepareRequest, request: Request):
+    return request.app.state.container.asset_prepare_service.prepare_artifact_dataframe(
+        node_id,
+        artifact_name,
+        artifact_version_id=payload.asset_version_id,
+        modifier_overrides=payload.modifier_overrides,
+        transient_modifiers=payload.transient_modifiers,
     )
 
 

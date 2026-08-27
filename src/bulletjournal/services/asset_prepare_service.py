@@ -134,6 +134,75 @@ class AssetPrepareService:
             raise InvalidRequestError('Prepared asset response exceeds the 1 MB cap.')
         return response
 
+    def prepare_artifact_dataframe(
+        self,
+        node_id: str,
+        artifact_name: str,
+        *,
+        artifact_version_id: int | None,
+        modifier_overrides: dict[str, Any],
+        transient_modifiers: dict[str, Any],
+    ) -> dict[str, Any]:
+        head = self.project_service.require_project().state_db.get_artifact_head(node_id, artifact_name)
+        if head is None:
+            raise NotFoundError(f'Unknown artifact `{node_id}/{artifact_name}`.')
+        current_version_id = head.get('current_version_id')
+        if current_version_id is None or head.get('artifact_hash') is None:
+            raise InvalidRequestError(f'Artifact `{node_id}/{artifact_name}` has not been produced yet.')
+        if head.get('data_type') != 'pandas.DataFrame':
+            raise InvalidRequestError(f'Artifact `{node_id}/{artifact_name}` is not a DataFrame.')
+        if not isinstance(modifier_overrides, dict) or not isinstance(transient_modifiers, dict):
+            raise InvalidRequestError('DataFrame modifiers must be objects.')
+
+        from bulletjournal.assets.types.dataframe import prepare_dataframe
+
+        project = self.project_service.require_project()
+        artifact_hash = str(head['artifact_hash'])
+        project.state_db.touch_artifact_object(artifact_hash)
+        lease_id = project.state_db.acquire_object_lease(
+            artifact_hash,
+            'artifact_prepare',
+            str(uuid.uuid4()),
+            expires_at=(datetime.now(tz=UTC) + timedelta(hours=1)).isoformat().replace('+00:00', 'Z'),
+        )
+        try:
+            payloads, resolved_modifiers = prepare_dataframe(
+                dataset_path=project.object_store.load_file_path(artifact_hash),
+                definition={},
+                default_modifiers={
+                    'page': {'index': 0, 'size': 25},
+                    'sort': [],
+                    'filters': [],
+                    'highlights': [],
+                },
+                modifier_overrides=modifier_overrides,
+                transient_modifiers=transient_modifiers,
+            )
+        finally:
+            project.state_db.release_object_lease(lease_id)
+        errors: list[dict[str, str]] = []
+        if artifact_version_id is not None and artifact_version_id != current_version_id:
+            errors.append(
+                {
+                    'code': 'artifact_version_mismatch',
+                    'message': (
+                        f'Artifact `{node_id}/{artifact_name}` moved from version '
+                        f'{artifact_version_id} to version {current_version_id}.'
+                    ),
+                }
+            )
+        response = {
+            'asset_version_id': int(current_version_id),
+            'state': head['state'],
+            'resolved_modifiers': resolved_modifiers,
+            'override_schema_hash': None,
+            'payloads': payloads,
+            'errors': errors,
+        }
+        if len(json.dumps(response, ensure_ascii=True).encode('utf-8')) > MAX_PREPARED_RESPONSE_BYTES:
+            raise InvalidRequestError('Prepared artifact response exceeds the 1 MB cap.')
+        return response
+
     def _collection_child_prepare_target(
         self,
         *,

@@ -2812,6 +2812,51 @@ label span,
   gap: 8px;
 }
 
+.artifact-download-menu {
+  position: relative;
+}
+
+.artifact-download-menu summary {
+  list-style: none;
+  cursor: pointer;
+}
+
+.artifact-download-menu summary::-webkit-details-marker {
+  display: none;
+}
+
+.artifact-download-popover {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 30;
+  display: grid;
+  min-width: 170px;
+  padding: 6px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--panel);
+  box-shadow: var(--shadow);
+}
+
+.artifact-download-popover a {
+  padding: 7px 8px;
+  border-radius: 8px;
+  color: var(--ink);
+  text-decoration: none;
+  font-size: 13px;
+}
+
+.artifact-download-popover a:hover {
+  background: var(--panel-2);
+}
+
+.artifact-download-popover p {
+  margin: 6px 8px 2px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
 .artifact-download-tooltip-shell {
   display: inline-flex;
   align-items: center;
@@ -2925,6 +2970,11 @@ label span,
   line-height: 1.55;
 }
 
+.artifact-simple-preview {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
 .docs-block,
 .template-source {
   max-height: 340px;
@@ -2943,6 +2993,30 @@ label span,
   width: 100%;
   min-width: 0;
   overflow: auto;
+}
+
+.table-wrap,
+.artifact-explorer-modal {
+  scrollbar-color: color-mix(in srgb, var(--muted) 52%, transparent) transparent;
+}
+
+.table-wrap::-webkit-scrollbar,
+.artifact-explorer-modal::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+.table-wrap::-webkit-scrollbar-track,
+.artifact-explorer-modal::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.table-wrap::-webkit-scrollbar-thumb,
+.artifact-explorer-modal::-webkit-scrollbar-thumb {
+  border: 3px solid transparent;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--muted) 52%, transparent);
+  background-clip: padding-box;
 }
 
 .preview-table {
@@ -3648,6 +3722,10 @@ label span,
   gap: 18px;
 }
 
+.artifact-explorer-modal {
+  padding-right: 10px;
+}
+
 .artifact-explorer-toolbar {
   display: flex;
   justify-content: space-between;
@@ -3667,10 +3745,38 @@ label span,
   flex-wrap: wrap;
 }
 
+.artifact-explorer-display-toggle {
+  display: inline-flex;
+  padding: 3px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel-2);
+}
+
+.artifact-explorer-display-toggle button {
+  min-height: 28px;
+  padding: 4px 9px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.artifact-explorer-display-toggle button.active {
+  background: var(--panel);
+  color: var(--ink);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12);
+}
+
 .artifact-explorer-grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: minmax(0, 1fr);
   align-items: start;
+}
+
+.artifact-explorer-grid.columns-2 {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
 .artifact-explorer-grid .artifact-card {
@@ -5155,6 +5261,7 @@ input.invalid {
   min-width: 0;
 }
 
+
 .asset-table-wrap {
   border-radius: 0;
   border: 0;
@@ -5165,6 +5272,7 @@ input.invalid {
   max-width: 100%;
   overflow-x: auto;
   overflow-y: visible;
+  scrollbar-color: color-mix(in srgb, var(--muted) 52%, transparent) transparent;
 }
 
 .asset-table-overflow-shadow {
@@ -5390,10 +5498,6 @@ input.invalid {
 }
 
 .asset-table-filter-menu {
-  position: absolute;
-  top: calc(100% + 6px);
-  right: 0;
-  z-index: 3;
   display: grid;
   gap: 6px;
   width: min(260px, calc(100vw - 48px));
@@ -5402,6 +5506,11 @@ input.invalid {
   border: 1px solid var(--line);
   background: color-mix(in srgb, var(--panel) 94%, var(--panel-2));
   box-shadow: 0 14px 30px rgba(60, 44, 18, 0.12);
+}
+
+.asset-table-filter-menu-portal {
+  position: fixed;
+  z-index: 100;
 }
 
 .asset-table-filter-menu select,
@@ -5437,6 +5546,15 @@ input.invalid {
   background: var(--panel);
   color: var(--muted);
   font-size: 12px;
+}
+
+.asset-table-filter-checkbox input[type='checkbox'] {
+  width: 14px;
+  height: 14px;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  flex: 0 0 auto;
 }
 
 .asset-table-filter-error {

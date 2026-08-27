@@ -1,4 +1,4 @@
-import type { AssetFilter, AssetFilterKind, AssetHighlight, AssetRecord, AssetSort } from '../../lib/types'
+import type { AssetFilter, AssetFilterKind, AssetHighlight, AssetPrepareResponse, AssetRecord, AssetSort } from '../../lib/types'
 
 export const PAGE_SIZE_OPTIONS = [10, 25, 50, 100] as const
 export const DEFAULT_TABLE_PAGE_SIZE = 25
@@ -189,6 +189,13 @@ export type InteractiveAssetPanelProps = {
   onReadyStateChange?: (ready: boolean) => void
   sectionId?: string
   frameVariant?: AssetPanelFrameVariant
+  prepare?: (nodeId: string, assetName: string, payload: {
+    asset_version_id?: number | null
+    modifier_overrides?: Record<string, unknown>
+    transient_modifiers?: Record<string, unknown>
+    panel_context?: Record<string, unknown> | null
+    persisted_override_schema_hash?: string | null
+  }) => Promise<AssetPrepareResponse>
 }
 
 export type DatavizAssetPanelProps = InteractiveAssetPanelProps & {

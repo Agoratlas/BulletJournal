@@ -265,6 +265,7 @@ function App() {
   const [artifactNodeId, setArtifactNodeId] = useState<string | null>(null)
   const [artifactExplorerOpen, setArtifactExplorerOpen] = useState(false)
   const [artifactFilter, setArtifactFilter] = useState('')
+  const [artifactExplorerColumns, setArtifactExplorerColumns] = useState<1 | 2>(1)
   const [paletteInfoEntry, setPaletteInfoEntry] = useState<PaletteEntry | null>(null)
   const [showProjectInfo, setShowProjectInfo] = useState(false)
   const [showSettings, setShowSettings] = useState(false)
@@ -1530,12 +1531,24 @@ function App() {
     }
 
     if (node.kind === 'constant') {
+      const artifact = liveSnapshot ? artifactFor(liveSnapshot, node.id, node.ui?.artifact_name ?? 'value') : undefined
       actions.push({
         key: 'edit-constant',
         label: 'Edit block',
         onClick: () => {
           dismissMenu()
           openConstantNodeEdit(node.id)
+        },
+      })
+      actions.push({
+        key: 'preview-constant-artifact',
+        label: 'Preview artifact',
+        disabled: !artifact || artifact.state === 'pending' || artifact.current_version_id === null,
+        title: !artifact || artifact.state === 'pending' || artifact.current_version_id === null ? 'The constant value is pending.' : undefined,
+        onClick: () => {
+          dismissMenu()
+          setArtifactNodeId(node.id)
+          setArtifactExplorerOpen(true)
         },
       })
     }
@@ -4804,11 +4817,15 @@ function App() {
               </label>
               <div className="artifact-explorer-actions">
                 <ArtifactCounts counts={artifactListCounts} showLabels />
+                <div className="artifact-explorer-display-toggle" aria-label="Artifact display mode">
+                  <button className={artifactExplorerColumns === 1 ? 'active' : ''} onClick={() => setArtifactExplorerColumns(1)}>Single</button>
+                  <button className={artifactExplorerColumns === 2 ? 'active' : ''} onClick={() => setArtifactExplorerColumns(2)}>Two columns</button>
+                </div>
                 {artifactNodeId ? <button className="secondary" onClick={() => setArtifactNodeId(null)}>All artifacts</button> : null}
               </div>
             </div>
             {artifactList.length ? (
-              <div className="artifact-grid artifact-explorer-grid">
+              <div className={`artifact-grid artifact-explorer-grid columns-${artifactExplorerColumns}`}>
                 {artifactList.map((artifact) => (
                   <ArtifactCard key={`${artifact.node_id}/${artifact.artifact_name}`} artifact={artifact} />
                 ))}
