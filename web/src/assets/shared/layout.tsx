@@ -32,6 +32,7 @@ export function AssetPanelFrame({
   headerCenter,
   sectionId,
   frameVariant = 'card',
+  showHeader = true,
   showExportActions = false,
   dataFramePreview,
   children,
@@ -44,6 +45,7 @@ export function AssetPanelFrame({
   headerCenter?: ReactNode
   sectionId?: string
   frameVariant?: AssetPanelFrameVariant
+  showHeader?: boolean
   showExportActions?: boolean
   dataFramePreview?: PreparedTablePayload | null
   children: ReactNode
@@ -51,17 +53,19 @@ export function AssetPanelFrame({
   const frameRef = useRef<HTMLElement | null>(null)
   return (
     <section ref={frameRef} id={sectionId} className={frameVariant === 'inline' ? 'asset-panel-frame-inline' : 'panel asset-panel-card'}>
-      <div className={`asset-panel-header${headerCenter ? ' has-center-content' : ''}`}>
-        <div className="asset-panel-heading">
-          <div className="asset-panel-title-row">
-            <span className={`asset-state-bubble is-${asset.state}`} aria-hidden="true" />
-            <h2>{asset.title || asset.asset_name}</h2>
+      {showHeader ? (
+        <div className={`asset-panel-header${headerCenter ? ' has-center-content' : ''}`}>
+          <div className="asset-panel-heading">
+            <div className="asset-panel-title-row">
+              <span className={`asset-state-bubble is-${asset.state}`} aria-hidden="true" />
+              <h2>{asset.title || asset.asset_name}</h2>
+            </div>
+            {asset.description ? <p className="asset-panel-description">{asset.description}</p> : null}
           </div>
-          {asset.description ? <p className="asset-panel-description">{asset.description}</p> : null}
+          {headerCenter ? <div className="asset-panel-header-center">{headerCenter}</div> : null}
+          <AssetPanelHeaderActions asset={asset} frameRef={frameRef} showExportActions={showExportActions} dataFramePreview={dataFramePreview} panelInfo={panelInfo} settingsTitle={settingsTitle} settingsBody={settingsBody} settingsActive={settingsActive} />
         </div>
-        {headerCenter ? <div className="asset-panel-header-center">{headerCenter}</div> : null}
-        <AssetPanelHeaderActions asset={asset} frameRef={frameRef} showExportActions={showExportActions} dataFramePreview={dataFramePreview} panelInfo={panelInfo} settingsTitle={settingsTitle} settingsBody={settingsBody} settingsActive={settingsActive} />
-      </div>
+      ) : null}
       {children}
     </section>
   )

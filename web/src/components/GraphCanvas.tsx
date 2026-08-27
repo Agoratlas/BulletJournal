@@ -59,6 +59,7 @@ type GraphCanvasProps = {
   onKillEditor: (nodeId: string) => void
   onRunNode: (nodeId: string, mode: 'run_stale' | 'run_all' | 'edit_run', scope?: 'node' | 'ancestors' | 'descendants') => void
   onOpenArtifacts: (nodeId: string) => void
+  onOpenAssets: (nodeId: string) => void
   onCanvasInteract: () => void
   onCanvasClear: () => void
   onNodeMove: (nodeId: string, x: number, y: number) => void
@@ -107,6 +108,7 @@ type BulletJournalNodeData = {
   onKillEditor: (nodeId: string) => void
   onRunNode: (nodeId: string, mode: 'run_stale' | 'run_all' | 'edit_run', scope?: 'node' | 'ancestors' | 'descendants') => void
   onOpenArtifacts: (nodeId: string) => void
+  onOpenAssets: (nodeId: string) => void
   activeEditorNodeIds: string[]
   selectedDashboardId: string | null
   selectedDashboardSourceNodeIds: string[]
@@ -583,10 +585,13 @@ function namedConstantLabelFontSize(value: string): number {
 }
 
 const BulletJournalNodeCard = memo(({ data, selected }: NodeProps<BulletJournalNodeData>) => {
-  const { node, snapshot, onSelect, onNodeContextMenu, onPortContextMenu, onEditConstantNode, onEditFileNode, onEditOrganizerNode, onEditAreaNode, onOpenEditor, onKillEditor, onRunNode, onOpenArtifacts } = data
+  const { node, snapshot, onSelect, onNodeContextMenu, onPortContextMenu, onEditConstantNode, onEditFileNode, onEditOrganizerNode, onEditAreaNode, onOpenEditor, onKillEditor, onRunNode, onOpenArtifacts, onOpenAssets } = data
   const inputs = inputsForNode(node)
   const outputs = outputsForNode(node)
   const counts = artifactCounts(snapshot, node.id)
+  const assetCounts = node.ui?.asset_counts ?? { pending: 0, stale: 0, ready: 0 }
+  const artifactsAreReady = counts.pending === 0 && counts.stale === 0
+  const assetsAreReady = assetCounts.pending === 0 && assetCounts.stale === 0
   const badge = badgeForNode(snapshot, node)
   const validationIssues = validationIssuesForNode(snapshot, node.id)
   const blockingValidationIssues = validationIssues.filter((issue) => issue.severity === 'error')
@@ -761,6 +766,8 @@ const BulletJournalNodeCard = memo(({ data, selected }: NodeProps<BulletJournalN
   }
 
   if (node.kind === 'dashboard') {
+    const assetCounts = node.ui?.asset_counts ?? { pending: 0, stale: 0, ready: 0 }
+    const assetsAreReady = assetCounts.pending === 0 && assetCounts.stale === 0
     return (
       <div
         className={`rf-node rf-dashboard-node state-${node.state} ${selected ? 'is-selected' : ''} ${noticeClassName} ${hoveredNoticeClassName}`}
@@ -800,12 +807,9 @@ const BulletJournalNodeCard = memo(({ data, selected }: NodeProps<BulletJournalN
             >
               <Eye className="dashboard-open-icon" width={21} height={21} strokeWidth={2.35} />
             </button>
-            <div className="artifact-button dashboard-asset-button">
-              Assets
-              <ArtifactCounts
-                counts={node.ui?.asset_counts ?? { pending: 0, stale: 0, ready: 0 }}
-                compact
-              />
+            <div className={`node-status-summary dashboard-asset-summary ${assetsAreReady ? 'is-ready' : 'needs-attention'}`}>
+              <span className="node-status-summary-label">Assets</span>
+              <ArtifactCounts counts={assetCounts} segmented />
             </div>
           </div>
         </div>
@@ -1033,13 +1037,32 @@ const BulletJournalNodeCard = memo(({ data, selected }: NodeProps<BulletJournalN
             </div>
           ) : null}
         </div>
-        <button className="artifact-button" onClick={(event) => {
-          event.stopPropagation()
-          onOpenArtifacts(node.id)
-        }}>
-          Artifacts
-          <ArtifactCounts counts={counts} compact />
-        </button>
+        <div className="node-status-summaries">
+          <button
+            type="button"
+            className={`node-status-summary ${artifactsAreReady ? 'is-ready' : 'needs-attention'}`}
+            onClick={(event) => {
+              event.stopPropagation()
+              onOpenArtifacts(node.id)
+            }}
+          >
+            <span className="node-status-summary-label">Artifacts</span>
+            <ArtifactCounts counts={counts} segmented />
+          </button>
+          {node.kind === 'notebook' ? (
+            <button
+              type="button"
+              className={`node-status-summary ${assetsAreReady ? 'is-ready' : 'needs-attention'}`}
+              onClick={(event) => {
+                event.stopPropagation()
+                onOpenAssets(node.id)
+              }}
+            >
+              <span className="node-status-summary-label">Assets</span>
+              <ArtifactCounts counts={assetCounts} segmented />
+            </button>
+          ) : null}
+        </div>
       </div>
     </div>
   )
@@ -1082,7 +1105,7 @@ function fixedNodeHeight(node: NodeRecord, layoutHeight: number | undefined): nu
   return undefined
 }
 
-export function GraphCanvas({ snapshot, serverNowMs = Date.now(), serverNowClientAnchorMs = Date.now(), selectedNodeIds, selectedEdgeIds, activeRunNodeId = null, queuedRunNodeIds = [], completedRunNodeIds = [], activeEditorNodeIds = [], onConnect, onEdgesChange, onSelectionChange, onNodeSelect, onEdgeSelect, onNodeContextMenu, onSelectionContextMenu, onPortContextMenu, onEditConstantNode, onEditFileNode, onEditOrganizerNode, onEditAreaNode, onOpenEditor, onOpenDashboard, onKillEditor, onRunNode, onOpenArtifacts, onCanvasInteract, onCanvasClear, onNodeMove, onNodeResize, onNodesDelete, draggedBlock, onBlockDrop, onViewportChange, dashboardPseudoLinks = [], selectedDashboardId = null, selectedDashboardSourceNodeIds = [], onToggleDashboardSource = () => undefined, nodeNoticeSeverityById = {}, hoveredNoticeNodeId = null, focusedNotice = null }: GraphCanvasProps) {
+export function GraphCanvas({ snapshot, serverNowMs = Date.now(), serverNowClientAnchorMs = Date.now(), selectedNodeIds, selectedEdgeIds, activeRunNodeId = null, queuedRunNodeIds = [], completedRunNodeIds = [], activeEditorNodeIds = [], onConnect, onEdgesChange, onSelectionChange, onNodeSelect, onEdgeSelect, onNodeContextMenu, onSelectionContextMenu, onPortContextMenu, onEditConstantNode, onEditFileNode, onEditOrganizerNode, onEditAreaNode, onOpenEditor, onOpenDashboard, onKillEditor, onRunNode, onOpenArtifacts, onOpenAssets, onCanvasInteract, onCanvasClear, onNodeMove, onNodeResize, onNodesDelete, draggedBlock, onBlockDrop, onViewportChange, dashboardPseudoLinks = [], selectedDashboardId = null, selectedDashboardSourceNodeIds = [], onToggleDashboardSource = () => undefined, nodeNoticeSeverityById = {}, hoveredNoticeNodeId = null, focusedNotice = null }: GraphCanvasProps) {
   const { screenToFlowPosition, setCenter, setViewport } = useReactFlow()
   const store = useStoreApi()
   const updateNodeInternals = useUpdateNodeInternals()
@@ -1213,6 +1236,7 @@ export function GraphCanvas({ snapshot, serverNowMs = Date.now(), serverNowClien
           onKillEditor,
           onRunNode,
           onOpenArtifacts,
+          onOpenAssets,
           selectedDashboardId,
           selectedDashboardSourceNodeIds,
           selectedDashboardEdgeNotebookIds: selectedDashboardPseudoEdgeNotebookIds,
@@ -1239,7 +1263,7 @@ export function GraphCanvas({ snapshot, serverNowMs = Date.now(), serverNowClien
         zIndex: node.kind === 'area' ? -1 : menuOpenNodeId === node.id ? 200 : 0,
       }
     })
-  }, [snapshot, serverNowMs, serverNowClientAnchorMs, selectedNodeIds, activeRunNodeId, queuedRunNodeIds, completedRunNodeIds, activeEditorNodeIds, onNodeContextMenu, onPortContextMenu, onEditConstantNode, onEditFileNode, onEditOrganizerNode, onEditAreaNode, onKillEditor, onNodeResize, onNodeSelect, onOpenArtifacts, onOpenDashboard, onOpenEditor, onRunNode, onToggleDashboardSource, selectedDashboardId, selectedDashboardSourceNodeIds, selectedDashboardPseudoEdgeNotebookIds, selectedDashboardPseudoEdgeDashboardIds, nodeDimensions, organizerGhostByNodeId, connectionIntent, pendingLayoutVersion, menuOpenNodeId, nodeNoticeSeverityById, hoveredNoticeNodeId])
+  }, [snapshot, serverNowMs, serverNowClientAnchorMs, selectedNodeIds, activeRunNodeId, queuedRunNodeIds, completedRunNodeIds, activeEditorNodeIds, onNodeContextMenu, onPortContextMenu, onEditConstantNode, onEditFileNode, onEditOrganizerNode, onEditAreaNode, onKillEditor, onNodeResize, onNodeSelect, onOpenArtifacts, onOpenAssets, onOpenDashboard, onOpenEditor, onRunNode, onToggleDashboardSource, selectedDashboardId, selectedDashboardSourceNodeIds, selectedDashboardPseudoEdgeNotebookIds, selectedDashboardPseudoEdgeDashboardIds, nodeDimensions, organizerGhostByNodeId, connectionIntent, pendingLayoutVersion, menuOpenNodeId, nodeNoticeSeverityById, hoveredNoticeNodeId])
 
   useEffect(() => {
     const currentNodeIds = new Set(snapshot.graph.nodes.map((node) => node.id))

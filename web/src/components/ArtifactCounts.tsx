@@ -11,6 +11,7 @@ type ArtifactCountsProps = {
   className?: string
   compact?: boolean
   showLabels?: boolean
+  segmented?: boolean
 }
 
 function joinClasses(...values: Array<string | false | null | undefined>) {
@@ -34,10 +35,10 @@ function ArtifactCount({
   )
 }
 
-export function ArtifactCounts({ counts, className, compact = false, showLabels = false }: ArtifactCountsProps) {
+export function ArtifactCounts({ counts, className, compact = false, showLabels = false, segmented = false }: ArtifactCountsProps) {
   return (
     <span
-      className={joinClasses('artifact-counts', compact && 'compact', className)}
+      className={joinClasses('artifact-counts', compact && 'compact', segmented && 'segmented', className)}
       aria-label={`${counts.pending} pending, ${counts.stale} stale, ${counts.ready} ready`}
     >
       <ArtifactCount state="pending" value={counts.pending} showLabel={showLabels} />

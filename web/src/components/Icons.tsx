@@ -131,6 +131,32 @@ export function Play(props: SVGProps<SVGSVGElement>) {
   )
 }
 
+export function Undo(props: SVGProps<SVGSVGElement>) {
+  return (
+    <IconBase {...props} strokeWidth="2.5">
+      <path d="m9 7-4 4 4 4" />
+      <path d="M5 11h8a6 6 0 0 1 6 6" />
+    </IconBase>
+  )
+}
+
+export function Redo(props: SVGProps<SVGSVGElement>) {
+  return (
+    <IconBase {...props} strokeWidth="2.5">
+      <path d="m15 7 4 4-4 4" />
+      <path d="M19 11h-8a6 6 0 0 0-6 6" />
+    </IconBase>
+  )
+}
+
+export function Stop(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" {...props}>
+      <rect x="6" y="6" width="12" height="12" rx="1.5" />
+    </svg>
+  )
+}
+
 export function Pencil(props: SVGProps<SVGSVGElement>) {
   return (
     <IconBase {...props}>

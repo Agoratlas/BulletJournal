@@ -219,7 +219,7 @@ export function DataFrameAssetPanel({
   }
 
   return (
-    <AssetPanelFrame asset={asset} panelInfo={panelInfo} sectionId={sectionId} frameVariant={frameVariant} showExportActions={viewerMode === 'dashboard'} dataFramePreview={table}>
+    <AssetPanelFrame asset={asset} panelInfo={panelInfo} sectionId={sectionId} frameVariant={frameVariant} showHeader={frameVariant !== 'inline'} showExportActions={viewerMode === 'dashboard'} dataFramePreview={table}>
       <div className="asset-dataframe-panel">
         {overrideIncompatible ? <OverrideIncompatibleNotice onReset={onPersistedStateChange ? handleResetOverrides : undefined} /> : null}
         <PrepareErrorsNotice errors={prepareErrors} />

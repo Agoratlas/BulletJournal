@@ -15,7 +15,7 @@ import { BlockPalette } from './components/BlockPalette'
 import { ActionButtons } from './components/ActionButtons'
 import { ConfirmDialog, CreateFileDialog, CreateNotebookDialog, CreateOrganizerPortDialog, CreatePipelineDialog, EditAreaDialog, EditConstantDialog, EditOrganizerDialog, Modal } from './components/Dialogs'
 import { GraphCanvas } from './components/GraphCanvas'
-import { Info, Palette, Play, Plus } from './components/Icons'
+import { Info, Palette, Play, Plus, Redo, Stop, Undo } from './components/Icons'
 import { NodeInspector } from './components/NodeInspector'
 import { NoticeOverlay } from './components/NoticeOverlay'
 import { SessionLoadingScreen } from './components/SessionLoadingScreen'
@@ -265,7 +265,7 @@ function App() {
   const [artifactNodeId, setArtifactNodeId] = useState<string | null>(null)
   const [artifactExplorerOpen, setArtifactExplorerOpen] = useState(false)
   const [artifactFilter, setArtifactFilter] = useState('')
-  const [artifactExplorerColumns, setArtifactExplorerColumns] = useState<1 | 2>(1)
+  const [artifactExplorerColumns, setArtifactExplorerColumns] = useState<1 | 2 | 3>(1)
   const [paletteInfoEntry, setPaletteInfoEntry] = useState<PaletteEntry | null>(null)
   const [showProjectInfo, setShowProjectInfo] = useState(false)
   const [showSettings, setShowSettings] = useState(false)
@@ -1903,17 +1903,6 @@ function App() {
       return `${artifact.node_id}/${artifact.artifact_name}`.toLowerCase().includes(needle)
     })
   }, [artifactFilter, artifactNodeId, liveSnapshot])
-
-  const artifactListCounts = useMemo(
-    () => artifactList.reduce(
-      (totals, artifact) => {
-        totals[artifact.state] += 1
-        return totals
-      },
-      { ready: 0, stale: 0, pending: 0 },
-    ),
-    [artifactList],
-  )
 
   useEffect(() => {
     if (!artifactExplorerOpen) {
@@ -4445,6 +4434,21 @@ function App() {
   }, [clipboardGraph, graphHistoryFuture, graphHistoryPast, liveSnapshot, projectId, selectedEdgeIds, selectedNodeIds])
 
   const counts = liveSnapshot ? globalArtifactCounts(liveSnapshot) : { ready: 0, stale: 0, pending: 0 }
+  const assetCounts = liveSnapshot
+    ? liveSnapshot.graph.nodes.reduce(
+      (totals, node) => {
+        const nodeCounts = node.ui?.asset_counts
+        if (!nodeCounts) return totals
+        totals.pending += nodeCounts.pending
+        totals.stale += nodeCounts.stale
+        totals.ready += nodeCounts.ready
+        return totals
+      },
+      { ready: 0, stale: 0, pending: 0 },
+    )
+    : { ready: 0, stale: 0, pending: 0 }
+  const artifactsAreReady = counts.pending === 0 && counts.stale === 0
+  const assetsAreReady = assetCounts.pending === 0 && assetCounts.stale === 0
   const activeRun = liveSnapshot ? currentRun(liveSnapshot) : null
   const runningNodeId = liveSnapshot ? activeRunNodeId(liveSnapshot, activeRun) : null
   const queuedNodeIds = liveSnapshot ? queuedRunNodeIds(liveSnapshot, activeRun) : []
@@ -4503,25 +4507,35 @@ function App() {
       <div className="canvas-underlay" />
       <div className="floating-actions floating-panel">
         <div className="topbar-actions">
-          <button className="secondary small" onClick={() => void handleUndo()} disabled={!graphHistoryPast.length}>Undo</button>
-          <button className="secondary small" onClick={() => void handleRedo()} disabled={!graphHistoryFuture.length}>Redo</button>
-          <button className="secondary icon-pill" onClick={() => setShowSettings(true)} aria-label="Editor settings"><Palette width={18} height={18} /></button>
-          <button className="secondary icon-pill" onClick={() => setShowProjectInfo(true)} disabled={!projectId} aria-label="Project info"><Info width={18} height={18} /></button>
-          {activeRun ? (
-            <button className="danger" onClick={handleCancelRun}>Stop run</button>
-          ) : (
-            <button className="play-action" onClick={handleRunAll} disabled={!projectId} aria-label="Run pipeline" title="Run pipeline"><Play width={22} height={22} /></button>
-          )}
-          <button
-            className="secondary artifact-summary-button"
-            onClick={() => {
-              setArtifactNodeId(null)
-              setArtifactExplorerOpen(true)
-            }}
-            disabled={!projectId}
-          >
-            Artifacts <ArtifactCounts counts={counts} compact />
-          </button>
+          <div className="topbar-icon-actions">
+            <button className="topbar-control" onClick={() => void handleUndo()} disabled={!graphHistoryPast.length} aria-label="Undo" title="Undo"><Undo /></button>
+            <button className="topbar-control" onClick={() => void handleRedo()} disabled={!graphHistoryFuture.length} aria-label="Redo" title="Redo"><Redo /></button>
+            <button className="topbar-control" onClick={() => setShowSettings(true)} aria-label="Editor settings" title="Editor settings"><Palette /></button>
+            <button className="topbar-control" onClick={() => setShowProjectInfo(true)} disabled={!projectId} aria-label="Project info" title="Project info"><Info /></button>
+            {activeRun ? (
+              <button className="topbar-control stop-action" onClick={handleCancelRun} aria-label="Stop run" title="Stop run"><Stop /></button>
+            ) : (
+              <button className="topbar-control play-action" onClick={handleRunAll} disabled={!projectId} aria-label="Run pipeline" title="Run pipeline"><Play /></button>
+            )}
+          </div>
+          <div className="topbar-status-summaries">
+            <button
+              type="button"
+              className={`node-status-summary ${artifactsAreReady ? 'is-ready' : 'needs-attention'}`}
+              onClick={() => {
+                setArtifactNodeId(null)
+                setArtifactExplorerOpen(true)
+              }}
+              disabled={!projectId}
+            >
+              <span className="node-status-summary-label">Artifacts</span>
+              <ArtifactCounts counts={counts} segmented />
+            </button>
+            <div className={`node-status-summary ${assetsAreReady ? 'is-ready' : 'needs-attention'}`}>
+              <span className="node-status-summary-label">Assets</span>
+              <ArtifactCounts counts={assetCounts} segmented />
+            </div>
+          </div>
         </div>
       </div>
 
@@ -4631,10 +4645,13 @@ function App() {
               }}
               onKillEditor={(nodeId) => void handleKillEditor(nodeId)}
               onRunNode={handleRunNode}
-              onOpenArtifacts={(nodeId) => {
-                setArtifactNodeId(nodeId)
-                setArtifactExplorerOpen(true)
-              }}
+               onOpenArtifacts={(nodeId) => {
+                 setArtifactNodeId(nodeId)
+                 setArtifactExplorerOpen(true)
+               }}
+               onOpenAssets={(nodeId) => {
+                 navigateToPath(notebookAssetsUrl(nodeId))
+               }}
               onCanvasInteract={() => setTemplatesCollapsed(true)}
                 onCanvasClear={() => {
                   applySelection([], [], { openInspector: false })
@@ -4812,24 +4829,36 @@ function App() {
           <div className="artifact-explorer-shell">
             <div className="artifact-explorer-toolbar">
               <label className="artifact-explorer-search">
-                <span>Search artifacts</span>
                 <input value={artifactFilter} onChange={(event) => setArtifactFilter(event.target.value)} placeholder="Search by node or artifact name" />
               </label>
               <div className="artifact-explorer-actions">
-                <ArtifactCounts counts={artifactListCounts} showLabels />
+                <span className="artifact-explorer-columns-label">Columns</span>
                 <div className="artifact-explorer-display-toggle" aria-label="Artifact display mode">
-                  <button className={artifactExplorerColumns === 1 ? 'active' : ''} onClick={() => setArtifactExplorerColumns(1)}>Single</button>
-                  <button className={artifactExplorerColumns === 2 ? 'active' : ''} onClick={() => setArtifactExplorerColumns(2)}>Two columns</button>
+                  {[1, 2, 3].map((columns) => (
+                    <button
+                      key={columns}
+                      className={artifactExplorerColumns === columns ? 'active' : ''}
+                      onClick={() => setArtifactExplorerColumns(columns as 1 | 2 | 3)}
+                      aria-label={`${columns} column${columns === 1 ? '' : 's'}`}
+                      title={`${columns} column${columns === 1 ? '' : 's'}`}
+                    >
+                      {columns}
+                    </button>
+                  ))}
                 </div>
                 {artifactNodeId ? <button className="secondary" onClick={() => setArtifactNodeId(null)}>All artifacts</button> : null}
               </div>
-            </div>
-            {artifactList.length ? (
-              <div className={`artifact-grid artifact-explorer-grid columns-${artifactExplorerColumns}`}>
-                {artifactList.map((artifact) => (
-                  <ArtifactCard key={`${artifact.node_id}/${artifact.artifact_name}`} artifact={artifact} />
-                ))}
               </div>
+              {artifactList.length ? (
+                <div className={`artifact-grid artifact-explorer-grid columns-${artifactExplorerColumns}`}>
+                  {Array.from({ length: artifactExplorerColumns }, (_, columnIndex) => (
+                    <div key={columnIndex} className="artifact-explorer-column">
+                      {artifactList.filter((_, artifactIndex) => artifactIndex % artifactExplorerColumns === columnIndex).map((artifact) => (
+                        <ArtifactCard key={`${artifact.node_id}/${artifact.artifact_name}`} artifact={artifact} />
+                      ))}
+                    </div>
+                  ))}
+                </div>
             ) : (
               <div className="artifact-empty-state">
                 <h4>No artifacts found</h4>

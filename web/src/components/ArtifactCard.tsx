@@ -1,5 +1,5 @@
 import type { ArtifactRecord, AssetRecord } from '../lib/types'
-import { formatBytes, formatTimestamp } from '../lib/helpers'
+import { formatBytes, formatTimestamp, formatType } from '../lib/helpers'
 import { DATAFRAME_CSV_DOWNLOAD_MAX_BYTES, artifactEndpoint } from '../lib/appHelpers'
 import { ArtifactPreviewPanel } from './ArtifactPreview'
 import { Download } from './Icons'
@@ -60,10 +60,10 @@ export function ArtifactCard({ artifact }: { artifact: ArtifactRecord }) {
       <div className="artifact-head">
         <div className="artifact-title-block">
           <div className="artifact-title-row">
-            <strong>{artifact.node_id}/{artifact.artifact_name}</strong>
-            <span className={`artifact-state-label ${artifact.state}`}>{artifact.state}</span>
+            <span className={`artifact-status-dot is-${artifact.state}`} aria-label={artifact.state} />
+            <strong className="artifact-identifier">{artifact.node_id}/{artifact.artifact_name}</strong>
+            <span className="artifact-type">{formatType(artifact.data_type ?? 'unknown')}</span>
           </div>
-          <span>{artifact.data_type ?? 'unknown'}</span>
         </div>
         <div className="artifact-download-actions">
           {downloadOptions.length === 1 ? (
@@ -72,7 +72,7 @@ export function ArtifactCard({ artifact }: { artifact: ArtifactRecord }) {
             </a>
           ) : (
             <details className="artifact-download-menu">
-              <summary className="secondary artifact-download-button" aria-label="Download options" title="Download options">
+              <summary className="secondary link-button artifact-download-button" aria-label="Download options" title="Download options">
                 <Download width={16} height={16} />
               </summary>
               <div className="artifact-download-popover">
@@ -101,8 +101,6 @@ export function ArtifactCard({ artifact }: { artifact: ArtifactRecord }) {
         />
       ) : <ArtifactPreviewPanel preview={artifact.preview} imageSrc={imageSrc} />}
       <div className="artifact-meta-grid">
-        <span>Storage: {artifact.storage_kind ?? 'n/a'}</span>
-        <span>Lineage: {artifact.lineage_mode ?? 'n/a'}</span>
         <span>Created: {formatTimestamp(artifact.created_at)}</span>
         <span>Size: {formatBytes(artifact.size_bytes)}</span>
       </div>
