@@ -1,10 +1,11 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, type MouseEvent } from 'react'
 import { useQuery } from '@tanstack/react-query'
 
 import { saveNotebookDashboard, listNodeAssets } from '../lib/api'
 import { useDocumentMetadata } from '../lib/documentMetadata'
 import { SaveDashboardDialog } from '../components/Dialogs'
-import type { PersistedAssetPanelState } from './AssetPanel'
+import { DashboardSidebar, normalizeDashboardPanels } from '../dashboard/DashboardSidebar'
+import type { DashboardPanelRecord } from '../lib/types'
 import { AssetPanel } from './AssetPanel'
 
 export function NotebookAssetsPage({
@@ -21,7 +22,8 @@ export function NotebookAssetsPage({
   onOpenDashboard?: (dashboardId: string) => void
 }) {
   useDocumentMetadata(nodeTitle || nodeId, 'dashboard')
-  const [panelStates, setPanelStates] = useState<Record<string, PersistedAssetPanelState>>({})
+  const [panels, setPanels] = useState<DashboardPanelRecord[]>([])
+  const initializedNodeIdRef = useRef<string | null>(null)
   const [saveBusy, setSaveBusy] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
   const [saveDialogOpen, setSaveDialogOpen] = useState(false)
@@ -32,6 +34,24 @@ export function NotebookAssetsPage({
   })
   const assets = assetsQuery.data ?? []
   const readyCount = assets.filter((asset) => asset.current_asset_version_id !== null).length
+  const assetsByLogicalId = useMemo(() => new Map(assets.map((asset) => [`${asset.node_id}/${asset.asset_name}`, asset] as const)), [assets])
+  const orderedPanels = useMemo(() => normalizeDashboardPanels(panels), [panels])
+  const visiblePanels = orderedPanels.filter((panel) => panel.visible)
+
+  useEffect(() => {
+    if (!assetsQuery.data || initializedNodeIdRef.current === nodeId) return
+    initializedNodeIdRef.current = nodeId
+    setPanels(assetsQuery.data.map((asset, index) => ({
+      panel_id: `${asset.node_id}/${asset.asset_name}`,
+      node_id: asset.node_id,
+      asset_name: asset.asset_name,
+      visible: true,
+      position: index,
+      panel_height: null,
+      modifier_overrides: {},
+      override_schema_hash: asset.override_schema_hash,
+    })))
+  }, [assetsQuery.data, nodeId])
 
   async function handleSaveDashboard(title: string, dashboardId: string) {
     setSaveBusy(true)
@@ -40,16 +60,7 @@ export function NotebookAssetsPage({
       const created = await saveNotebookDashboard(nodeId, {
         dashboard_id: dashboardId,
         title,
-        panels: assets.map((asset, index) => ({
-          panel_id: `${asset.node_id}/${asset.asset_name}`,
-          node_id: asset.node_id,
-          asset_name: asset.asset_name,
-          visible: true,
-          position: index,
-          panel_height: panelStates[`${asset.node_id}/${asset.asset_name}`]?.panel_height ?? null,
-          modifier_overrides: panelStates[`${asset.node_id}/${asset.asset_name}`]?.modifier_overrides ?? {},
-          override_schema_hash: panelStates[`${asset.node_id}/${asset.asset_name}`]?.override_schema_hash ?? asset.override_schema_hash,
-        })),
+        panels: orderedPanels,
       })
       onOpenDashboard?.(created.dashboard_id)
     } catch (error) {
@@ -59,10 +70,21 @@ export function NotebookAssetsPage({
     }
   }
 
+  function handlePanelNavigate(event: MouseEvent<HTMLAnchorElement>, panelId: string) {
+    event.preventDefault()
+    const sectionId = dashboardPanelDomId(panelId)
+    const target = document.getElementById(sectionId)
+    if (!target) return
+    target.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    window.history.replaceState(null, '', `#${sectionId}`)
+    event.currentTarget.blur()
+  }
+
   return (
-    <div className="assets-page-shell">
+    <div className="assets-page-shell dashboard-page-shell">
       <div className="canvas-underlay" />
-      <div className="assets-page">
+      <DashboardSidebar panels={panels} assetsByLogicalId={assetsByLogicalId} panelHref={(panelId) => `#${dashboardPanelDomId(panelId)}`} onPanelNavigate={handlePanelNavigate} onPanelsChange={(updater) => setPanels((current) => normalizeDashboardPanels(updater(current)))} />
+      <div className="assets-page dashboard-page">
         <header className="panel assets-page-header">
           <div>
             <p className="eyebrow">Notebook assets</p>
@@ -117,37 +139,31 @@ export function NotebookAssetsPage({
         ) : null}
 
         <div className="assets-panel-list">
-          {assets.map((asset) => {
-            const panelId = `${asset.node_id}/${asset.asset_name}`
+          {!assetsQuery.isLoading && !assetsQuery.isError && assets.length > 0 && visiblePanels.length === 0 ? (
+            <div className="panel assets-empty-state">
+              <h2>No visible panels</h2>
+              <p>This dashboard does not currently expose any visible asset panels.</p>
+            </div>
+          ) : null}
+          {visiblePanels.map((panel) => {
+            const asset = assetsByLogicalId.get(`${panel.node_id}/${panel.asset_name}`)
+            if (!asset) return null
+            const panelId = panel.panel_id
             return (
               <AssetPanel
                 key={panelId}
+                sectionId={dashboardPanelDomId(panelId)}
                 panelId={panelId}
                 nodeId={nodeId}
                 asset={asset}
                 viewerMode="notebook"
-                persistedState={panelStates[panelId] ?? null}
+                persistedState={{ modifier_overrides: panel.modifier_overrides, override_schema_hash: panel.override_schema_hash }}
                 onPersistedStateChange={(state) => {
-                  setPanelStates((current) => ({
-                    ...current,
-                    [panelId]: {
-                      ...current[panelId],
-                      modifier_overrides: state.modifier_overrides,
-                      override_schema_hash: state.override_schema_hash,
-                      panel_height: state.panel_height ?? current[panelId]?.panel_height ?? null,
-                    },
-                  }))
+                  setPanels((current) => current.map((entry) => entry.panel_id === panelId ? { ...entry, modifier_overrides: state.modifier_overrides, override_schema_hash: state.override_schema_hash } : entry))
                 }}
-                panelHeight={panelStates[panelId]?.panel_height ?? null}
+                panelHeight={panel.panel_height}
                 onPanelHeightChange={(panelHeight) => {
-                  setPanelStates((current) => ({
-                    ...current,
-                    [panelId]: {
-                      modifier_overrides: current[panelId]?.modifier_overrides ?? {},
-                      override_schema_hash: current[panelId]?.override_schema_hash ?? asset.override_schema_hash,
-                      panel_height: panelHeight,
-                    },
-                  }))
+                  setPanels((current) => current.map((entry) => entry.panel_id === panelId ? { ...entry, panel_height: panelHeight } : entry))
                 }}
               />
             )
@@ -166,4 +182,8 @@ export function NotebookAssetsPage({
       ) : null}
     </div>
   )
+}
+
+function dashboardPanelDomId(panelId: string): string {
+  return `dashboard-panel-${panelId.replace(/[^a-zA-Z0-9_-]+/g, '-')}`
 }
