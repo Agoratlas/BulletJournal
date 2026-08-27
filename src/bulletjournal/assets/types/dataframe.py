@@ -85,14 +85,14 @@ def serialize_dataframe(
 
 def prepare_dataframe(
     *,
-    dataset_path: Path,
+    dataset_path: Path | None,
     definition: dict[str, Any],
     default_modifiers: dict[str, Any],
     modifier_overrides: dict[str, Any],
     transient_modifiers: dict[str, Any],
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     del definition, transient_modifiers
-    frame = pl.scan_parquet(dataset_path)
+    frame = pl.LazyFrame() if dataset_path is None else pl.scan_parquet(dataset_path)
     schema = frame.collect_schema()
     column_names = list(schema.names())
     column_id_map = {str(name): name for name in column_names}

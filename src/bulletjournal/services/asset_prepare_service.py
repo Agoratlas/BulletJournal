@@ -158,6 +158,12 @@ class AssetPrepareService:
 
         project = self.project_service.require_project()
         artifact_hash = str(head['artifact_hash'])
+        preview = head.get('preview')
+        dataset_path = (
+            None
+            if isinstance(preview, dict) and preview.get('kind') == 'empty'
+            else project.object_store.load_file_path(artifact_hash)
+        )
         project.state_db.touch_artifact_object(artifact_hash)
         lease_id = project.state_db.acquire_object_lease(
             artifact_hash,
@@ -167,7 +173,7 @@ class AssetPrepareService:
         )
         try:
             payloads, resolved_modifiers = prepare_dataframe(
-                dataset_path=project.object_store.load_file_path(artifact_hash),
+                dataset_path=dataset_path,
                 definition={},
                 default_modifiers={
                     'page': {'index': 0, 'size': 25},
