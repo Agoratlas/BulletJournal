@@ -1026,7 +1026,7 @@ const BulletJournalNodeCard = memo(({ data, selected }: NodeProps<BulletJournalN
                         setEditorMenuOpen(false)
                         onOpenEditor(node.id)
                       }}>Open editor</button>
-                      <button className="secondary menu-item" onClick={() => {
+                      <button className="secondary menu-item danger-text" onClick={() => {
                         setEditorMenuOpen(false)
                         onKillEditor(node.id)
                       }}>Kill editor</button>
