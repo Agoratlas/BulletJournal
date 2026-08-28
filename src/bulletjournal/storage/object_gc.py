@@ -338,7 +338,8 @@ class ObjectGarbageCollector:
         cutoff = _iso(now - timedelta(seconds=self.settings.mutation_request_retention_seconds))
         with self.db._connection() as connection:
             row = connection.execute(
-                'SELECT COUNT(*), COALESCE(SUM(LENGTH(response_json) + LENGTH(response_zlib)), 0) '
+                'SELECT COUNT(*), COALESCE(SUM(COALESCE(LENGTH(response_json), 0) + '
+                'COALESCE(LENGTH(response_zlib), 0)), 0) '
                 'FROM mutation_requests WHERE created_at <= ?',
                 (cutoff,),
             ).fetchone()

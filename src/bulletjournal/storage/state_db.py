@@ -558,7 +558,8 @@ class StateDB:
     def prune_mutation_requests(self, cutoff: str) -> tuple[int, int]:
         with self._connection() as connection:
             row = connection.execute(
-                'SELECT COUNT(*), COALESCE(SUM(LENGTH(response_json) + LENGTH(response_zlib)), 0) '
+                'SELECT COUNT(*), COALESCE(SUM(COALESCE(LENGTH(response_json), 0) + '
+                'COALESCE(LENGTH(response_zlib), 0)), 0) '
                 'FROM mutation_requests WHERE created_at <= ?',
                 (cutoff,),
             ).fetchone()
