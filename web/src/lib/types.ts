@@ -516,7 +516,9 @@ export type ProjectSnapshot = {
   templates: TemplateRecord[]
 }
 
-export type GraphPatchResponse = ProjectSnapshot & {
+export type GraphPatchResponse = {
+  server_time: string
+  graph: ProjectSnapshot['graph']
   interrupted_run?: {
     run_id: string
     node_id: string | null

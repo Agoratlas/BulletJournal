@@ -58,6 +58,114 @@ def test_expired_graph_mutation_request_returns_a_version_conflict_not_a_server_
     assert retry.json()['code'] == 'history_conflict'
 
 
+def test_graph_patch_returns_only_graph_state_and_history_metadata(tmp_path) -> None:
+    project_root = init_project_root(tmp_path / 'project').root
+    client = TestClient(create_app(project_path=project_root))
+    graph_version = client.get('/api/v1/graph').json()['meta']['graph_version']
+
+    response = client.patch(
+        '/api/v1/graph',
+        json={
+            'graph_version': graph_version,
+            'request_id': 'compact-response',
+            'operations': [{'type': 'add_area_node', 'node_id': 'area', 'title': 'Area'}],
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert set(payload) == {'server_time', 'graph', 'interrupted_run', 'tombstone_mutations'}
+    assert payload['graph']['nodes'][0]['id'] == 'area'
+    assert 'artifacts' not in payload
+    assert 'templates' not in payload
+    assert 'runs' not in payload
+
+
+def test_successive_graph_patches_return_complete_authoritative_graphs(tmp_path) -> None:
+    project_root = init_project_root(tmp_path / 'project').root
+    client = TestClient(create_app(project_path=project_root))
+    graph_version = client.get('/api/v1/graph').json()['meta']['graph_version']
+
+    first = client.patch(
+        '/api/v1/graph',
+        json={
+            'graph_version': graph_version,
+            'request_id': 'first',
+            'operations': [{'type': 'add_area_node', 'node_id': 'first', 'title': 'First'}],
+        },
+    )
+    second = client.patch(
+        '/api/v1/graph',
+        json={
+            'graph_version': first.json()['graph']['meta']['graph_version'],
+            'request_id': 'second',
+            'operations': [{'type': 'add_area_node', 'node_id': 'second', 'title': 'Second'}],
+        },
+    )
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert {node['id'] for node in second.json()['graph']['nodes']} == {'first', 'second'}
+    assert second.json()['graph']['meta']['graph_version'] == graph_version + 2
+
+
+def test_stale_concurrent_graph_patch_conflicts_without_partial_compact_response(tmp_path) -> None:
+    project_root = init_project_root(tmp_path / 'project').root
+    client = TestClient(create_app(project_path=project_root))
+    graph_version = client.get('/api/v1/graph').json()['meta']['graph_version']
+    payload = {
+        'graph_version': graph_version,
+        'operations': [{'type': 'add_area_node', 'node_id': 'area', 'title': 'Area'}],
+    }
+
+    winner = client.patch('/api/v1/graph', json={**payload, 'request_id': 'winner'})
+    loser = client.patch('/api/v1/graph', json={**payload, 'request_id': 'loser'})
+
+    assert winner.status_code == 200
+    assert loser.status_code == 409
+    assert loser.json()['code'] == 'history_conflict'
+    assert client.get('/api/v1/graph').json()['meta']['graph_version'] == graph_version + 1
+
+
+def test_compact_delete_restore_and_redo_responses_retain_tombstone_metadata(tmp_path) -> None:
+    project_root = init_project_root(tmp_path / 'project').root
+    client = TestClient(create_app(project_path=project_root))
+    graph_version = client.get('/api/v1/graph').json()['meta']['graph_version']
+    created = client.patch(
+        '/api/v1/graph',
+        json={
+            'graph_version': graph_version,
+            'request_id': 'create',
+            'operations': [{'type': 'add_area_node', 'node_id': 'area', 'title': 'Area'}],
+        },
+    ).json()
+    deleted = client.patch(
+        '/api/v1/graph',
+        json={
+            'graph_version': created['graph']['meta']['graph_version'],
+            'request_id': 'delete',
+            'operations': [{'type': 'delete_node', 'node_id': 'area'}],
+        },
+    )
+
+    assert deleted.status_code == 200
+    mutation = deleted.json()['tombstone_mutations'][0]
+    restored = client.post(
+        f'/api/v1/graph/tombstones/{mutation["tombstone_id"]}/restore',
+        json={'request_id': 'restore'},
+    )
+    redone = client.post(
+        f'/api/v1/graph/tombstones/{mutation["tombstone_id"]}/redo',
+        json={'request_id': 'redo', 'incarnation_id': mutation['incarnation_id']},
+    )
+
+    assert restored.status_code == 200
+    assert set(restored.json()) == {'server_time', 'graph', 'tombstone_mutation'}
+    assert restored.json()['graph']['nodes'][0]['id'] == 'area'
+    assert redone.status_code == 200
+    assert redone.json()['tombstone_mutations'][0]['node_id'] == 'area'
+
+
 def test_node_detail_endpoint_available_at_project_nodes_path(tmp_path) -> None:
     project_root = init_project_root(tmp_path / 'project').root
     app = create_app(project_path=project_root)

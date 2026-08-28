@@ -1295,6 +1295,14 @@ class StateDB:
             for row in rows
         ]
 
+    def list_asset_states(self) -> list[dict[str, str]]:
+        with self._connection() as connection:
+            rows = connection.execute(
+                'SELECT node_id, state FROM asset_heads WHERE incarnation_id IS NULL OR incarnation_id IN '
+                "(SELECT incarnation_id FROM node_incarnations WHERE status = 'live')"
+            ).fetchall()
+        return [{'node_id': str(row['node_id']), 'state': str(row['state'])} for row in rows]
+
     def ensure_artifact_head(
         self, node_id: str, artifact_name: str, state: ArtifactState = ArtifactState.PENDING
     ) -> None:
@@ -1668,6 +1676,14 @@ class StateDB:
                 'ORDER BY ah.node_id, ah.artifact_name'
             ).fetchall()
         return [self._row_to_artifact(row) for row in rows]
+
+    def list_artifact_states(self) -> list[dict[str, str]]:
+        with self._connection() as connection:
+            rows = connection.execute(
+                'SELECT node_id, state FROM artifact_heads WHERE incarnation_id IS NULL OR incarnation_id IN '
+                "(SELECT incarnation_id FROM node_incarnations WHERE status = 'live')"
+            ).fetchall()
+        return [{'node_id': str(row['node_id']), 'state': str(row['state'])} for row in rows]
 
     def record_run(
         self,

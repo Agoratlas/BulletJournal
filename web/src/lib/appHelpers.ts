@@ -1,6 +1,6 @@
 import { appUrl } from './api'
 import { GRID_SIZE, inputBindingSource } from './helpers'
-import type { ArtifactRecord, DashboardRecord, GraphPatchOperation, LayoutRecord, NodeRecord, ProjectSnapshot, TemplateRecord } from './types'
+import type { ArtifactRecord, DashboardRecord, GraphPatchOperation, GraphPatchResponse, LayoutRecord, NodeRecord, ProjectSnapshot, TemplateRecord } from './types'
 import type { AppNotice, ConstantValueType, GraphMutationPlan, OptimisticGraphState, PaletteEntry, PortActionMenuState, SnapshotLike } from '../appTypes'
 
 type EditorSessionNoticeDetails = {
@@ -434,6 +434,13 @@ export function mergeGraphIntoSnapshot(snapshot: SnapshotLike, graph: { meta: Pr
     layout: graph.layout.map((entry) => ({ ...entry })),
   }
   return merged
+}
+
+export function applyGraphPatchResponse(snapshot: ProjectSnapshot, response: GraphPatchResponse): ProjectSnapshot {
+  if (snapshot.graph.meta.graph_version > response.graph.meta.graph_version) {
+    return snapshot
+  }
+  return { ...mergeGraphIntoSnapshot(snapshot, response.graph), server_time: response.server_time }
 }
 
 export function clampContextMenuPosition(position: { x: number; y: number }, estimatedSize: { width: number; height: number } = { width: 260, height: 320 }) {

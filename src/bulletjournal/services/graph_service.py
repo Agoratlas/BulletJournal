@@ -304,7 +304,7 @@ class GraphService:
                 self.mark_nodes_and_downstream_stale(sorted(stale_roots))
                 self.restore_nodes_and_downstream_ready_if_lineage_matches(sorted(stale_roots))
         self.project_service.create_automatic_checkpoint_if_due()
-        snapshot = self.project_service.snapshot()
+        snapshot = self.project_service.graph_patch_payload()
         response = {
             **snapshot,
             'interrupted_run': active_run_interruption,
@@ -1477,7 +1477,7 @@ class GraphService:
                 list(manifest.get('dashboard_references') or [])
             )
         response = {
-            **self.project_service.snapshot(),
+            **self.project_service.graph_patch_payload(),
             'tombstone_mutation': {
                 'mutation_id': str(uuid.uuid4()),
                 'tombstone_id': tombstone_id,

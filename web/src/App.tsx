@@ -8,7 +8,7 @@ import { areaSettings, type AreaColorKey, type AreaTitlePosition } from './lib/a
 import { useDocumentMetadata } from './lib/documentMetadata'
 import type { ArtifactRecord, DashboardRecord, GraphPatchOperation, LayoutRecord, NodeRecord, ProjectSnapshot, SessionRecord, TemplateRecord } from './lib/types'
 import type { AppNotice, ClipboardGraph, ClipboardNodeRecord, ConstantValueType, DataFrameUploadFormat, GraphHistoryEntry, GraphMutationPlan, NodeActionItem, OptimisticGraphState, PaletteEntry, PalettePreviewBlock, PortActionMenuState } from './appTypes'
-import { applyOptimisticDashboardSources, applyOptimisticGraphOperations, areaAddOperationForNode, artifactTargetForPort, blockCreateMode, clampContextMenuPosition, cloneSnapshot, constantAddOperationForNode, copiedTitle, createClientNotice, dashboardAddOperationForNode, edgeIdForPorts, edgeIdsForPort, editorSessionDetails, expandMutationPlan, fileInputAddOperationForNode, formatMarkdownCode, formatRunBlockedMessage, formatRunFailureMessage, freezeBlockMessage, frozenBlockBlockersForDelete, frozenBlockBlockersForRemovedEdges, frozenBlockBlockersForStaleRoots, isEditableTarget, isEditorOpenConflict, isFreezeConflict, isManagedRunFailure, normalizeNodeId, notebookAddOperationForNode, organizerAddOperationForNode, pipelineTemplateNodeRecords, pipelineTopLeftForCenter, SNAPSHOT_REFRESH_EVENTS, SNAPSHOT_REFRESH_THROTTLE_MS, snapToGrid, topologicallyOrderNodeIds, uniqueCopiedNodeId, upstreamNodeIds } from './lib/appHelpers'
+import { applyGraphPatchResponse, applyOptimisticDashboardSources, applyOptimisticGraphOperations, areaAddOperationForNode, artifactTargetForPort, blockCreateMode, clampContextMenuPosition, cloneSnapshot, constantAddOperationForNode, copiedTitle, createClientNotice, dashboardAddOperationForNode, edgeIdForPorts, edgeIdsForPort, editorSessionDetails, expandMutationPlan, fileInputAddOperationForNode, formatMarkdownCode, formatRunBlockedMessage, formatRunFailureMessage, freezeBlockMessage, frozenBlockBlockersForDelete, frozenBlockBlockersForRemovedEdges, frozenBlockBlockersForStaleRoots, isEditableTarget, isEditorOpenConflict, isFreezeConflict, isManagedRunFailure, normalizeNodeId, notebookAddOperationForNode, organizerAddOperationForNode, pipelineTemplateNodeRecords, pipelineTopLeftForCenter, SNAPSHOT_REFRESH_EVENTS, SNAPSHOT_REFRESH_THROTTLE_MS, snapToGrid, topologicallyOrderNodeIds, uniqueCopiedNodeId, upstreamNodeIds } from './lib/appHelpers'
 import { ArtifactCard } from './components/ArtifactCard'
 import { ArtifactCounts } from './components/ArtifactCounts'
 import { BlockPalette } from './components/BlockPalette'
@@ -2572,7 +2572,7 @@ function App() {
             committedSnapshot.graph.meta.graph_version,
             batch.flatMap((mutation) => mutation.operations),
           )
-          setSnapshotData(queryClient, committedSnapshot, () => response)
+          setSnapshotData(queryClient, committedSnapshot, (current) => applyGraphPatchResponse(current, response))
           graphMutationInFlightRef.current = []
           syncGraphMutationOptimisticState(currentCommittedSnapshot(committedSnapshot))
           const historyEntries = batch
@@ -4335,7 +4335,7 @@ function App() {
           const response = await restoreGraphTombstone(deletion.tombstone_id)
           const committed = currentCommittedSnapshot()
           if (committed) {
-            setSnapshotData(queryClient, committed, () => response)
+            setSnapshotData(queryClient, committed, (current) => applyGraphPatchResponse(current, response))
           }
         }
         success = true
@@ -4372,7 +4372,7 @@ function App() {
           }
           const committed = currentCommittedSnapshot()
           if (committed) {
-            setSnapshotData(queryClient, committed, () => response)
+            setSnapshotData(queryClient, committed, (current) => applyGraphPatchResponse(current, response))
           }
         }
         nextEntry = { ...entry, deletion: nextDeletion }

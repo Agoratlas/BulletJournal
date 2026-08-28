@@ -613,7 +613,7 @@ class ProjectService:
             return f'Freeze is blocked because an upstream editor is open for {labels}. Close it first.'
         return f'Freeze is blocked because upstream editors are open for {labels}. Close them first.'
 
-    def snapshot(self) -> dict[str, Any]:
+    def snapshot(self, *, include_details: bool = True) -> dict[str, Any]:
         project = self.require_project()
         graph = project.graph_store.read()
         interfaces = self.interfaces_by_node(graph)
@@ -629,17 +629,19 @@ class ProjectService:
             if notice.get('code') != 'run_failed' or not isinstance(node_id, str) or not node_id:
                 continue
             runtime_error_notice_by_node[node_id] = True
-        artifacts = project.state_db.list_artifact_heads()
+        artifacts = project.state_db.list_artifact_heads() if include_details else []
         notebook_execution_heads = {
             str(head['node_id']): head for head in project.state_db.list_notebook_execution_heads()
         }
         artifact_states_by_node: dict[str, list[str]] = {}
-        for artifact in artifacts:
+        artifact_states = artifacts if include_details else project.state_db.list_artifact_states()
+        for artifact in artifact_states:
             artifact_states_by_node.setdefault(str(artifact['node_id']), []).append(str(artifact['state']))
         asset_states_by_node: dict[str, list[str]] = {}
-        for asset in project.state_db.list_asset_heads():
+        asset_states = project.state_db.list_asset_heads() if include_details else project.state_db.list_asset_states()
+        for asset in asset_states:
             asset_states_by_node.setdefault(str(asset['node_id']), []).append(str(asset['state']))
-        runs = project.state_db.list_run_records()
+        runs = project.state_db.list_run_records() if include_details else []
         execution_meta_by_node = project.state_db.list_orchestrator_execution_meta()
         orchestrator_state_by_node = self.run_service.orchestrator_state() if self.run_service is not None else {}
         node_payload = []
@@ -728,9 +730,15 @@ class ProjectService:
             'notices': notices,
             'artifacts': artifacts,
             'runs': runs,
-            'checkpoints': [asdict(checkpoint) for checkpoint in project.state_db.list_checkpoints()],
-            'templates': self.template_service.list_templates(),
+            'checkpoints': (
+                [asdict(checkpoint) for checkpoint in project.state_db.list_checkpoints()] if include_details else []
+            ),
+            'templates': self.template_service.list_templates() if include_details else [],
         }
+
+    def graph_patch_payload(self) -> dict[str, Any]:
+        snapshot = self.snapshot(include_details=False)
+        return {'server_time': snapshot['server_time'], 'graph': snapshot['graph']}
 
     def project_metadata_payload(self) -> dict[str, Any]:
         project = self.require_project()
