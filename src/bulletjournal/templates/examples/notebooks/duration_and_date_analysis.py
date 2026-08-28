@@ -87,7 +87,33 @@ def _(movies_df):
 
 @app.cell
 def _(movies_df_cleaned_date):
-    publication_hist = assets.Histogram(movies_df_cleaned_date, x='date_published')
+    publication_hist = assets.Collection(display_mode='3_columns')
+    publication_hist.add_asset(
+        assets.Histogram(
+            movies_df_cleaned_date[movies_df_cleaned_date['duration'] < 90],
+            x='date_published',
+        ),
+        name='short_movies',
+        title='Short movies (<90 minutes)',
+    )
+    publication_hist.add_asset(
+        assets.Histogram(
+            movies_df_cleaned_date[
+                (movies_df_cleaned_date['duration'] >= 90) & (movies_df_cleaned_date['duration'] < 120)
+            ],
+            x='date_published',
+        ),
+        name='medium_movies',
+        title='Medium movies (90-120 minutes)',
+    )
+    publication_hist.add_asset(
+        assets.Histogram(
+            movies_df_cleaned_date[movies_df_cleaned_date['duration'] >= 120],
+            x='date_published',
+        ),
+        name='long_movies',
+        title='Long movies (120+ minutes)',
+    )
 
     assets.push(publication_hist, name='publication_hist', title='Distribution of publication date')
     return

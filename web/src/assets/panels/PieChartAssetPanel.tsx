@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import embed, { type Result as VegaEmbedResult, type VisualizationSpec } from 'vega-embed'
 
@@ -62,6 +62,9 @@ export function PieChartAssetPanel({
   onReadyStateChange,
   panelHeight,
   onPanelHeightChange,
+  isPanelResized,
+  chartScale = 1,
+  minPanelHeight,
   sectionId,
   frameVariant,
 }: DatavizAssetPanelProps) {
@@ -447,11 +450,11 @@ export function PieChartAssetPanel({
   )
 
   return (
-    <AssetPanelFrame asset={asset} panelInfo={panelInfo} settingsTitle="Modifier overrides" settingsBody={settingsBody} settingsActive={hasSettingsOverrides} sectionId={sectionId} frameVariant={frameVariant} showExportActions={viewerMode === 'dashboard'}>
+    <AssetPanelFrame asset={asset} panelInfo={panelInfo} settingsTitle="Modifier overrides" settingsBody={settingsBody} settingsActive={hasSettingsOverrides} sectionId={sectionId} frameVariant={frameVariant} showExportActions={viewerMode === 'dashboard'} isPanelResized={isPanelResized}>
       <div className="asset-dataframe-panel asset-pie-chart-panel">
         {overrideIncompatible ? <OverrideIncompatibleNotice onReset={onPersistedStateChange ? handleResetOverrides : undefined} /> : null}
         <PrepareErrorsNotice errors={prepareErrors} />
-        <ResizableDatavizContent height={resolvedPanelHeight} onHeightChange={onPanelHeightChange}>
+        <ResizableDatavizContent height={resolvedPanelHeight} onHeightChange={onPanelHeightChange} isResized={isPanelResized} minHeight={minPanelHeight}>
           {(chartHeight) => (
             <>
               {prepareQuery.isLoading && !pieChart ? <LoadingPlaceholder message="Preparing pie chart view..." /> : null}
@@ -464,6 +467,7 @@ export function PieChartAssetPanel({
                   chartHeight={chartHeight}
                   overrides={chartOverrides}
                   defaultOverrides={chartOverrideDefaults}
+                  chartScale={chartScale}
                   selectedCategories={selectedCategories}
                   onSelectionChange={(nextSelection) => {
                     setPageIndex(0)
@@ -535,6 +539,7 @@ function PieChartChart({
   chartHeight,
   overrides,
   defaultOverrides,
+  chartScale,
   selectedCategories,
   onSelectionChange,
 }: {
@@ -542,12 +547,14 @@ function PieChartChart({
   chartHeight: number
   overrides: PieChartChartOverrides
   defaultOverrides: PieChartChartOverrides
+  chartScale: number
   selectedCategories: PieChartSelectionValue[]
   onSelectionChange: (categories: PieChartSelectionValue[]) => void
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null)
   const [chartError, setChartError] = useState<string | null>(null)
   const viewRef = useRef<VegaEmbedResult | null>(null)
+  const initialChartHeightRef = useRef(chartHeight)
   const onSelectionChangeRef = useRef(onSelectionChange)
   const chartTheme = useAssetChartTheme()
   const displaySlices = useMemo(
@@ -562,11 +569,12 @@ function PieChartChart({
       displaySlices,
       selectedCategories,
       chartTheme,
-      chartHeight,
+      initialChartHeightRef.current,
       overrides,
       defaultOverrides,
+      chartScale,
     ),
-    [chartHeight, chartTheme, defaultOverrides, displaySlices, overrides, selectedCategories],
+    [chartScale, chartTheme, defaultOverrides, displaySlices, overrides, selectedCategories],
   )
 
   useEffect(() => {
@@ -629,6 +637,13 @@ function PieChartChart({
     }
   }, [selectedCategories, spec])
 
+  useLayoutEffect(() => {
+    const result = viewRef.current
+    if (result !== null) {
+      result.view.height(chartHeight).run()
+    }
+  }, [chartHeight])
+
   useEffect(() => {
     const result = viewRef.current
     if (result === null) {
@@ -662,6 +677,7 @@ function buildPieChartVegaLiteSpec(
   chartHeight: number,
   overrides: PieChartChartOverrides,
   defaultOverrides: PieChartChartOverrides,
+  chartScale: number,
 ): VisualizationSpec {
   const titlePadding = overrides.title.hideTitle ? 8 : 52
   const outerRadius = Math.max(80, Math.floor((chartHeight - titlePadding) / 2))
@@ -675,13 +691,13 @@ function buildPieChartVegaLiteSpec(
   let cumulativeCount = 0
   return {
     $schema: 'https://vega.github.io/schema/vega-lite/v6.json',
-    autosize: { type: 'fit-x', contains: 'padding' },
+    autosize: { type: 'fit', contains: 'padding', resize: true },
     width: 'container',
     height: chartHeight,
     background: 'transparent',
     padding: buildChartPadding(overrides.title),
-    title: buildChartTitle(overrides.title, defaultOverrides.title.text),
-    config: buildVegaLiteChartConfig(theme),
+    title: buildChartTitle(overrides.title, defaultOverrides.title.text, chartScale),
+    config: buildVegaLiteChartConfig(theme, chartScale),
     data: {
       values: displaySlices.map((slice, index) => {
         const labelText = pieChartLabelText(slice.label, slice.share, overrides.showPercentages)

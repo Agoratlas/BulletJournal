@@ -25,6 +25,15 @@ export function Info(props: SVGProps<SVGSVGElement>) {
   )
 }
 
+export function RotateCcw(props: SVGProps<SVGSVGElement>) {
+  return (
+    <IconBase {...props} strokeWidth="3">
+      <path d="M 4 12 a 8 8 0 1 0 8 -8" />
+      <path d="M 14.39 9.13 L 12 4 L 17.13 1.61" />
+    </IconBase>
+  )
+}
+
 export function Download(props: SVGProps<SVGSVGElement>) {
   return (
     <IconBase {...props} strokeWidth="2.5">

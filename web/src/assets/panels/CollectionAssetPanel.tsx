@@ -9,7 +9,9 @@ import {
 } from '../shared/layout'
 import {
   buildModifierOverridesRecord,
+  modifierFieldLabelClassName,
   stableValueKey,
+  valuesEqual,
 } from '../shared/modifiers'
 import type {
   AssetPanelFrameVariant,
@@ -18,7 +20,7 @@ import type {
   PersistedAssetPanelState,
 } from '../shared/types'
 
-type CollectionDisplayMode = 'all' | 'single'
+type CollectionDisplayMode = 'all' | 'single' | '2_columns' | '3_columns'
 
 type CollectionChild = {
   name: string
@@ -90,24 +92,23 @@ export function CollectionAssetPanel({
   const localStateKey = stableValueKey({ displayMode, selectedChildName })
   const activeChild = children.find((child) => child.name === selectedChildName) ?? children[0] ?? null
   const displayedChild = children.find((child) => child.name === displayedChildName) ?? activeChild
+  const displayModeRef = useRef(displayMode)
+  const activeChildNameRef = useRef(activeChild?.name ?? null)
+  const persistedChildPanelsRef = useRef(persistedChildPanels)
   const shouldPreloadActiveChild = displayMode === 'single'
     && activeChild !== null
     && displayedChild !== null
     && activeChild.name !== displayedChild.name
   const isActiveChildReady = activeChild !== null && readyChildNames[activeChild.name] === true
   const defaultState = collectionDefaultState(asset, children)
-  const hasSettingsOverrides = Object.keys(
-    buildModifierOverridesRecord(
-      {
-        display_mode: displayMode,
-        selected_child: activeChild?.name ?? null,
-      },
-      {
-        display_mode: defaultState.displayMode,
-        selected_child: defaultState.selectedChildName,
-      },
-    ),
-  ).length > 0
+  const collectionViewValues = { display_mode: displayMode }
+  const collectionViewDefaults = { display_mode: defaultState.displayMode }
+  const collectionViewOverrides = buildModifierOverridesRecord(collectionViewValues, collectionViewDefaults)
+  const hasSettingsOverrides = Object.keys(collectionViewOverrides).length > 0
+
+  displayModeRef.current = displayMode
+  activeChildNameRef.current = activeChild?.name ?? null
+  persistedChildPanelsRef.current = persistedChildPanels
 
   useEffect(() => {
     const lastAppliedExternalState = lastAppliedExternalStateRef.current
@@ -124,9 +125,20 @@ export function CollectionAssetPanel({
       return
     }
     isApplyingPersistedStateRef.current = true
-    setDisplayMode(initialState.displayMode)
+    // Child-panel updates can arrive from an older dashboard snapshot that omits
+    // this override. Keep the active mode rather than reverting the user's view.
+    if (isCollectionDisplayMode(persistedState?.modifier_overrides?.display_mode)) {
+      setDisplayMode(initialState.displayMode)
+    }
     setSelectedChildName(initialState.selectedChildName)
-  }, [asset.current_asset_version_id, externalStateKey, initialState.displayMode, initialState.selectedChildName, localStateKey])
+  }, [
+    asset.current_asset_version_id,
+    externalStateKey,
+    initialState.displayMode,
+    initialState.selectedChildName,
+    localStateKey,
+    persistedState?.modifier_overrides?.display_mode,
+  ])
 
   useEffect(() => {
     if (localStateKey === externalStateKey) {
@@ -196,8 +208,8 @@ export function CollectionAssetPanel({
     const nextState = buildCollectionPersistedState(
       asset,
       defaultState,
-      displayMode,
-      activeChild?.name ?? null,
+      displayModeRef.current,
+      activeChildNameRef.current,
       nextChildPanels,
     )
     onPersistedStateChange?.(nextState)
@@ -215,6 +227,25 @@ export function CollectionAssetPanel({
     ))
   }
 
+  function handleDisplayModeChange(nextDisplayMode: CollectionDisplayMode) {
+    const nextChildPanels = Object.fromEntries(
+      Object.entries(persistedChildPanelsRef.current).map(([childName, childState]) => [
+        childName,
+        { ...childState, panel_height: null },
+      ]),
+    )
+    displayModeRef.current = nextDisplayMode
+    persistedChildPanelsRef.current = nextChildPanels
+    setDisplayMode(nextDisplayMode)
+    onPersistedStateChange?.(buildCollectionPersistedState(
+      asset,
+      defaultState,
+      nextDisplayMode,
+      activeChildNameRef.current,
+      nextChildPanels,
+    ))
+  }
+
   const settingsBody = children.length ? (
     <>
       <div className="asset-dataviz-settings-actions">
@@ -229,28 +260,20 @@ export function CollectionAssetPanel({
       </div>
       <PanelSettingsSection title="Collection view">
         <label className="asset-dataviz-field">
-          <span className="asset-modifier-label">Display mode</span>
+          <span className={modifierFieldLabelClassName(!valuesEqual(
+            collectionViewValues.display_mode,
+            collectionViewDefaults.display_mode,
+          ))}>Display mode</span>
           <select
             value={displayMode}
-            onChange={(event) => setDisplayMode(event.target.value === 'single' ? 'single' : 'all')}
+            onChange={(event) => handleDisplayModeChange(collectionDisplayModeFromValue(event.target.value))}
           >
             <option value="all">All children</option>
+            <option value="2_columns">Two columns</option>
+            <option value="3_columns">Three columns</option>
             <option value="single">Single child</option>
           </select>
         </label>
-        {children.length > 1 ? (
-          <label className="asset-dataviz-field">
-            <span className="asset-modifier-label">Selected child</span>
-            <select
-              value={activeChild?.name ?? ''}
-              onChange={(event) => setSelectedChildName(event.target.value || (children[0]?.name ?? null))}
-            >
-              {children.map((child) => (
-                <option key={child.name} value={child.name}>{child.title}</option>
-              ))}
-            </select>
-          </label>
-        ) : null}
       </PanelSettingsSection>
     </>
   ) : undefined
@@ -328,12 +351,13 @@ export function CollectionAssetPanel({
         frameVariant={frameVariant}
       >
       <div className="asset-collection-panel">
-        <div className={`asset-collection-list${displayMode === 'single' ? ' is-single' : ''}`}>
+        <div className={`asset-collection-list asset-collection-list--${displayMode}`}>
           {renderedChildren.map(({ child, isPreloading }) => {
             const childPanelState = persistedChildPanels[child.name] ?? null
+            const childPanelHeight = scaledCollectionPanelHeight(childPanelState?.panel_height ?? null, displayMode)
             return (
               <div
-                key={isPreloading ? `${child.name}/preload` : child.name}
+                key={`${isPreloading ? `${child.name}/preload` : child.name}/${displayMode}`}
                 className={`asset-collection-item${isPreloading ? ' is-preloading' : ''}`}
                 aria-hidden={isPreloading}
               >
@@ -351,7 +375,7 @@ export function CollectionAssetPanel({
                   } : null}
                   onPersistedStateChange={(state) => {
                     persistChildPanels({
-                      ...persistedChildPanels,
+                      ...persistedChildPanelsRef.current,
                       [child.name]: normalizeCollectionChildPanelState({
                         ...(childPanelState ?? {}),
                         modifier_overrides: state.modifier_overrides,
@@ -359,18 +383,21 @@ export function CollectionAssetPanel({
                       }),
                     })
                   }}
-                  panelHeight={childPanelState?.panel_height ?? null}
+                  panelHeight={childPanelHeight}
+                  isPanelResized={childPanelState?.panel_height !== null && childPanelState?.panel_height !== undefined && childPanelState.panel_height !== collectionDefaultPanelHeight(displayMode)}
+                  chartScale={collectionChartFontScale(displayMode)}
                   onPanelHeightChange={(height) => {
                     persistChildPanels({
-                      ...persistedChildPanels,
+                      ...persistedChildPanelsRef.current,
                       [child.name]: normalizeCollectionChildPanelState({
                         ...childPanelState,
                         modifier_overrides: childPanelState?.modifier_overrides ?? {},
                         override_schema_hash: childPanelState?.override_schema_hash ?? child.overrideSchemaHash,
-                        panel_height: height,
+                        panel_height: height === null ? null : unscaledCollectionPanelHeight(height, displayModeRef.current),
                       }),
                     })
                   }}
+                  minPanelHeight={scaledCollectionPanelHeight(null, displayMode) ?? undefined}
                 />
               </div>
             )
@@ -415,7 +442,7 @@ function collectionChildrenFromAsset(asset: AssetRecord): CollectionChild[] {
 
 function collectionDefaultState(asset: AssetRecord, children: CollectionChild[]): CollectionState {
   return {
-    displayMode: asset.definition?.display_mode_default === 'all' ? 'all' : 'single',
+    displayMode: collectionDisplayModeFromValue(asset.definition?.display_mode_default),
     selectedChildName: children[0]?.name ?? null,
   }
 }
@@ -431,9 +458,41 @@ function collectionStateFromModifiers(
     ? modifierOverrides.selected_child
     : defaults.selectedChildName
   return {
-    displayMode: modifierOverrides.display_mode === 'single' ? 'single' : defaults.displayMode,
+    displayMode: collectionDisplayModeFromValue(modifierOverrides.display_mode, defaults.displayMode),
     selectedChildName,
   }
+}
+
+function collectionDisplayModeFromValue(
+  value: unknown,
+  fallback: CollectionDisplayMode = 'single',
+): CollectionDisplayMode {
+  return isCollectionDisplayMode(value) ? value : fallback
+}
+
+function isCollectionDisplayMode(value: unknown): value is CollectionDisplayMode {
+  return value === 'all' || value === 'single' || value === '2_columns' || value === '3_columns'
+}
+
+function scaledCollectionPanelHeight(height: number | null, displayMode: CollectionDisplayMode): number | null {
+  const columns = collectionColumnCount(displayMode)
+  return columns === 1 ? height : Math.max(240, (height ?? 600) / columns)
+}
+
+function unscaledCollectionPanelHeight(height: number, displayMode: CollectionDisplayMode): number {
+  return height * collectionColumnCount(displayMode)
+}
+
+function collectionColumnCount(displayMode: CollectionDisplayMode): number {
+  return displayMode === '2_columns' ? 2 : displayMode === '3_columns' ? 3 : 1
+}
+
+function collectionChartFontScale(displayMode: CollectionDisplayMode): number {
+  return displayMode === '2_columns' ? 0.8 : displayMode === '3_columns' ? 0.6 : 1
+}
+
+function collectionDefaultPanelHeight(displayMode: CollectionDisplayMode): number {
+  return unscaledCollectionPanelHeight(scaledCollectionPanelHeight(null, displayMode) ?? 600, displayMode)
 }
 
 function buildCollectionPersistedState(
@@ -444,14 +503,8 @@ function buildCollectionPersistedState(
   childPanels: Record<string, CollectionChildPanelState>,
 ): PersistedAssetPanelState {
   const modifierOverrides = buildModifierOverridesRecord(
-    {
-      display_mode: displayMode,
-      selected_child: selectedChildName,
-    },
-    {
-      display_mode: defaults.displayMode,
-      selected_child: defaults.selectedChildName,
-    },
+    { display_mode: displayMode },
+    { display_mode: defaults.displayMode },
   )
   const serializedChildPanels = serializeCollectionChildPanelStates(childPanels)
   if (Object.keys(serializedChildPanels).length) {

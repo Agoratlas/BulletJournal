@@ -3,11 +3,11 @@ import { useEffect, useMemo, useState } from 'react'
 import type { AssetChartTheme, ChartAxisOverrides, ChartTitleOverrides, HistogramSelectionRange, ScatterPlotSelectionBounds } from './types'
 import { optionalIntegerFromInput, optionalNonNegativeNumberFromInput, optionalPositiveNumberFromInput } from './modifiers'
 
-export function buildAxisSpec(overrides: ChartAxisOverrides, defaultLabel: string) {
+export function buildAxisSpec(overrides: ChartAxisOverrides, defaultLabel: string, fontScale = 1) {
   const resolvedLabel = resolvedAxisLabel(overrides.label, defaultLabel)
   return {
     title: overrides.hideLabel ? null : resolvedLabel,
-    titleFontSize: optionalPositiveNumberFromInput(overrides.labelSize),
+    titleFontSize: (optionalPositiveNumberFromInput(overrides.labelSize) ?? 12) * fontScale,
     tickCount: optionalIntegerFromInput(overrides.tickCount),
     tickSize: optionalNonNegativeNumberFromInput(overrides.tickSize),
     grid: overrides.showGridLines,
@@ -21,7 +21,7 @@ export function buildScaleType(scale: ChartAxisOverrides['scale']): 'linear' | '
 
 export const VEGA_PANEL_FONT_FAMILY = 'Barlow'
 
-export function buildVegaLiteChartConfig(theme: AssetChartTheme) {
+export function buildVegaLiteChartConfig(theme: AssetChartTheme, fontScale = 1) {
   return {
     font: VEGA_PANEL_FONT_FAMILY,
     view: { stroke: 'transparent' },
@@ -29,6 +29,7 @@ export function buildVegaLiteChartConfig(theme: AssetChartTheme) {
       color: theme.axisTitleColor,
       offset: 18,
       font: VEGA_PANEL_FONT_FAMILY,
+      fontSize: 16 * fontScale,
     },
     axis: {
       domainColor: theme.axisDomainColor,
@@ -38,12 +39,16 @@ export function buildVegaLiteChartConfig(theme: AssetChartTheme) {
       titleColor: theme.axisTitleColor,
       titleFont: VEGA_PANEL_FONT_FAMILY,
       gridColor: theme.gridColor,
+      labelFontSize: 11 * fontScale,
+      titleFontSize: 12 * fontScale,
     },
     legend: {
       labelColor: theme.legendLabelColor,
       labelFont: VEGA_PANEL_FONT_FAMILY,
       titleColor: theme.legendTitleColor,
       titleFont: VEGA_PANEL_FONT_FAMILY,
+      labelFontSize: 11 * fontScale,
+      titleFontSize: 12 * fontScale,
     },
     header: {
       labelFont: VEGA_PANEL_FONT_FAMILY,
@@ -55,13 +60,13 @@ export function buildVegaLiteChartConfig(theme: AssetChartTheme) {
   }
 }
 
-export function buildChartTitle(overrides: ChartTitleOverrides, defaultText: string) {
+export function buildChartTitle(overrides: ChartTitleOverrides, defaultText: string, fontScale = 1) {
   if (overrides.hideTitle) {
     return undefined
   }
   return {
     text: overrides.text.trim() || defaultText,
-    fontSize: optionalPositiveNumberFromInput(overrides.size),
+    fontSize: (optionalPositiveNumberFromInput(overrides.size) ?? 16) * fontScale,
     orient: overrides.position,
   }
 }

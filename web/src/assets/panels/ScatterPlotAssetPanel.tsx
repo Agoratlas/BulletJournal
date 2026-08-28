@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import embed, { type Result as VegaEmbedResult, type VisualizationSpec } from 'vega-embed'
 
@@ -71,6 +71,9 @@ export function ScatterPlotAssetPanel({
   onReadyStateChange,
   panelHeight,
   onPanelHeightChange,
+  isPanelResized,
+  chartScale = 1,
+  minPanelHeight,
   sectionId,
   frameVariant,
 }: DatavizAssetPanelProps) {
@@ -438,11 +441,11 @@ export function ScatterPlotAssetPanel({
   )
 
   return (
-    <AssetPanelFrame asset={asset} panelInfo={panelInfo} settingsTitle="Modifier overrides" settingsBody={settingsBody} settingsActive={hasSettingsOverrides} sectionId={sectionId} frameVariant={frameVariant} showExportActions={viewerMode === 'dashboard'}>
+    <AssetPanelFrame asset={asset} panelInfo={panelInfo} settingsTitle="Modifier overrides" settingsBody={settingsBody} settingsActive={hasSettingsOverrides} sectionId={sectionId} frameVariant={frameVariant} showExportActions={viewerMode === 'dashboard'} isPanelResized={isPanelResized}>
       <div className="asset-dataframe-panel asset-scatter-plot-panel">
         {overrideIncompatible ? <OverrideIncompatibleNotice onReset={onPersistedStateChange ? handleResetOverrides : undefined} /> : null}
         <PrepareErrorsNotice errors={prepareErrors} />
-        <ResizableDatavizContent height={resolvedPanelHeight} onHeightChange={onPanelHeightChange}>
+        <ResizableDatavizContent height={resolvedPanelHeight} onHeightChange={onPanelHeightChange} isResized={isPanelResized} minHeight={minPanelHeight}>
           {(chartHeight) => (
             <>
               {selectedPointLabel ? (
@@ -461,6 +464,7 @@ export function ScatterPlotAssetPanel({
                   chartHeight={chartHeight}
                   overrides={chartOverrides}
                   defaultOverrides={chartOverrideDefaults}
+                  chartScale={chartScale}
                   selectedBounds={selectedBounds}
                   selectedPointRowIndex={selectedPointRowIndex}
                   onSelectionChange={(bounds) => {
@@ -548,6 +552,7 @@ function ScatterPlotChart({
   chartHeight,
   overrides,
   defaultOverrides,
+  chartScale,
   selectedBounds,
   selectedPointRowIndex,
   selectedLegend,
@@ -559,6 +564,7 @@ function ScatterPlotChart({
   chartHeight: number
   overrides: ScatterPlotChartOverrides
   defaultOverrides: ScatterPlotChartOverrides
+  chartScale: number
   selectedBounds: ScatterPlotSelectionBounds | null
   selectedPointRowIndex: number | null
   selectedLegend: ScatterPlotLegendSelection | null
@@ -569,6 +575,7 @@ function ScatterPlotChart({
   const containerRef = useRef<HTMLDivElement | null>(null)
   const [chartError, setChartError] = useState<string | null>(null)
   const viewRef = useRef<VegaEmbedResult | null>(null)
+  const initialChartHeightRef = useRef(chartHeight)
   const selectedBoundsRef = useRef<ScatterPlotSelectionBounds | null>(selectedBounds)
   const pendingXRangeRef = useRef(selectedBounds?.x ?? null)
   const pendingYRangeRef = useRef(selectedBounds?.y ?? null)
@@ -595,13 +602,14 @@ function ScatterPlotChart({
       selectedPointRowIndex,
       selectedLegend,
       chartTheme,
-      chartHeight,
+      initialChartHeightRef.current,
       overrides,
       defaultOverrides,
+      chartScale,
     ),
     [
+      chartScale,
       chartTheme,
-      chartHeight,
       defaultOverrides,
       overrides,
       scatterPlot,
@@ -726,6 +734,13 @@ function ScatterPlotChart({
     }
   }, [spec])
 
+  useLayoutEffect(() => {
+    const result = viewRef.current
+    if (result !== null) {
+      result.view.height(chartHeight).run()
+    }
+  }, [chartHeight])
+
   useEffect(() => {
     const result = viewRef.current
     if (result === null) {
@@ -761,6 +776,7 @@ function buildScatterPlotVegaLiteSpec(
   chartHeight: number,
   overrides: ScatterPlotChartOverrides,
   defaultOverrides: ScatterPlotChartOverrides,
+  chartScale: number,
 ): VisualizationSpec {
   const sizeType: 'quantitative' | 'nominal' = scatterPlot.size_kind ?? 'nominal'
   const colorType: 'quantitative' | 'nominal' = scatterPlot.color_kind ?? 'nominal'
@@ -802,13 +818,13 @@ function buildScatterPlotVegaLiteSpec(
     }
   return {
     $schema: 'https://vega.github.io/schema/vega-lite/v6.json',
-    autosize: { type: 'fit-x', contains: 'padding' },
+    autosize: { type: 'fit', contains: 'padding', resize: true },
     width: 'container',
     height: chartHeight,
     background: 'transparent',
     padding: buildChartPadding(overrides.title),
-    title: buildChartTitle(overrides.title, defaultOverrides.title.text),
-    config: buildVegaLiteChartConfig(theme),
+    title: buildChartTitle(overrides.title, defaultOverrides.title.text, chartScale),
+    config: buildVegaLiteChartConfig(theme, chartScale),
     data: {
       values: scatterPlot.points.map((point) => ({
         ...point,
@@ -862,7 +878,7 @@ function buildScatterPlotVegaLiteSpec(
       x: {
         field: 'x',
         type: 'quantitative',
-        axis: buildAxisSpec(overrides.xAxis, defaultOverrides.xAxis.label),
+        axis: buildAxisSpec(overrides.xAxis, defaultOverrides.xAxis.label, chartScale),
         scale: {
           ...(scatterPlot.domain ? {
             domain: [scatterPlot.domain.x.min, scatterPlot.domain.x.max],
@@ -875,7 +891,7 @@ function buildScatterPlotVegaLiteSpec(
       y: {
         field: 'y',
         type: 'quantitative',
-        axis: buildAxisSpec(overrides.yAxis, defaultOverrides.yAxis.label),
+        axis: buildAxisSpec(overrides.yAxis, defaultOverrides.yAxis.label, chartScale),
         scale: {
           ...(scatterPlot.domain ? {
             domain: [scatterPlot.domain.y.min, scatterPlot.domain.y.max],

@@ -49,10 +49,17 @@ function serializeSvg(svg: SVGSVGElement, background: string | null = null): str
     clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg')
   }
   if (background) {
+    const bounds = svg.getBoundingClientRect()
+    const viewBox = svg.viewBox.baseVal
+    const width = viewBox.width || bounds.width || Number(svg.getAttribute('width')) || 1
+    const height = viewBox.height || bounds.height || Number(svg.getAttribute('height')) || 1
     const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect')
-    rect.setAttribute('width', '100%')
-    rect.setAttribute('height', '100%')
+    rect.setAttribute('x', String(viewBox.x || 0))
+    rect.setAttribute('y', String(viewBox.y || 0))
+    rect.setAttribute('width', String(width))
+    rect.setAttribute('height', String(height))
     rect.setAttribute('fill', background)
+    rect.setAttribute('pointer-events', 'none')
     clone.insertBefore(rect, clone.firstChild)
   }
   return new XMLSerializer().serializeToString(clone)
@@ -86,8 +93,14 @@ async function svgToPng(svg: SVGSVGElement, background: string): Promise<Blob> {
 }
 
 function chartBackgroundColor(svg: SVGSVGElement): string {
-  const background = getComputedStyle(svg.closest('.asset-panel-card, .asset-panel-frame-inline') ?? svg).backgroundColor
-  return background === 'transparent' || background === 'rgba(0, 0, 0, 0)' ? '#ffffff' : background
+  const frame = svg.closest('.asset-panel-card, .asset-panel-frame-inline') ?? svg
+  const styles = getComputedStyle(frame)
+  const background = styles.backgroundColor
+  if (background !== 'transparent' && background !== 'rgba(0, 0, 0, 0)') {
+    return background
+  }
+  const panelBackground = styles.getPropertyValue('--panel').trim()
+  return panelBackground || '#ffffff'
 }
 
 function loadImage(url: string): Promise<HTMLImageElement> {

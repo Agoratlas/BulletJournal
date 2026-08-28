@@ -1434,6 +1434,44 @@ def test_runtime_context_finalize_asset_push_persists_collection_asset(tmp_path)
     assert head['objects'] == []
 
 
+def test_runtime_context_finalize_asset_push_persists_collection_column_display_mode(tmp_path) -> None:
+    project_root = init_project_root(tmp_path / 'project').root
+    context = RuntimeContext(
+        project_root=project_root,
+        node_id='producer',
+        run_id='run-collection-column-asset',
+        source_hash='producer-source',
+        lineage_mode=LineageMode.MANAGED,
+        bindings={},
+        outputs={},
+        asset_declarations={
+            'notes_collection': AssetDeclaration(
+                node_id='producer',
+                name='notes_collection',
+                title='Notes collection',
+                description=None,
+                declared_asset_type='collection',
+                declaration_index=0,
+            )
+        },
+    )
+    collection = runtime_assets.Collection(display_mode='3_columns')
+    collection.add_asset(runtime_assets.Markdown('hello'))
+
+    context.finalize_asset_push(
+        asset=collection,
+        name='notes_collection',
+        title='Notes collection',
+        description=None,
+        asset_type=runtime_assets.Collection,
+    )
+
+    head = context.db.get_asset_head('producer', 'notes_collection')
+
+    assert head is not None
+    assert head['definition']['display_mode_default'] == '3_columns'
+
+
 def test_runtime_context_finalize_asset_push_remaps_collection_child_object_indexes(tmp_path) -> None:
     project_root = init_project_root(tmp_path / 'project').root
     context = RuntimeContext(

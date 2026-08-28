@@ -25,6 +25,9 @@ export function AssetPanel({
   onReadyStateChange,
   panelHeight,
   onPanelHeightChange,
+  isPanelResized,
+  chartScale,
+  minPanelHeight,
   sectionId,
   frameVariant,
 }: AssetPanelProps) {
@@ -36,6 +39,7 @@ export function AssetPanel({
     assetName: asset.asset_name,
     panelContext: null,
   }
+  const resolvedPanelIsResized = isPanelResized ?? isCustomPanelHeight(panelHeight)
   const panelInfo = {
     panelId: resolvedPanelId,
     assetName: asset.asset_name,
@@ -128,6 +132,9 @@ export function AssetPanel({
         onReadyStateChange={onReadyStateChange}
         panelHeight={panelHeight ?? null}
         onPanelHeightChange={onPanelHeightChange}
+        isPanelResized={resolvedPanelIsResized}
+        chartScale={chartScale}
+        minPanelHeight={minPanelHeight}
         sectionId={sectionId}
         frameVariant={frameVariant}
       />
@@ -147,6 +154,9 @@ export function AssetPanel({
         onReadyStateChange={onReadyStateChange}
         panelHeight={panelHeight ?? null}
         onPanelHeightChange={onPanelHeightChange}
+        isPanelResized={resolvedPanelIsResized}
+        chartScale={chartScale}
+        minPanelHeight={minPanelHeight}
         sectionId={sectionId}
         frameVariant={frameVariant}
       />
@@ -166,6 +176,9 @@ export function AssetPanel({
         onReadyStateChange={onReadyStateChange}
         panelHeight={panelHeight ?? null}
         onPanelHeightChange={onPanelHeightChange}
+        isPanelResized={resolvedPanelIsResized}
+        chartScale={chartScale}
+        minPanelHeight={minPanelHeight}
         sectionId={sectionId}
         frameVariant={frameVariant}
       />
@@ -185,6 +198,9 @@ export function AssetPanel({
         onReadyStateChange={onReadyStateChange}
         panelHeight={panelHeight ?? null}
         onPanelHeightChange={onPanelHeightChange}
+        isPanelResized={resolvedPanelIsResized}
+        chartScale={chartScale}
+        minPanelHeight={minPanelHeight}
         sectionId={sectionId}
         frameVariant={frameVariant}
       />
@@ -198,4 +214,11 @@ export function AssetPanel({
       </div>
     </AssetPanelFrame>
   )
+}
+
+function isCustomPanelHeight(panelHeight: number | null | undefined): boolean {
+  if (panelHeight === null || panelHeight === undefined) {
+    return false
+  }
+  return panelHeight !== 600
 }

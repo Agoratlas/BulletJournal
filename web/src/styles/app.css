@@ -219,6 +219,10 @@ button.topbar-control.play-action:hover {
   box-shadow: 0 12px 28px rgba(0, 0, 0, 0.28);
 }
 
+:root[data-theme='dark'] button.topbar-control.play-action:hover:not(:disabled) {
+  background: linear-gradient(135deg, #40c767, #29a450);
+}
+
 button.topbar-control.stop-action {
   position: relative;
   overflow: visible;
@@ -4818,12 +4822,13 @@ input.invalid {
   display: flex;
   align-items: center;
   gap: 6px;
-  flex-wrap: wrap;
+  min-width: 0;
 }
 
 .asset-panel-title-row h2 {
   margin: 0;
   font-size: 18px;
+  min-width: 0;
 }
 
 .asset-panel-meta-row,
@@ -4992,8 +4997,109 @@ input.invalid {
   gap: 0;
 }
 
-.asset-collection-list.is-single {
+.asset-collection-list--single {
   position: relative;
+}
+
+.asset-collection-list--2_columns,
+.asset-collection-list--3_columns {
+  gap: 12px;
+}
+
+.asset-collection-list--2_columns {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.asset-collection-list--3_columns {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.asset-collection-list--2_columns .asset-panel-frame-inline {
+  font-size: 0.667em;
+}
+
+.asset-collection-list--3_columns .asset-panel-frame-inline {
+  font-size: 0.5em;
+}
+
+.asset-collection-list--2_columns .asset-histogram-chart-shell .vega-embed,
+.asset-collection-list--2_columns .asset-histogram-chart-shell .vega-embed svg {
+  font-size: 0.8em;
+}
+
+.asset-collection-list--3_columns .asset-histogram-chart-shell .vega-embed,
+.asset-collection-list--3_columns .asset-histogram-chart-shell .vega-embed svg {
+  font-size: 0.6em;
+}
+
+.asset-collection-list--2_columns .asset-panel-header {
+  gap: 8px;
+  margin-bottom: 8px;
+  padding-inline: 3px;
+}
+
+.asset-collection-list--3_columns .asset-panel-header {
+  gap: 6px;
+  margin-bottom: 6px;
+  padding-inline: 2px;
+}
+
+.asset-collection-list--2_columns .asset-panel-header-actions {
+  gap: 5px;
+}
+
+.asset-collection-list--3_columns .asset-panel-header-actions {
+  gap: 4px;
+}
+
+.asset-collection-list--2_columns .asset-panel-description {
+  font-size: 9px;
+}
+
+.asset-collection-list--3_columns .asset-panel-description {
+  font-size: 7px;
+}
+
+.asset-collection-list--2_columns .asset-panel-title-row h2,
+.asset-collection-list--3_columns .asset-panel-title-row h2 {
+  position: relative;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.asset-collection-list--2_columns .asset-panel-title-row h2 {
+  font-size: 12px;
+}
+
+.asset-collection-list--3_columns .asset-panel-title-row h2 {
+  font-size: 9px;
+}
+
+.asset-panel-title-row h2.is-truncated:hover::after {
+  position: absolute;
+  z-index: 30;
+  top: calc(100% + 6px);
+  left: 0;
+  width: max-content;
+  max-width: min(360px, 90vw);
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel);
+  box-shadow: 0 6px 18px rgba(15, 23, 42, 0.16);
+  color: var(--ink);
+  content: attr(data-tooltip);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.3;
+  white-space: normal;
+}
+
+.asset-collection-list--2_columns .asset-collection-item,
+.asset-collection-list--3_columns .asset-collection-item {
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
 }
 
 .asset-collection-item {
@@ -5011,6 +5117,11 @@ input.invalid {
 
 .asset-collection-item + .asset-collection-item {
   margin-top: 12px;
+}
+
+.asset-collection-list--2_columns .asset-collection-item + .asset-collection-item,
+.asset-collection-list--3_columns .asset-collection-item + .asset-collection-item {
+  margin-top: 0;
 }
 
 .asset-collection-item-header {
@@ -5123,6 +5234,70 @@ input.invalid {
   user-select: none;
 }
 
+.asset-collection-list--2_columns .asset-panel-action-button {
+  width: 19px;
+  height: 19px;
+}
+
+.asset-collection-list--3_columns .asset-panel-action-button {
+  width: 14px;
+  height: 14px;
+}
+
+.asset-collection-list--2_columns .asset-panel-action-button svg {
+  width: 10px;
+  height: 10px;
+}
+
+.asset-collection-list--3_columns .asset-panel-action-button svg {
+  width: 8px;
+  height: 8px;
+}
+
+.asset-collection-list--2_columns .asset-dataviz-resize-controls {
+  width: 29px;
+  height: 16px;
+}
+
+.asset-collection-list--3_columns .asset-dataviz-resize-controls {
+  width: 22px;
+  height: 12px;
+}
+
+.asset-collection-list--2_columns .asset-dataviz-resize-handle {
+  width: 29px;
+  height: 12px;
+  min-height: 12px;
+}
+
+.asset-collection-list--3_columns .asset-dataviz-resize-handle {
+  width: 22px;
+  height: 9px;
+  min-height: 9px;
+}
+
+.asset-collection-list--2_columns .asset-dataviz-reset-height {
+  left: 33px;
+  width: 12px;
+  height: 12px;
+}
+
+.asset-collection-list--3_columns .asset-dataviz-reset-height {
+  left: 25px;
+  width: 9px;
+  height: 9px;
+}
+
+.asset-collection-list--2_columns .asset-dataviz-reset-height svg {
+  width: 8px;
+  height: 8px;
+}
+
+.asset-collection-list--3_columns .asset-dataviz-reset-height svg {
+  width: 6px;
+  height: 6px;
+}
+
 .asset-panel-action-button:hover,
 .asset-panel-action-button:focus-visible,
 .asset-panel-action-menu[open] > .asset-panel-action-button {
@@ -5133,11 +5308,6 @@ input.invalid {
 .asset-panel-action-button.is-overridden {
   color: var(--gold);
   border-color: color-mix(in srgb, var(--gold) 55%, var(--line));
-}
-
-.asset-panel-action-button em {
-  font-size: 15px;
-  font-weight: 700;
 }
 
 .asset-panel-action-popover {
@@ -5176,6 +5346,17 @@ input.invalid {
 .asset-panel-info-popover dd {
   margin: 0;
   font-size: 13px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.asset-panel-info-popover dd code {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .asset-panel-settings-popover {
@@ -5217,6 +5398,16 @@ input.invalid {
   color: var(--text);
   text-align: left;
   cursor: pointer;
+}
+
+.asset-collection-list--2_columns .asset-panel-export-popover,
+.asset-collection-list--3_columns .asset-panel-export-popover {
+  font-size: 12px;
+}
+
+.asset-collection-list--2_columns .asset-panel-export-actions button,
+.asset-collection-list--3_columns .asset-panel-export-actions button {
+  font-size: 12px;
 }
 
 .asset-panel-export-actions button:hover,
@@ -5338,13 +5529,21 @@ input.invalid {
   font-size: 12px;
 }
 
-.asset-dataviz-resize-handle {
+.asset-dataviz-resize-controls {
+  display: flex;
+  align-items: center;
   justify-self: center;
+  position: relative;
+  width: 44px;
+  height: 24px;
+  margin-top: -6px;
+  margin-bottom: -8px;
+}
+
+.asset-dataviz-resize-handle {
   width: 44px;
   height: 18px;
   min-height: 18px;
-  margin-top: -6px;
-  margin-bottom: -8px;
   padding: 0;
   border: 0;
   border-radius: 999px;
@@ -5357,6 +5556,37 @@ input.invalid {
 .asset-dataviz-resize-handle:hover,
 .asset-dataviz-resize-handle:focus-visible {
   color: var(--text);
+}
+
+.asset-dataviz-resize-controls.is-resized .asset-dataviz-resize-handle,
+.asset-dataviz-reset-height {
+  color: var(--gold);
+}
+
+.asset-dataviz-reset-height {
+  display: flex;
+  position: absolute;
+  left: 48px;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  top: 50%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  transform: translateY(-50%);
+}
+
+.asset-dataviz-reset-height svg {
+  width: 12px;
+  height: 12px;
+}
+
+.asset-dataviz-reset-height:hover,
+.asset-dataviz-reset-height:focus-visible {
+  color: color-mix(in srgb, var(--gold) 72%, var(--ink));
+  transform: translateY(-50%);
 }
 
 .asset-dataviz-resize-grip {
@@ -5421,6 +5651,7 @@ input.invalid {
 
 .asset-histogram-chart-shell {
   position: relative;
+  height: var(--asset-dataviz-height);
   min-height: var(--asset-dataviz-height);
   border-radius: 12px;
   border: 1px solid var(--line);
@@ -5435,13 +5666,13 @@ input.invalid {
 .asset-histogram-chart-shell .vega-embed,
 .asset-histogram-chart-shell .vega-embed > div {
   width: 100%;
-  height: auto;
+  height: 100%;
 }
 
 .asset-histogram-chart-shell svg {
   display: block;
   width: 100%;
-  height: auto;
+  height: 100%;
 }
 
 .asset-histogram-chart-shell .vega-embed {
@@ -6095,6 +6326,10 @@ input.invalid {
   .artifact-explorer-grid.columns-3 {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+
+  .asset-collection-list--3_columns {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
 @media (max-width: 768px) {
@@ -6132,6 +6367,11 @@ input.invalid {
 
   .artifact-explorer-grid.columns-2,
   .artifact-explorer-grid.columns-3 {
+    grid-template-columns: 1fr;
+  }
+
+  .asset-collection-list--2_columns,
+  .asset-collection-list--3_columns {
     grid-template-columns: 1fr;
   }
 

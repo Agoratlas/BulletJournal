@@ -164,7 +164,10 @@ export type AssetPanelProps = {
   onPersistedStateChange?: (state: PersistedAssetPanelState) => void
   onReadyStateChange?: (ready: boolean) => void
   panelHeight?: number | null
-  onPanelHeightChange?: (height: number) => void
+  onPanelHeightChange?: (height: number | null) => void
+  isPanelResized?: boolean
+  chartScale?: number
+  minPanelHeight?: number
   sectionId?: string
   frameVariant?: AssetPanelFrameVariant
 }
@@ -200,5 +203,8 @@ export type InteractiveAssetPanelProps = {
 
 export type DatavizAssetPanelProps = InteractiveAssetPanelProps & {
   panelHeight: number | null
-  onPanelHeightChange?: (height: number) => void
+  onPanelHeightChange?: (height: number | null) => void
+  isPanelResized?: boolean
+  chartScale?: number
+  minPanelHeight?: number
 }

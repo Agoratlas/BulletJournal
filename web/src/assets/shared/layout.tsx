@@ -1,6 +1,6 @@
-import { useEffect, useId, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
+import { useEffect, useId, useLayoutEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
 
-import { ChevronDown, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, Cog, Download } from '../../components/Icons'
+import { ChevronDown, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, Cog, Download, Info, RotateCcw } from '../../components/Icons'
 import type { AssetFilter, AssetHighlight, AssetSort, AssetRecord, PreparedTablePayload } from '../../lib/types'
 import {
   assetExportFilename,
@@ -35,6 +35,7 @@ export function AssetPanelFrame({
   showHeader = true,
   showExportActions = false,
   dataFramePreview,
+  isPanelResized = false,
   children,
 }: {
   asset: AssetRecord
@@ -48,6 +49,7 @@ export function AssetPanelFrame({
   showHeader?: boolean
   showExportActions?: boolean
   dataFramePreview?: PreparedTablePayload | null
+  isPanelResized?: boolean
   children: ReactNode
 }) {
   const frameRef = useRef<HTMLElement | null>(null)
@@ -58,16 +60,43 @@ export function AssetPanelFrame({
           <div className="asset-panel-heading">
             <div className="asset-panel-title-row">
               <span className={`asset-state-bubble is-${asset.state}`} aria-hidden="true" />
-              <h2>{asset.title || asset.asset_name}</h2>
+              <TruncatedAssetTitle title={asset.title || asset.asset_name} />
             </div>
             {asset.description ? <p className="asset-panel-description">{asset.description}</p> : null}
           </div>
           {headerCenter ? <div className="asset-panel-header-center">{headerCenter}</div> : null}
-          <AssetPanelHeaderActions asset={asset} frameRef={frameRef} showExportActions={showExportActions} dataFramePreview={dataFramePreview} panelInfo={panelInfo} settingsTitle={settingsTitle} settingsBody={settingsBody} settingsActive={settingsActive} />
+          <AssetPanelHeaderActions asset={asset} frameRef={frameRef} showExportActions={showExportActions} dataFramePreview={dataFramePreview} isPanelResized={isPanelResized} panelInfo={panelInfo} settingsTitle={settingsTitle} settingsBody={settingsBody} settingsActive={settingsActive} />
         </div>
       ) : null}
       {children}
     </section>
+  )
+}
+
+function TruncatedAssetTitle({ title }: { title: string }) {
+  const titleRef = useRef<HTMLHeadingElement | null>(null)
+  const [isTruncated, setIsTruncated] = useState(false)
+
+  useLayoutEffect(() => {
+    const element = titleRef.current
+    if (!element) {
+      return
+    }
+    const updateTruncation = () => setIsTruncated(element.scrollWidth > element.clientWidth)
+    updateTruncation()
+    const observer = new ResizeObserver(updateTruncation)
+    observer.observe(element)
+    return () => observer.disconnect()
+  }, [title])
+
+  return (
+    <h2
+      ref={titleRef}
+      className={isTruncated ? 'is-truncated' : ''}
+      data-tooltip={isTruncated ? title : undefined}
+    >
+      {title}
+    </h2>
   )
 }
 
@@ -76,6 +105,7 @@ function AssetPanelHeaderActions({
   frameRef,
   showExportActions,
   dataFramePreview,
+  isPanelResized,
   panelInfo,
   settingsTitle,
   settingsBody,
@@ -85,6 +115,7 @@ function AssetPanelHeaderActions({
   frameRef: { current: HTMLElement | null }
   showExportActions: boolean
   dataFramePreview?: PreparedTablePayload | null
+  isPanelResized: boolean
   panelInfo: AssetPanelInfo
   settingsTitle?: string
   settingsBody?: ReactNode
@@ -156,6 +187,9 @@ function AssetPanelHeaderActions({
             {exportKind === 'dataframe' && dataFramePreview ? (
               <p className="asset-panel-export-warning">⚠️ This will only export the currently displayed preview ({dataFramePreview.rows.length} rows)</p>
             ) : null}
+            {exportKind === 'vega' && isPanelResized ? (
+              <p className="asset-panel-export-warning">⚠️ This panel has been resized. Restore the original size for a standardized export.</p>
+            ) : null}
             <div className="asset-panel-export-actions">
               {exportKind === 'vega' ? (
                 <>
@@ -198,7 +232,7 @@ function AssetPanelHeaderActions({
             setOpenMenu((current) => current === 'info' ? null : 'info')
           }}
         >
-          <em aria-hidden="true">i</em>
+          <Info width={14} height={14} />
         </summary>
         <div className="asset-panel-action-popover asset-panel-info-popover">
           <dl>
@@ -250,10 +284,14 @@ function AssetPanelHeaderActions({
 export function ResizableDatavizContent({
   height,
   onHeightChange,
+  isResized = false,
+  minHeight,
   children,
 }: {
   height: number
-  onHeightChange?: (height: number) => void
+  onHeightChange?: (height: number | null) => void
+  isResized?: boolean
+  minHeight?: number
   children: (height: number) => ReactNode
 }) {
   const [draftHeight, setDraftHeight] = useState(height)
@@ -278,7 +316,7 @@ export function ResizableDatavizContent({
     const startY = event.clientY
     const startHeight = draftHeightRef.current
     const handleWindowPointerMove = (moveEvent: PointerEvent) => {
-      const nextHeight = clampPanelHeight(startHeight + moveEvent.clientY - startY)
+      const nextHeight = Math.max(minHeight ?? 0, clampPanelHeight(startHeight + moveEvent.clientY - startY))
       draftHeightRef.current = nextHeight
       setDraftHeight(nextHeight)
     }
@@ -303,15 +341,28 @@ export function ResizableDatavizContent({
     <>
       {children(draftHeight)}
       {onHeightChange ? (
-        <button
-          type="button"
-          className="asset-dataviz-resize-handle"
-          aria-label="Resize visualization height"
-          title="Drag to resize chart height"
-          onPointerDown={handlePointerDown}
-        >
-          <span className="asset-dataviz-resize-grip" aria-hidden="true" />
-        </button>
+        <div className={`asset-dataviz-resize-controls${isResized ? ' is-resized' : ''}`}>
+          <button
+            type="button"
+            className="asset-dataviz-resize-handle"
+            aria-label="Resize visualization height"
+            title="Drag to resize chart height"
+            onPointerDown={handlePointerDown}
+          >
+            <span className="asset-dataviz-resize-grip" aria-hidden="true" />
+          </button>
+          {isResized ? (
+            <button
+              type="button"
+              className="asset-dataviz-reset-height"
+              aria-label="Restore original chart height"
+              title="Restore original chart height"
+              onClick={() => onHeightChange(null)}
+            >
+              <RotateCcw width={14} height={14} />
+            </button>
+          ) : null}
+        </div>
       ) : null}
     </>
   )

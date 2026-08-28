@@ -24,8 +24,13 @@ class Collection(BaseAsset):
     interactive = False
 
     def __post_init__(self) -> None:
-        if not isinstance(self.display_mode, str) or self.display_mode not in {'all', 'single'}:
-            raise ValueError("Collection display_mode must be either 'all' or 'single'.")
+        if not isinstance(self.display_mode, str) or self.display_mode not in {
+            'all',
+            'single',
+            '2_columns',
+            '3_columns',
+        }:
+            raise ValueError("Collection display_mode must be 'all', 'single', '2_columns', or '3_columns'.")
 
     def add_asset(self, asset: BaseAsset, name: str | None = None, title: str | None = None) -> None:
         if not isinstance(asset, BaseAsset):

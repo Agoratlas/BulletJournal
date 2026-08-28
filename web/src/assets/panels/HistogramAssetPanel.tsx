@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import embed, { type Result as VegaEmbedResult, type VisualizationSpec } from 'vega-embed'
 
@@ -67,6 +67,9 @@ export function HistogramAssetPanel({
   onReadyStateChange,
   panelHeight,
   onPanelHeightChange,
+  isPanelResized,
+  chartScale = 1,
+  minPanelHeight,
   sectionId,
   frameVariant,
 }: DatavizAssetPanelProps) {
@@ -455,11 +458,11 @@ export function HistogramAssetPanel({
   )
 
   return (
-    <AssetPanelFrame asset={asset} panelInfo={panelInfo} settingsTitle="Modifier overrides" settingsBody={settingsBody} settingsActive={hasSettingsOverrides} sectionId={sectionId} frameVariant={frameVariant} showExportActions={viewerMode === 'dashboard'}>
+    <AssetPanelFrame asset={asset} panelInfo={panelInfo} settingsTitle="Modifier overrides" settingsBody={settingsBody} settingsActive={hasSettingsOverrides} sectionId={sectionId} frameVariant={frameVariant} showExportActions={viewerMode === 'dashboard'} isPanelResized={isPanelResized}>
       <div className="asset-dataframe-panel asset-histogram-panel">
         {overrideIncompatible ? <OverrideIncompatibleNotice onReset={onPersistedStateChange ? handleResetOverrides : undefined} /> : null}
         <PrepareErrorsNotice errors={prepareErrors} />
-        <ResizableDatavizContent height={resolvedPanelHeight} onHeightChange={onPanelHeightChange}>
+        <ResizableDatavizContent height={resolvedPanelHeight} onHeightChange={onPanelHeightChange} isResized={isPanelResized} minHeight={minPanelHeight}>
           {(chartHeight) => (
             <>
               {prepareQuery.isLoading && !histogram ? <LoadingPlaceholder message="Preparing histogram view..." /> : null}
@@ -472,6 +475,7 @@ export function HistogramAssetPanel({
                   chartHeight={chartHeight}
                   overrides={chartOverrides}
                   defaultOverrides={chartOverrideDefaults}
+                  chartScale={chartScale}
                   selectedBarIndexes={selectedBarIndexes}
                   onSelectionChange={(nextIndexes) => {
                     setPageIndex(0)
@@ -543,6 +547,7 @@ function HistogramChart({
   chartHeight,
   overrides,
   defaultOverrides,
+  chartScale,
   selectedBarIndexes,
   onSelectionChange,
 }: {
@@ -550,12 +555,14 @@ function HistogramChart({
   chartHeight: number
   overrides: HistogramChartOverrides
   defaultOverrides: HistogramChartOverrides
+  chartScale: number
   selectedBarIndexes: number[]
   onSelectionChange: (barIndexes: number[]) => void
 }) {
   const mountRef = useRef<HTMLDivElement | null>(null)
   const [chartError, setChartError] = useState<string | null>(null)
   const viewRef = useRef<VegaEmbedResult | null>(null)
+  const initialChartHeightRef = useRef(chartHeight)
   const selectedBarIndexesRef = useRef<number[]>(selectedBarIndexes)
   const onSelectionChangeRef = useRef(onSelectionChange)
   const suppressNextClickRef = useRef(false)
@@ -571,8 +578,8 @@ function HistogramChart({
   onSelectionChangeRef.current = onSelectionChange
 
   const spec = useMemo(
-    () => buildHistogramVegaLiteSpec(histogram, chartTheme, chartHeight, overrides, defaultOverrides),
-    [chartHeight, chartTheme, defaultOverrides, histogram, overrides],
+    () => buildHistogramVegaLiteSpec(histogram, chartTheme, initialChartHeightRef.current, overrides, defaultOverrides, chartScale),
+    [chartScale, chartTheme, defaultOverrides, histogram, overrides],
   )
 
   useEffect(() => {
@@ -722,6 +729,13 @@ function HistogramChart({
     void syncHistogramSelectedBars(result, selectedBarIndexes)
   }, [histogram, selectedBarIndexes.join(',')])
 
+  useLayoutEffect(() => {
+    const result = viewRef.current
+    if (result !== null) {
+      result.view.height(chartHeight).run()
+    }
+  }, [chartHeight])
+
   useEffect(() => {
     const result = viewRef.current
     if (result === null) {
@@ -754,6 +768,7 @@ function buildHistogramVegaLiteSpec(
   chartHeight: number,
   overrides: HistogramChartOverrides,
   defaultOverrides: HistogramChartOverrides,
+  chartScale: number,
 ): VisualizationSpec {
   const barWidthRatio = overrides.barWidth / 100
   const borderThickness = optionalNonNegativeNumberFromInput(overrides.borderThickness) ?? 0
@@ -769,7 +784,7 @@ function buildHistogramVegaLiteSpec(
     ? buildCenteredHistogramAxisTicks(histogram, temporalTickLimit)
     : null
   const xAxisSpec = {
-    ...buildAxisSpec(overrides.xAxis, defaultOverrides.xAxis.label),
+    ...buildAxisSpec(overrides.xAxis, defaultOverrides.xAxis.label, chartScale),
     ...(temporalAxisTicks ? {
       values: temporalAxisTicks.values,
       labelExpr: temporalAxisTicks.labelExpr,
@@ -777,13 +792,13 @@ function buildHistogramVegaLiteSpec(
   }
   return {
     $schema: 'https://vega.github.io/schema/vega-lite/v6.json',
-    autosize: { type: 'fit-x', contains: 'padding' },
+    autosize: { type: 'fit', contains: 'padding', resize: true },
     width: 'container',
     height: chartHeight,
     background: 'transparent',
     padding: buildChartPadding(overrides.title),
-    title: buildChartTitle(overrides.title, defaultOverrides.title.text),
-    config: buildVegaLiteChartConfig(theme),
+    title: buildChartTitle(overrides.title, defaultOverrides.title.text, chartScale),
+    config: buildVegaLiteChartConfig(theme, chartScale),
     data: {
       values: histogram.bins.map((bin) => ({
         ...bin,
@@ -838,7 +853,7 @@ function buildHistogramVegaLiteSpec(
       y: {
         field: 'count',
         type: 'quantitative',
-        axis: buildAxisSpec(overrides.yAxis, defaultOverrides.yAxis.label),
+        axis: buildAxisSpec(overrides.yAxis, defaultOverrides.yAxis.label, chartScale),
         scale: {
           type: buildScaleType(overrides.yAxis.scale),
         },
