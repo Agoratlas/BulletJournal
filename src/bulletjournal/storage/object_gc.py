@@ -128,6 +128,7 @@ class ObjectGarbageCollector:
         dry_run: bool = True,
         now: datetime | None = None,
         lock_timeout: float = 0.1,
+        force_vacuum: bool = False,
     ) -> ObjectGCReport:
         report = ObjectGCReport(dry_run=dry_run)
         started = monotonic()
@@ -151,7 +152,7 @@ class ObjectGarbageCollector:
                 if not dry_run:
                     self._delete(candidates, current, report)
                     self._cleanup_temp(current, report)
-                    if report.mutation_request_bytes_reclaimed >= self.settings.max_batch_bytes:
+                    if force_vacuum or report.mutation_request_bytes_reclaimed >= self.settings.max_batch_bytes:
                         self.db.vacuum()
                     self.db.set_project_meta('gc_last_completed_at', _iso(current))
         except TimeoutError:

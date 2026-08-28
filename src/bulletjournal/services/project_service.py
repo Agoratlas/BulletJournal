@@ -123,6 +123,7 @@ class ProjectService:
         self.project = project
         ObjectGarbageCollector(paths).recover()
         self._reconcile_startup_heads(graph)
+        self._run_startup_maintenance()
         self.watcher.start()
         self._ensure_activity_meta(project, graph.meta.get('updated_at'))
         self.event_service.publish(
@@ -132,6 +133,16 @@ class ProjectService:
             payload={'project_id': metadata.project_id, 'root': str(paths.root)},
         )
         return project
+
+    def _run_startup_maintenance(self) -> None:
+        project = self.require_project()
+        try:
+            collector = ObjectGarbageCollector(project.paths)
+            report = collector.collect(dry_run=False, lock_timeout=30.0, force_vacuum=True)
+            project.state_db.set_project_meta('gc_last_report', json.dumps(report.as_dict(), sort_keys=True))
+        except Exception as exc:
+            # Maintenance must not make an otherwise usable project impossible to open.
+            project.state_db.set_project_meta('gc_last_error', str(exc))
 
     def _reconcile_startup_heads(self, graph: GraphData) -> None:
         project = self.require_project()
@@ -798,10 +809,10 @@ class ProjectService:
             'settings': asdict(settings),
         }
 
-    def collect_garbage(self, *, dry_run: bool = True) -> dict[str, Any]:
+    def collect_garbage(self, *, dry_run: bool = True, force_vacuum: bool = False) -> dict[str, Any]:
         project = self.require_project()
         collector = ObjectGarbageCollector(project.paths, activity_check=self._gc_activity_blocker)
-        report = collector.collect(dry_run=dry_run)
+        report = collector.collect(dry_run=dry_run, force_vacuum=force_vacuum)
         payload = report.as_dict()
         project.state_db.set_project_meta('gc_last_report', json.dumps(payload, sort_keys=True))
         return payload

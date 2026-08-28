@@ -105,6 +105,29 @@ def test_missing_startup_object_clears_head_and_project_opens(tmp_path: Path) ->
     assert reconciled['state'] == ArtifactState.PENDING.value
 
 
+def test_project_open_runs_forced_gc_maintenance_before_starting_watcher(tmp_path: Path, monkeypatch) -> None:
+    root = init_project_root(tmp_path / 'project').root
+    calls: list[str] = []
+
+    def collect(_self, **kwargs):
+        assert kwargs == {'dry_run': False, 'lock_timeout': 30.0, 'force_vacuum': True}
+        calls.append('gc')
+        from bulletjournal.storage.object_gc import ObjectGCReport
+
+        return ObjectGCReport(dry_run=False)
+
+    def start(_watcher) -> None:
+        assert calls == ['gc']
+        calls.append('watcher')
+
+    monkeypatch.setattr('bulletjournal.storage.object_gc.ObjectGarbageCollector.collect', collect)
+    monkeypatch.setattr('bulletjournal.execution.watcher.NotebookWatcher.start', start)
+
+    ProjectService(_Events(), TemplateService()).open_project(root)
+
+    assert calls == ['gc', 'watcher']
+
+
 def test_same_size_corruption_clears_head_and_quarantines_file(tmp_path: Path) -> None:
     root, node, db, store = _project_with_output(tmp_path)
     head = db.get_artifact_head(node.id, 'result')

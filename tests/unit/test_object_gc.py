@@ -319,3 +319,13 @@ def test_gc_prunes_expired_mutation_request_responses(tmp_path) -> None:
     assert report.mutation_request_bytes_reclaimed > 0
     assert db.cached_mutation_response('expired') is None
     assert db.cached_mutation_response('current') == {'payload': 'y' * 10_000}
+
+
+def test_forced_gc_vacuums_even_when_reclaimed_data_is_below_batch_limit(tmp_path, monkeypatch) -> None:
+    paths = init_project_root(tmp_path / 'project', initialize_environment=False)
+    calls: list[None] = []
+    monkeypatch.setattr(StateDB, 'vacuum', lambda _self: calls.append(None))
+
+    _gc(paths).collect(dry_run=False, now=NOW, force_vacuum=True)
+
+    assert calls == [None]
