@@ -299,3 +299,23 @@ def test_active_work_defers_gc_without_mutation(tmp_path) -> None:
     assert report.deferred_reason == 'active_editor'
     assert store.object_path(persisted['artifact_hash']).is_file()
     assert db.get_object_record(persisted['artifact_hash'])['gc_state'] == 'active'
+
+
+def test_gc_prunes_expired_mutation_request_responses(tmp_path) -> None:
+    paths = init_project_root(tmp_path / 'project', initialize_environment=False)
+    db = StateDB(paths.state_db_path)
+    db.cache_mutation_response('expired', {'payload': 'x' * 10_000})
+    db.cache_mutation_response('current', {'payload': 'y' * 10_000})
+    with db._connection() as connection:
+        connection.execute(
+            'UPDATE mutation_requests SET created_at = ? WHERE request_id = ?',
+            ('2026-08-01T00:00:00Z', 'expired'),
+        )
+        connection.commit()
+
+    report = _gc(paths, mutation_request_retention_seconds=3600).collect(dry_run=False, now=NOW)
+
+    assert report.mutation_requests_pruned == 1
+    assert report.mutation_request_bytes_reclaimed > 0
+    assert db.cached_mutation_response('expired') is None
+    assert db.cached_mutation_response('current') == {'payload': 'y' * 10_000}

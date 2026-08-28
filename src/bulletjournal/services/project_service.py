@@ -380,8 +380,14 @@ class ProjectService:
     def notebook_path(self, node_id: str) -> Path:
         return self.require_project().paths.notebook_path(node_id)
 
-    def latest_interface(self, node_id: str, *, include_dismissed: bool = False) -> dict[str, Any] | None:
-        node = self.get_node(node_id)
+    def latest_interface(
+        self,
+        node_id: str,
+        *,
+        include_dismissed: bool = False,
+        node: Node | None = None,
+    ) -> dict[str, Any] | None:
+        node = self.get_node(node_id) if node is None else node
         if node.kind == NodeKind.FILE_INPUT:
             return self.synthetic_file_input_interface(node).to_dict()
         if node.kind == NodeKind.CONSTANT:
@@ -399,10 +405,10 @@ class ProjectService:
         resolved['issues'] = self.validation_issues(node_id=node_id, include_dismissed=include_dismissed)
         return resolved
 
-    def interfaces_by_node(self) -> dict[str, dict[str, Any]]:
+    def interfaces_by_node(self, graph: GraphData | None = None) -> dict[str, dict[str, Any]]:
         interfaces: dict[str, dict[str, Any]] = {}
-        for node in self.graph().nodes:
-            interface = self.latest_interface(node.id)
+        for node in (self.graph() if graph is None else graph).nodes:
+            interface = self.latest_interface(node.id, node=node)
             if interface is not None:
                 interfaces[node.id] = dict(interface)
         return interfaces
@@ -610,7 +616,7 @@ class ProjectService:
     def snapshot(self) -> dict[str, Any]:
         project = self.require_project()
         graph = project.graph_store.read()
-        interfaces = self.interfaces_by_node()
+        interfaces = self.interfaces_by_node(graph)
         validation = self.validation_issues()
         validation_errors_by_node: dict[str, bool] = {}
         for issue in validation:
@@ -681,7 +687,7 @@ class ProjectService:
                 *artifact_states_by_node.get(node.id, []),
                 *asset_states_by_node.get(node.id, []),
             ]
-            if node.kind == NodeKind.NOTEBOOK and notebook_uses_execution_head(self, node.id, interface):
+            if node.kind == NodeKind.NOTEBOOK and notebook_uses_execution_head(self, node.id, interface, node=node):
                 execution_head = notebook_execution_heads.get(node.id)
                 if execution_head is None:
                     output_states = [ArtifactState.PENDING.value]

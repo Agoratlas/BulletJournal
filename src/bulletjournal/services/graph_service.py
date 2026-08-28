@@ -79,7 +79,7 @@ class GraphService:
                 raise GraphValidationError('Graph version conflict.')
             self._assert_operations_allowed_with_frozen_blocks(graph, operations)
             active_run_interruption = None
-            reparse_all = False
+            notebooks_to_reparse: set[str] = set()
             stale_roots: set[str] = set()
             interruption_roots: set[str] = set()
             pending_notebook_creates: list[tuple[str, str]] = []
@@ -106,7 +106,7 @@ class GraphService:
                     pending_notebook_creates.append((node_id, source))
                     pending_notebook_interfaces[node_id] = interface
                     created_incarnations.append(next(node for node in graph.nodes if node.id == node_id))
-                    reparse_all = True
+                    notebooks_to_reparse.add(node_id)
                     interruption_roots.add(node_id)
                 elif op_type == 'add_constant_node':
                     node_id, artifact_name = self._add_constant_node(graph, operation)
@@ -152,7 +152,7 @@ class GraphService:
                     pending_dashboard_creates.extend(created['dashboard_creates'])
                     pending_input_heads.extend(created['input_heads'])
                     pending_constant_values.extend(created['constant_values'])
-                    reparse_all = True
+                    notebooks_to_reparse.update(node_id for node_id, _ in created['notebook_creates'])
                     interruption_roots.update(node_id for node_id, _ in created['notebook_creates'])
                     interruption_roots.update(node_id for node_id, _ in created['input_heads'])
                     created_incarnations.extend(
@@ -190,7 +190,7 @@ class GraphService:
                             )
                         )
                         pending_editor_stops.append(renamed['old_node_id'])
-                        reparse_all = True
+                        notebooks_to_reparse.add(renamed['new_node_id'])
                     if renamed['rename_dashboard_file']:
                         pending_dashboard_renames.append(
                             (renamed['old_node_id'], renamed['new_node_id'], renamed['title'])
@@ -224,7 +224,6 @@ class GraphService:
                     if deleted['delete_dashboard_file']:
                         pending_dashboard_deletes.append(str(deleted['node_id']))
                     pending_dashboard_ref_deletes.append(str(deleted['node_id']))
-                    reparse_all = True
                 else:
                     raise GraphValidationError(f'Unsupported graph operation `{op_type}`.')
             self._validate_graph(graph)
@@ -297,8 +296,7 @@ class GraphService:
                     self.project_service.dashboard_service.remove_node_references(node_id)
                 for dashboard_id in pending_dashboard_deletes:
                     self.project_service.dashboard_service.delete_dashboard_file(dashboard_id)
-            if reparse_all:
-                self.project_service.reparse_all_notebooks()
+            self._reparse_notebooks(notebooks_to_reparse)
             if self.project_service.dashboard_service is not None:
                 for dashboard in pending_dashboard_creates:
                     self.project_service.dashboard_service.materialize_template_dashboard(**dashboard)
@@ -1471,7 +1469,7 @@ class GraphService:
                 project.paths.dashboard_path(node.id), json_dumps(manifest['dashboard'], pretty=True) + '\n'
             )
         project.state_db.restore_tombstone_state(tombstone_id, dict(manifest['state']), restored_at=utc_now_iso())
-        self.project_service.reparse_all_notebooks()
+        self._reparse_notebooks({node.id} if node.kind == NodeKind.NOTEBOOK else set())
         self.restore_nodes_and_downstream_ready_if_lineage_matches([node.id])
         skipped_dashboard_ids: list[str] = []
         if self.project_service.dashboard_service is not None:
@@ -1516,6 +1514,15 @@ class GraphService:
                 path.unlink()
             except FileNotFoundError:
                 continue
+
+    def _reparse_notebooks(self, node_ids: set[str]) -> None:
+        if not node_ids:
+            return
+        from bulletjournal.services.notebook_service import NotebookService  # local import to avoid cycle
+
+        notebook_service = NotebookService(self.project_service)
+        for node_id in sorted(node_ids):
+            notebook_service.reparse_notebook(node_id)
 
     def _delete_notebook_output_cache(self, node_id: str) -> None:
         paths = self.project_service.require_project().paths

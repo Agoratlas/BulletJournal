@@ -9,8 +9,14 @@ from bulletjournal.domain.models import GraphData
 from bulletjournal.parser.source_hash import compute_source_hash
 
 
-def notebook_uses_execution_head(project_service, node_id: str, interface: dict[str, Any] | None = None) -> bool:
-    node = project_service.get_node(node_id)
+def notebook_uses_execution_head(
+    project_service,
+    node_id: str,
+    interface: dict[str, Any] | None = None,
+    *,
+    node=None,
+) -> bool:
+    node = project_service.get_node(node_id) if node is None else node
     if node.kind != NodeKind.NOTEBOOK:
         return False
     resolved_interface = interface if interface is not None else project_service.latest_interface(node_id)

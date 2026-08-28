@@ -36,6 +36,28 @@ def test_open_and_snapshot(tmp_path) -> None:
     assert 'notices' in snapshot.json()
 
 
+def test_expired_graph_mutation_request_returns_a_version_conflict_not_a_server_error(tmp_path) -> None:
+    project_root = init_project_root(tmp_path / 'project').root
+    client = TestClient(create_app(project_path=project_root))
+    graph_version = client.get('/api/v1/graph').json()['meta']['graph_version']
+    request_id = 'expired-request'
+    payload = {
+        'graph_version': graph_version,
+        'request_id': request_id,
+        'operations': [{'type': 'add_area_node', 'node_id': 'area', 'title': 'Area'}],
+    }
+
+    assert client.patch('/api/v1/graph', json=payload).status_code == 200
+    state_db = client.app.state.container.project_service.require_project().state_db
+    with state_db._connection() as connection:
+        connection.execute('DELETE FROM mutation_requests WHERE request_id = ?', (request_id,))
+        connection.commit()
+    retry = client.patch('/api/v1/graph', json=payload)
+
+    assert retry.status_code == 409
+    assert retry.json()['code'] == 'history_conflict'
+
+
 def test_node_detail_endpoint_available_at_project_nodes_path(tmp_path) -> None:
     project_root = init_project_root(tmp_path / 'project').root
     app = create_app(project_path=project_root)

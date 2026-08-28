@@ -1,5 +1,6 @@
 import sqlite3
 from concurrent.futures import ThreadPoolExecutor
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -35,6 +36,41 @@ def test_fresh_state_db_has_final_cache_free_schema(tmp_path) -> None:
     assert 'cache_index' not in tables
     assert 'nondeterministic' not in columns
     assert '007_remove_cache_and_nondeterminism' in markers
+
+
+def test_mutation_response_cache_is_compressed_and_round_trips(tmp_path) -> None:
+    db = StateDB(tmp_path / 'state.db')
+    response = {'graph': {'nodes': [{'id': 'node', 'payload': 'x' * 100_000}]}}
+
+    db.cache_mutation_response('request-1', response)
+
+    with sqlite3.connect(db.path) as connection:
+        response_json, response_zlib = connection.execute(
+            'SELECT response_json, response_zlib FROM mutation_requests WHERE request_id = ?', ('request-1',)
+        ).fetchone()
+    assert response_json == ''
+    assert response_zlib is not None
+    assert len(response_zlib) < 1_000
+    assert db.cached_mutation_response('request-1') == response
+
+
+def test_prune_mutation_requests_removes_only_expired_rows(tmp_path) -> None:
+    db = StateDB(tmp_path / 'state.db')
+    db.cache_mutation_response('expired', {'value': 'old'})
+    db.cache_mutation_response('current', {'value': 'new'})
+    cutoff = datetime.now(UTC) - timedelta(hours=1)
+    with sqlite3.connect(db.path) as connection:
+        connection.execute(
+            'UPDATE mutation_requests SET created_at = ? WHERE request_id = ?',
+            ((cutoff - timedelta(seconds=1)).isoformat().replace('+00:00', 'Z'), 'expired'),
+        )
+
+    count, bytes_reclaimed = db.prune_mutation_requests(cutoff.isoformat().replace('+00:00', 'Z'))
+
+    assert count == 1
+    assert bytes_reclaimed > 0
+    assert db.cached_mutation_response('expired') is None
+    assert db.cached_mutation_response('current') == {'value': 'new'}
 
 
 def test_cache_removal_migration_preserves_objects_versions_heads_and_asset_links(tmp_path) -> None:

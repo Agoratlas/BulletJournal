@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.metadata
+import os
 from pathlib import Path
 from typing import cast
 
@@ -20,6 +21,8 @@ def discover_template_providers() -> list[TemplateProvider]:
 
 
 def discover_external_template_providers() -> list[TemplateProvider]:
+    if os.environ.get('BULLETJOURNAL_DISABLE_EXTERNAL_TEMPLATE_PROVIDERS') == '1':
+        return []
     providers: list[object] = []
     for entry_point in sorted(_template_entry_points(), key=lambda item: item.name):
         provider_factory = entry_point.load()

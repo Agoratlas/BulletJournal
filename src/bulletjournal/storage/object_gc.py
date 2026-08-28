@@ -20,6 +20,7 @@ class ObjectGCSettings:
     version_retention_seconds: int = 3600
     min_interval_seconds: int = 900
     temp_retention_seconds: int = 86400
+    mutation_request_retention_seconds: int = 3600
     batch_size: int = 250
     max_batch_bytes: int = 64 * 1024 * 1024
     time_budget_seconds: float = 2.0
@@ -30,6 +31,7 @@ class ObjectGCSettings:
             'version_retention_seconds': self.version_retention_seconds,
             'min_interval_seconds': self.min_interval_seconds,
             'temp_retention_seconds': self.temp_retention_seconds,
+            'mutation_request_retention_seconds': self.mutation_request_retention_seconds,
             'batch_size': self.batch_size,
             'max_batch_bytes': self.max_batch_bytes,
         }
@@ -71,6 +73,9 @@ class ObjectGCSettings:
             version_retention_seconds=integer('gc_version_retention_seconds', defaults.version_retention_seconds),
             min_interval_seconds=integer('gc_min_interval_seconds', defaults.min_interval_seconds),
             temp_retention_seconds=integer('gc_temp_retention_seconds', defaults.temp_retention_seconds),
+            mutation_request_retention_seconds=integer(
+                'gc_mutation_request_retention_seconds', defaults.mutation_request_retention_seconds
+            ),
             batch_size=integer('gc_batch_size', defaults.batch_size),
             max_batch_bytes=integer('gc_max_batch_bytes', defaults.max_batch_bytes),
         )
@@ -88,6 +93,8 @@ class ObjectGCReport:
     artifact_versions_pruned: int = 0
     asset_versions_pruned: int = 0
     temp_files_deleted: int = 0
+    mutation_requests_pruned: int = 0
+    mutation_request_bytes_reclaimed: int = 0
     objects_eligible: int = 0
     objects_deleted: int = 0
     bytes_reclaimed: int = 0
@@ -137,12 +144,15 @@ class ObjectGarbageCollector:
                 self._reconcile(report, dry_run=dry_run)
                 self._expire_tombstones(current, report, dry_run=dry_run)
                 self._prune_versions(current, report, dry_run=dry_run)
+                self._prune_mutation_requests(current, report, dry_run=dry_run)
                 roots = self._roots(current, report)
                 self._refresh_unreferenced_at(current, roots, dry_run=dry_run)
                 candidates = self._candidates(current, roots, report, started)
                 if not dry_run:
                     self._delete(candidates, current, report)
                     self._cleanup_temp(current, report)
+                    if report.mutation_request_bytes_reclaimed >= self.settings.max_batch_bytes:
+                        self.db.vacuum()
                     self.db.set_project_meta('gc_last_completed_at', _iso(current))
         except TimeoutError:
             report.deferred_reason = 'project_lock_busy'
@@ -323,6 +333,19 @@ class ObjectGarbageCollector:
             if violations or dangling:
                 raise sqlite3.IntegrityError('Version pruning would violate a foreign key or head invariant.')
             connection.commit()
+
+    def _prune_mutation_requests(self, now: datetime, report: ObjectGCReport, *, dry_run: bool) -> None:
+        cutoff = _iso(now - timedelta(seconds=self.settings.mutation_request_retention_seconds))
+        with self.db._connection() as connection:
+            row = connection.execute(
+                'SELECT COUNT(*), COALESCE(SUM(LENGTH(response_json) + LENGTH(response_zlib)), 0) '
+                'FROM mutation_requests WHERE created_at <= ?',
+                (cutoff,),
+            ).fetchone()
+        report.mutation_requests_pruned = int(row[0])
+        report.mutation_request_bytes_reclaimed = int(row[1])
+        if not dry_run and report.mutation_requests_pruned:
+            self.db.prune_mutation_requests(cutoff)
 
     def _candidates(
         self, now: datetime, roots: set[str], report: ObjectGCReport, started: float

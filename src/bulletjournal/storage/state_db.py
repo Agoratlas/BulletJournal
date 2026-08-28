@@ -4,6 +4,7 @@ import json
 import os
 import sqlite3
 import uuid
+import zlib
 from collections.abc import Iterable, Iterator
 from contextlib import closing, contextmanager
 from pathlib import Path
@@ -534,17 +535,40 @@ class StateDB:
     def cached_mutation_response(self, request_id: str) -> dict[str, Any] | None:
         with self._connection() as connection:
             row = connection.execute(
-                'SELECT response_json FROM mutation_requests WHERE request_id = ?', (request_id,)
+                'SELECT response_json, response_zlib FROM mutation_requests WHERE request_id = ?', (request_id,)
             ).fetchone()
-        return None if row is None else json.loads(str(row['response_json']))
+        if row is None:
+            return None
+        compressed = row['response_zlib']
+        payload = (
+            zlib.decompress(bytes(compressed)).decode('utf-8') if compressed is not None else str(row['response_json'])
+        )
+        return json.loads(payload)
 
     def cache_mutation_response(self, request_id: str, response: dict[str, Any]) -> None:
+        encoded = json_dumps(response).encode('utf-8')
         with self._connection() as connection:
             connection.execute(
-                'INSERT OR IGNORE INTO mutation_requests (request_id, response_json, created_at) VALUES (?, ?, ?)',
-                (request_id, json_dumps(response), utc_now_iso()),
+                'INSERT OR IGNORE INTO mutation_requests '
+                '(request_id, response_json, response_zlib, created_at) VALUES (?, ?, ?, ?)',
+                (request_id, '', zlib.compress(encoded), utc_now_iso()),
             )
             connection.commit()
+
+    def prune_mutation_requests(self, cutoff: str) -> tuple[int, int]:
+        with self._connection() as connection:
+            row = connection.execute(
+                'SELECT COUNT(*), COALESCE(SUM(LENGTH(response_json) + LENGTH(response_zlib)), 0) '
+                'FROM mutation_requests WHERE created_at <= ?',
+                (cutoff,),
+            ).fetchone()
+            connection.execute('DELETE FROM mutation_requests WHERE created_at <= ?', (cutoff,))
+            connection.commit()
+        return int(row[0]), int(row[1])
+
+    def vacuum(self) -> None:
+        with closing(self._connect()) as connection:
+            connection.execute('VACUUM')
 
     def tombstone_node_state(
         self,

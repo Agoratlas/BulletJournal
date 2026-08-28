@@ -7,6 +7,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / 'src'
 
+# Tests exercise the bundled template catalog only, regardless of developer plugins.
+os.environ['BULLETJOURNAL_DISABLE_EXTERNAL_TEMPLATE_PROVIDERS'] = '1'
+
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 

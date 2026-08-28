@@ -235,6 +235,15 @@ button.topbar-control.stop-action:hover {
   background: linear-gradient(135deg, #fb6464, #e23434);
 }
 
+:root[data-theme='dark'] button.topbar-control.stop-action {
+  background: linear-gradient(135deg, #f05252, #dc2626);
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.28);
+}
+
+:root[data-theme='dark'] button.topbar-control.stop-action:hover:not(:disabled) {
+  background: linear-gradient(135deg, #fb6464, #e23434);
+}
+
 button.topbar-control.stop-action::after {
   content: '';
   position: absolute;

@@ -487,4 +487,11 @@ MIGRATIONS: list[tuple[str, str | MigrationCallable]] = [
         ON run_inputs (publication_id);
         """,
     ),
+    (
+        '012_compressed_mutation_responses',
+        """
+        ALTER TABLE mutation_requests ADD COLUMN response_zlib BLOB NULL;
+        CREATE INDEX IF NOT EXISTS idx_mutation_requests_created_at ON mutation_requests (created_at);
+        """,
+    ),
 ]
