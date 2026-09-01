@@ -704,6 +704,15 @@ def test_template_service_rewrites_notebook_app_title_from_node_id() -> None:
     assert rendered == "app = marimo.App(width='medium', app_title='sample_node')\n"
 
 
+def test_template_service_preserves_double_quotes_for_notebook_app_title() -> None:
+    rendered = TemplateService.render_notebook_template_source(
+        'app = marimo.App(app_title="Visible Title")\n',
+        node_id='sample_node',
+    )
+
+    assert rendered == 'app = marimo.App(app_title="sample_node")\n'
+
+
 def test_template_service_preserves_other_marimo_app_arguments() -> None:
     rendered = TemplateService.render_notebook_template_source(
         "app = marimo.App(width='medium', layout_file='layout.json', app_title='Visible Title')  # keep\n",

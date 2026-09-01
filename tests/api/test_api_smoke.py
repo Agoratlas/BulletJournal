@@ -1871,7 +1871,7 @@ if __name__ == '__main__':
     notebook_path = project_root / 'notebooks' / 'inline_source.py'
     assert notebook_path.read_text(encoding='utf-8') == notebook_source.replace(
         'app = marimo.App()',
-        "app = marimo.App(app_title='inline_source')",
+        'app = marimo.App(app_title="inline_source")',
     )
 
 
@@ -4139,7 +4139,7 @@ def test_freezing_downstream_block_also_freezes_upstream_file_blocks(tmp_path) -
     )
     assert created.status_code == 200
     notebook_source = (project_root / 'notebooks' / 'table_sink.py').read_text(encoding='utf-8')
-    assert "app = marimo.App(app_title='table_sink')" in notebook_source
+    assert 'app = marimo.App(app_title="table_sink")' in notebook_source
 
     container.project_service.reparse_notebook_by_path(project_root / 'notebooks' / 'table_sink.py')
 
