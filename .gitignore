@@ -1,12 +1,11 @@
 # Python and system files
-venv/
 .venv/
-
 *.pyc
 __pycache__/
 *.egg-info/
 .DS_Store
 build/
+.coverage
 
 # Frontend dependencies and caches
 web/node_modules/
