@@ -62,7 +62,7 @@ type GraphCanvasProps = {
   onOpenAssets: (nodeId: string) => void
   onCanvasInteract: () => void
   onCanvasClear: () => void
-  onNodeMove: (nodeId: string, x: number, y: number) => void
+  onNodesMove: (nodes: Array<{ nodeId: string; x: number; y: number }>) => void
   onNodeResize: (nodeId: string, x: number, y: number, w: number, h: number) => void
   onNodesDelete: (nodes: Node[]) => void
   draggedBlock: { title: string; kind: string } | null
@@ -1105,12 +1105,13 @@ function fixedNodeHeight(node: NodeRecord, layoutHeight: number | undefined): nu
   return undefined
 }
 
-export function GraphCanvas({ snapshot, serverNowMs = Date.now(), serverNowClientAnchorMs = Date.now(), selectedNodeIds, selectedEdgeIds, activeRunNodeId = null, queuedRunNodeIds = [], completedRunNodeIds = [], activeEditorNodeIds = [], onConnect, onEdgesChange, onSelectionChange, onNodeSelect, onEdgeSelect, onNodeContextMenu, onSelectionContextMenu, onPortContextMenu, onEditConstantNode, onEditFileNode, onEditOrganizerNode, onEditAreaNode, onOpenEditor, onOpenDashboard, onKillEditor, onRunNode, onOpenArtifacts, onOpenAssets, onCanvasInteract, onCanvasClear, onNodeMove, onNodeResize, onNodesDelete, draggedBlock, onBlockDrop, onViewportChange, dashboardPseudoLinks = [], selectedDashboardId = null, selectedDashboardSourceNodeIds = [], onToggleDashboardSource = () => undefined, nodeNoticeSeverityById = {}, hoveredNoticeNodeId = null, focusedNotice = null }: GraphCanvasProps) {
+export function GraphCanvas({ snapshot, serverNowMs = Date.now(), serverNowClientAnchorMs = Date.now(), selectedNodeIds, selectedEdgeIds, activeRunNodeId = null, queuedRunNodeIds = [], completedRunNodeIds = [], activeEditorNodeIds = [], onConnect, onEdgesChange, onSelectionChange, onNodeSelect, onEdgeSelect, onNodeContextMenu, onSelectionContextMenu, onPortContextMenu, onEditConstantNode, onEditFileNode, onEditOrganizerNode, onEditAreaNode, onOpenEditor, onOpenDashboard, onKillEditor, onRunNode, onOpenArtifacts, onOpenAssets, onCanvasInteract, onCanvasClear, onNodesMove, onNodeResize, onNodesDelete, draggedBlock, onBlockDrop, onViewportChange, dashboardPseudoLinks = [], selectedDashboardId = null, selectedDashboardSourceNodeIds = [], onToggleDashboardSource = () => undefined, nodeNoticeSeverityById = {}, hoveredNoticeNodeId = null, focusedNotice = null }: GraphCanvasProps) {
   const { screenToFlowPosition, setCenter, setViewport } = useReactFlow()
   const store = useStoreApi()
   const updateNodeInternals = useUpdateNodeInternals()
   const shellRef = useRef<HTMLDivElement | null>(null)
   const pendingLayoutRef = useRef<Record<string, { x: number; y: number; w?: number; h?: number }>>({})
+  const draggedNodeIdsRef = useRef(new Set<string>())
   const selectionStateRef = useRef<{ additive: boolean; baseNodeIds: string[]; baseEdgeIds: string[] } | null>(null)
   const suppressNativeSelectionRef = useRef(false)
   const initializedViewportProjectIdRef = useRef<string | null>(null)
@@ -1448,8 +1449,14 @@ export function GraphCanvas({ snapshot, serverNowMs = Date.now(), serverNowClien
   const handleNodeDragStop: NodeDragHandler = (_event, node) => {
     onCanvasInteract()
     pendingLayoutRef.current[node.id] = { x: node.position.x, y: node.position.y }
+    draggedNodeIdsRef.current.add(node.id)
     setPendingLayoutVersion((current) => current + 1)
-    onNodeMove(node.id, node.position.x, node.position.y)
+    const movedNodes = Array.from(draggedNodeIdsRef.current, (nodeId) => {
+      const position = pendingLayoutRef.current[nodeId]
+      return position ? { nodeId, x: position.x, y: position.y } : null
+    }).filter((position): position is { nodeId: string; x: number; y: number } => position !== null)
+    draggedNodeIdsRef.current.clear()
+    onNodesMove(movedNodes)
   }
 
   useEffect(() => {
@@ -1606,6 +1613,7 @@ export function GraphCanvas({ snapshot, serverNowMs = Date.now(), serverNowClien
               w: previous?.w,
               h: previous?.h,
             }
+            draggedNodeIdsRef.current.add(change.id)
             positionChanged = true
           }
           const dimensionChanges = changes.filter(
@@ -1747,7 +1755,10 @@ export function GraphCanvas({ snapshot, serverNowMs = Date.now(), serverNowClien
           onSelectionChange(nextNodeIds, nextEdgeIds)
         }}
         onMoveStart={onCanvasInteract}
-        onNodeDragStart={onCanvasInteract}
+        onNodeDragStart={() => {
+          draggedNodeIdsRef.current.clear()
+          onCanvasInteract()
+        }}
         onConnectStart={(event, _params: OnConnectStartParams) => {
           onCanvasInteract()
           connectionStartPointRef.current = clientPointFromConnectEvent(event)

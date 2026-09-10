@@ -1513,6 +1513,43 @@ def test_graph_layout_patch_accepts_position_only_updates(tmp_path) -> None:
     assert layout['h'] == 260
 
 
+def test_graph_layout_batch_patch_persists_all_node_positions(tmp_path) -> None:
+    project_root = init_project_root(tmp_path / 'project').root
+    client = TestClient(create_app(project_path=project_root))
+    graph_version = client.get('/api/v1/graph').json()['meta']['graph_version']
+
+    created = client.patch(
+        '/api/v1/graph',
+        json={
+            'graph_version': graph_version,
+            'operations': [
+                {'type': 'add_notebook_node', 'node_id': 'first', 'title': 'First', 'x': 100, 'y': 120},
+                {'type': 'add_notebook_node', 'node_id': 'second', 'title': 'Second', 'x': 300, 'y': 320},
+            ],
+        },
+    )
+    assert created.status_code == 200
+
+    moved = client.patch(
+        '/api/v1/graph',
+        json={
+            'graph_version': created.json()['graph']['meta']['graph_version'],
+            'operations': [
+                {'type': 'update_node_layout', 'node_id': 'first', 'x': 220, 'y': 260},
+                {'type': 'update_node_layout', 'node_id': 'second', 'x': 420, 'y': 460},
+            ],
+        },
+    )
+    assert moved.status_code == 200
+
+    restarted = TestClient(create_app(project_path=project_root))
+    layout_by_node_id = {entry['node_id']: entry for entry in restarted.get('/api/v1/graph').json()['layout']}
+    assert layout_by_node_id['first']['x'] == 220
+    assert layout_by_node_id['first']['y'] == 260
+    assert layout_by_node_id['second']['x'] == 420
+    assert layout_by_node_id['second']['y'] == 460
+
+
 def test_warning_notice_can_be_dismissed_via_api(tmp_path) -> None:
     project_root = init_project_root(tmp_path / 'project').root
     app = create_app(project_path=project_root)

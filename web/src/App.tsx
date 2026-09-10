@@ -3973,26 +3973,28 @@ function App() {
     await refreshSnapshot()
   }
 
-  async function handleNodeMove(nodeId: string, x: number, y: number) {
+  async function handleNodesMove(nodes: Array<{ nodeId: string; x: number; y: number }>) {
     if (!liveSnapshot) {
       return
     }
-    const nextX = Math.round(x / 20) * 20
-    const nextY = Math.round(y / 20) * 20
-    const currentLayout = liveSnapshot.graph.layout.find((entry) => entry.node_id === nodeId)
-    if (currentLayout && currentLayout.x === nextX && currentLayout.y === nextY) {
+    const operations = nodes.flatMap(({ nodeId, x, y }) => {
+      const nextX = Math.round(x / 20) * 20
+      const nextY = Math.round(y / 20) * 20
+      const currentLayout = liveSnapshot.graph.layout.find((entry) => entry.node_id === nodeId)
+      if (currentLayout && currentLayout.x === nextX && currentLayout.y === nextY) {
+        return []
+      }
+      return [{
+        type: 'update_node_layout',
+        node_id: nodeId,
+        x: nextX,
+        y: nextY,
+      } satisfies GraphPatchOperation]
+    })
+    if (!operations.length) {
       return
     }
-    const redo = {
-      operations: [
-        {
-          type: 'update_node_layout',
-          node_id: nodeId,
-          x: nextX,
-          y: nextY,
-        } satisfies GraphPatchOperation,
-      ],
-    }
+    const redo = { operations }
     await mutateGraph(redo.operations, { history: liveSnapshot ? simpleHistoryEntryForPlan(liveSnapshot, redo) : null })
   }
 
@@ -4658,7 +4660,7 @@ function App() {
                   setNodeActionMenu(null)
                   setPortActionMenu(null)
                 }}
-                onNodeMove={handleNodeMove}
+                onNodesMove={handleNodesMove}
               onNodeResize={handleNodeResize}
               onNodesDelete={handleNodesDelete}
               draggedBlock={draggedPaletteEntry ? { title: draggedPaletteEntry.title, kind: draggedPaletteEntry.kind } : null}
