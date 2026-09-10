@@ -142,6 +142,29 @@ class RunService:
             self._active_run.cancel_event.set()
         return {'run_id': run_id, 'status': 'cancelling'}
 
+    def get_run(self, run_id: str) -> dict[str, Any]:
+        record = self.project_service.require_project().state_db.get_run_record(run_id)
+        if record is None:
+            raise NotFoundError(f'Unknown run `{run_id}`.')
+        with self._lock:
+            active = self._active_run
+            if active is not None and active.run_id == run_id:
+                record['status'] = 'running'
+                record['current_node'] = active.current_node
+        return record
+
+    def wait_for_run(self, run_id: str, *, timeout_seconds: float) -> dict[str, Any]:
+        if timeout_seconds < 0 or timeout_seconds > 30:
+            raise InvalidRequestError('timeout_seconds must be between 0 and 30.')
+        deadline = time.monotonic() + timeout_seconds
+        while True:
+            run = self.get_run(run_id)
+            if run.get('status') not in {'running', 'cancelling'}:
+                return {'run': run, 'completed': True, 'timed_out': False}
+            if time.monotonic() >= deadline:
+                return {'run': run, 'completed': False, 'timed_out': True}
+            time.sleep(min(0.25, deadline - time.monotonic()))
+
     def start_selection_run(self, node_ids: list[str], *, action: str | None = None) -> dict[str, Any]:
         self.project_service.require_project()
         plan = self._effective_run_plan(self._plan_for_selection(node_ids))

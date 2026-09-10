@@ -20,7 +20,7 @@ from bulletjournal.api.deps import ServiceContainer
 from bulletjournal.api.errors import install_error_handlers
 from bulletjournal.api.routes import artifacts, assets, checkpoints, dashboards, graph, project, runs, templates
 from bulletjournal.api.sse import sse_response
-from bulletjournal.config import ServerConfig, bundled_web_root, normalize_base_path
+from bulletjournal.config import ServerConfig, bundled_web_root, mcp_enabled_from_env, normalize_base_path
 from bulletjournal.observability.timing import ServerTimingMiddleware, measure
 
 
@@ -28,16 +28,22 @@ def create_app(*, project_path: Path | None = None, server_config: ServerConfig 
     resolved_server_config = server_config or ServerConfig()
     base_path = normalize_base_path(resolved_server_config.base_path)
     eager_project_path = project_path.resolve() if project_path is not None else None
+    mcp_app = None
+    mcp_path = _route_path(base_path, '/mcp') if mcp_enabled_from_env() else None
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         try:
-            yield
+            if mcp_app is None:
+                yield
+            else:
+                async with mcp_app.router.lifespan_context(mcp_app):
+                    yield
         finally:
             app.state.container.run_service.stop()
             app.state.container.project_service.stop()
 
-    app = FastAPI(title='BulletJournal', version='0.1.0', lifespan=lifespan)
+    app = FastAPI(title='BulletJournal', version='2.2.6', lifespan=lifespan)
     app.state.container = ServiceContainer()
     app.state.container.run_service.server_config = resolved_server_config
     app.state.server_config = resolved_server_config
@@ -57,6 +63,11 @@ def create_app(*, project_path: Path | None = None, server_config: ServerConfig 
     async def forwarded_prefix_middleware(request: Request, call_next):
         forwarded_prefix = request.headers.get('x-forwarded-prefix')
         request.scope['root_path'] = normalize_base_path(forwarded_prefix)
+        # Starlette mounts only match a path with a trailing slash. MCP's
+        # canonical endpoint has no trailing slash, so route it to the mount.
+        if mcp_path is not None and request.scope['path'] == mcp_path:
+            request.scope['path'] = f'{mcp_path}/'
+            request.scope['raw_path'] = f'{mcp_path}/'.encode('ascii')
         return await call_next(request)
 
     app.add_middleware(ServerTimingMiddleware)
@@ -70,6 +81,12 @@ def create_app(*, project_path: Path | None = None, server_config: ServerConfig 
     app.include_router(runs.router, prefix=api_prefix)
     app.include_router(checkpoints.router, prefix=api_prefix)
     app.include_router(templates.router, prefix=api_prefix)
+
+    if mcp_path is not None:
+        from bulletjournal.mcp.server import create_mcp_app
+
+        mcp_app = create_mcp_app(app.state.container, resolved_server_config)
+        app.mount(mcp_path, mcp_app)
 
     @app.get(_route_path(base_path, '/api/v1/events'))
     def events(request: Request, last_event_id: int | None = None):

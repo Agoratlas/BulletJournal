@@ -575,6 +575,19 @@ def test_template_service_supports_legacy_example_aliases_when_examples_are_acti
     assert pipeline.ref == 'examples/example_movie_pipeline'
 
 
+def test_template_service_explains_kind_specific_template_details(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        'bulletjournal.services.template_service.discover_template_providers',
+        lambda: [example_provider()],
+    )
+    service = TemplateService()
+
+    with pytest.raises(ValueError, match='pipeline templates support `include_definition`'):
+        service.get_template('examples/example_movie_pipeline', include_interface=True)
+    with pytest.raises(ValueError, match='notebook templates support `include_interface`'):
+        service.get_template('examples/movie_dataset_download', include_definition=True)
+
+
 def test_template_service_hides_examples_when_external_provider_is_active(monkeypatch: pytest.MonkeyPatch) -> None:
     external_provider = SimpleNamespace(
         provider_name='external',

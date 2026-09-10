@@ -747,6 +747,68 @@ class ProjectService:
             'templates': self.template_service.list_templates() if include_details else [],
         }
 
+    def get_compact_state(
+        self,
+        *,
+        sections: list[str] | None = None,
+        node_ids: list[str] | None = None,
+        run_history_limit: int = 20,
+    ) -> dict[str, Any]:
+        """Build an MCP-safe project view without filesystem or template source data."""
+        allowed = {'summary', 'graph', 'validation', 'notices', 'recent_runs'}
+        requested = set(sections or {'summary', 'graph', 'validation', 'notices'})
+        unknown = requested - allowed
+        if unknown:
+            raise InvalidRequestError(f'Unknown state sections: {", ".join(sorted(unknown))}.')
+        if run_history_limit < 0 or run_history_limit > 100:
+            raise InvalidRequestError('run_history_limit must be between 0 and 100.')
+        graph = self.graph()
+        execution_meta_by_node = self.require_project().state_db.list_orchestrator_execution_meta()
+        orchestrator_state_by_node = self.run_service.orchestrator_state() if self.run_service is not None else {}
+        selected = set(node_ids or [node.id for node in graph.nodes])
+        graph_nodes = {node.id: node for node in graph.nodes}
+        missing = selected - graph_nodes.keys()
+        if missing:
+            raise NotFoundError(f'Unknown node `{sorted(missing)[0]}`.')
+        result: dict[str, Any] = {'graph_version': int(graph.meta['graph_version'])}
+        if 'summary' in requested:
+            result['summary'] = {
+                'project_id': self.require_project().metadata.project_id,
+                'title': self.require_project().metadata.title,
+                'created_at': self.require_project().metadata.created_at,
+                'status': self.project_status(),
+            }
+        if 'graph' in requested:
+            result['graph'] = {
+                'meta': dict(graph.meta),
+                'nodes': [
+                    {
+                        'id': node.id,
+                        'kind': node.kind.value,
+                        'title': node.title,
+                        'incarnation_id': node.incarnation_id,
+                        'template': node.template.to_dict() if node.template else None,
+                        'ui': dict(node.ui),
+                        'execution_meta': execution_meta_by_node.get(node.id),
+                        'orchestrator_state': orchestrator_state_by_node.get(node.id),
+                    }
+                    for node in graph.nodes
+                    if node.id in selected
+                ],
+                'edges': [
+                    edge.to_dict()
+                    for edge in graph.edges
+                    if edge.source_node in selected or edge.target_node in selected
+                ],
+            }
+        if 'validation' in requested:
+            result['validation'] = [issue for issue in self.validation_issues() if issue.get('node_id') in selected]
+        if 'notices' in requested:
+            result['notices'] = [notice for notice in self.notices() if notice.get('node_id') in selected]
+        if 'recent_runs' in requested:
+            result['recent_runs'] = self.require_project().state_db.list_run_records()[:run_history_limit]
+        return result
+
     def graph_patch_payload(self) -> dict[str, Any]:
         snapshot = self.snapshot(include_details=False)
         return {'server_time': snapshot['server_time'], 'graph': snapshot['graph']}

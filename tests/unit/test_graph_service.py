@@ -1293,3 +1293,34 @@ def test_notebook_source_changes_create_automatic_checkpoint_when_due(
     NotebookService(project_service).reparse_notebook('sample_node')
 
     assert calls == ['created']
+
+
+def test_compact_state_includes_existing_notebook_execution_metadata(tmp_path) -> None:
+    project_root = init_project_root(tmp_path / 'project').root
+    project_service = ProjectService(_FakeEventService(), TemplateService())
+    project_service.open_project(project_root)
+    graph_service = GraphService(project_service)
+    graph_service.apply_operations(
+        int(project_service.graph().meta['graph_version']),
+        [
+            {
+                'type': 'add_notebook_node',
+                'node_id': 'sample_node',
+                'title': 'Sample Node',
+                'template_ref': 'builtin/test_starter_notebook',
+            }
+        ],
+    )
+    project_service.require_project().state_db.upsert_orchestrator_execution_meta(
+        node_id='sample_node',
+        run_id='run-1',
+        status='succeeded',
+        started_at='2026-03-26T00:00:00Z',
+        ended_at='2026-03-26T00:00:05Z',
+        duration_seconds=5.0,
+    )
+
+    state = project_service.get_compact_state(sections=['graph'], node_ids=['sample_node'])
+
+    assert state['graph']['nodes'][0]['execution_meta']['run_id'] == 'run-1'
+    assert state['graph']['nodes'][0]['execution_meta']['duration_seconds'] == 5.0

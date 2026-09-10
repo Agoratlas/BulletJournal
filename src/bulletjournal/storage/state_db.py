@@ -1817,6 +1817,9 @@ class StateDB:
             records.append(record)
         return records
 
+    def get_run_record(self, run_id: str) -> dict[str, Any] | None:
+        return next((record for record in self.list_run_records() if record['run_id'] == run_id), None)
+
     def upsert_orchestrator_execution_meta(
         self,
         *,

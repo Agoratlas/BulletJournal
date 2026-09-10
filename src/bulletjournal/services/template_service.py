@@ -82,6 +82,104 @@ class TemplateService:
     def list_templates(self) -> list[dict[str, Any]]:
         return deepcopy(self._templates)
 
+    def list_template_catalog(
+        self,
+        *,
+        kind: str | None = None,
+        provider: str | None = None,
+        query: str | None = None,
+        include_hidden: bool = False,
+        cursor: str | None = None,
+        limit: int = 50,
+    ) -> dict[str, Any]:
+        if kind is not None and kind not in {'notebook', 'pipeline'}:
+            raise ValueError('kind must be `notebook` or `pipeline`.')
+        if limit < 1 or limit > 100:
+            raise ValueError('limit must be between 1 and 100.')
+        catalog = []
+        normalized_query = query.strip().lower() if isinstance(query, str) and query.strip() else None
+        for item in self._templates:
+            if kind is not None and item['kind'] != kind:
+                continue
+            if provider is not None and item['provider'] != provider:
+                continue
+            if not include_hidden and item['hidden']:
+                continue
+            if (
+                normalized_query is not None
+                and normalized_query
+                not in ' '.join(
+                    str(item.get(field) or '') for field in ('name', 'ref', 'title', 'documentation')
+                ).lower()
+            ):
+                continue
+            catalog.append(
+                {
+                    key: item[key]
+                    for key in (
+                        'provider',
+                        'origin_revision',
+                        'kind',
+                        'name',
+                        'ref',
+                        'title',
+                        'documentation',
+                        'hidden',
+                        'source_hash',
+                    )
+                }
+            )
+        start = int(cursor) if cursor is not None else 0
+        if start < 0 or start > len(catalog):
+            raise ValueError('cursor is invalid.')
+        items = catalog[start : start + limit]
+        next_cursor = str(start + limit) if start + limit < len(catalog) else None
+        return {'items': items, 'next_cursor': next_cursor}
+
+    def get_template(
+        self,
+        ref: str,
+        *,
+        include_source: bool = False,
+        include_interface: bool = False,
+        include_definition: bool = False,
+    ) -> dict[str, Any]:
+        asset = self._assets_by_ref.get(self._asset_aliases.get(ref, ref))
+        if asset is None or self._is_asset_inactive(asset):
+            raise FileNotFoundError(f'Unknown template `{ref}`.')
+        item = next(template for template in self._templates if template['ref'] == asset.ref)
+        result = {
+            key: item[key]
+            for key in (
+                'provider',
+                'origin_revision',
+                'kind',
+                'name',
+                'ref',
+                'title',
+                'documentation',
+                'hidden',
+                'source_hash',
+            )
+        }
+        if include_source:
+            result['source_text'] = item['source_text']
+        if include_interface:
+            if asset.kind != 'notebook':
+                raise ValueError(
+                    '`include_interface` is only available for notebook templates; '
+                    'pipeline templates support `include_definition` instead.'
+                )
+            result['interface'] = self.resolve_template_interface(asset.ref)
+        if include_definition:
+            if asset.kind != 'pipeline':
+                raise ValueError(
+                    '`include_definition` is only available for pipeline templates; '
+                    'notebook templates support `include_interface` instead.'
+                )
+            result['definition'] = deepcopy(item['definition'])
+        return result
+
     def _build_template_list(self) -> list[dict[str, Any]]:
         templates = [
             *self._list_notebook_templates(),
