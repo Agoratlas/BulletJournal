@@ -831,13 +831,21 @@ class ProjectService:
         last_notebook_edit_at = meta.get('last_notebook_edit_at')
         last_run_started_at = project.state_db.latest_run_started_at()
         last_run_finished_at = project.state_db.latest_run_finished_at()
+        active_mcp_requests = getattr(self, '_active_mcp_requests', 0)
+        last_mcp_activity_at = getattr(self, '_last_mcp_activity_at', None)
         relevant = [
             timestamp
-            for timestamp in [last_graph_edit_at, last_notebook_edit_at, last_run_finished_at, last_run_started_at]
+            for timestamp in [
+                last_graph_edit_at,
+                last_notebook_edit_at,
+                last_run_finished_at,
+                last_run_started_at,
+                last_mcp_activity_at,
+            ]
             if timestamp
         ]
         idle_since = max(relevant) if relevant else project.metadata.created_at
-        idle_eligible = not has_active_run
+        idle_eligible = not has_active_run and active_mcp_requests == 0
         return {
             'project_id': project.metadata.project_id,
             'server_status': 'ok',
@@ -846,9 +854,19 @@ class ProjectService:
             'last_notebook_edit_at': last_notebook_edit_at,
             'last_run_started_at': last_run_started_at,
             'last_run_finished_at': last_run_finished_at,
+            'active_mcp_requests': active_mcp_requests,
+            'last_mcp_activity_at': last_mcp_activity_at,
             'idle_shutdown_eligible': idle_eligible,
             'idle_shutdown_eligible_since': idle_since if idle_eligible else None,
         }
+
+    def begin_mcp_activity(self) -> None:
+        self._active_mcp_requests = getattr(self, '_active_mcp_requests', 0) + 1
+        self._last_mcp_activity_at = utc_now_iso()
+
+    def end_mcp_activity(self) -> None:
+        self._active_mcp_requests = max(0, getattr(self, '_active_mcp_requests', 0) - 1)
+        self._last_mcp_activity_at = utc_now_iso()
 
     def record_graph_activity(self, timestamp: str | None = None) -> None:
         self.require_project().state_db.set_project_meta('last_graph_edit_at', timestamp or utc_now_iso())
