@@ -35,7 +35,8 @@ def serialize_value(value: Any, data_type: str) -> dict[str, Any]:
             **_json_preview_metadata(value),
         }
         if data_type in {'list', 'dict'}:
-            preview['compact_repr'] = json.dumps(value, ensure_ascii=False, separators=(',', ':'))
+            compact_repr = json.dumps(value, ensure_ascii=False, separators=(',', ':'))
+            preview['compact_repr'] = _truncate_preview_text(compact_repr, max_bytes=MAX_SIMPLE_PREVIEW_CHARS)[0]
         return {
             'bytes': payload,
             'storage_kind': StorageKind.JSON.value,
@@ -135,8 +136,8 @@ def serialize_file(path: Path, *, extension: str | None = None) -> dict[str, Any
 
 def _simple_preview(value: Any) -> dict[str, Any]:
     representation = repr(value)
-    cropped = representation[:MAX_SIMPLE_PREVIEW_CHARS]
-    return {'kind': 'simple', 'repr': cropped, 'truncated': len(representation) > len(cropped)}
+    cropped, truncated = _truncate_preview_text(representation, max_bytes=MAX_SIMPLE_PREVIEW_CHARS)
+    return {'kind': 'simple', 'repr': cropped, 'truncated': truncated}
 
 
 def _dataframe_preview(frame: pd.DataFrame) -> dict[str, Any]:
@@ -188,11 +189,17 @@ def _graph_preview(value: Any, *, data_type: str) -> dict[str, Any]:
 
 
 def _preview_text_metadata(text: str) -> dict[str, Any]:
-    payload = text.encode('utf-8', errors='replace')
-    if len(payload) <= 10_000:
+    truncated, is_truncated = _truncate_preview_text(text, max_bytes=10_000)
+    if not is_truncated:
         return {'inspector_text': text, 'inspector_truncated': False}
-    truncated = payload[:10_000].decode('utf-8', errors='ignore')
     return {'inspector_text': truncated, 'inspector_truncated': True}
+
+
+def _truncate_preview_text(text: str, *, max_bytes: int) -> tuple[str, bool]:
+    payload = text.encode('utf-8', errors='replace')
+    if len(payload) <= max_bytes:
+        return text, False
+    return payload[:max_bytes].decode('utf-8', errors='ignore'), True
 
 
 def _dataframe_inspector_text(frame: pd.DataFrame) -> str:

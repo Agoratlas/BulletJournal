@@ -4,6 +4,7 @@ import time
 from pathlib import Path
 
 import pandas as pd
+import pytest
 from fastapi.testclient import TestClient
 
 from bulletjournal.api.app import create_app
@@ -3501,6 +3502,46 @@ def test_dict_constant_compact_preview_preserves_spaces_inside_strings(tmp_path)
     artifact = client.get('/api/v1/artifacts/stringy_dict/value')
     assert artifact.status_code == 200
     assert artifact.json()['preview']['compact_repr'] == '{"key 1":"a b c"}'
+
+
+@pytest.mark.parametrize(
+    ('data_type', 'value', 'preview_field'),
+    [
+        ('str', 'x' * 1_000, 'repr'),
+        ('str', '😀' * 1_000, 'repr'),
+        ('list', ['x' * 1_000], 'compact_repr'),
+        ('dict', {'key': 'x' * 1_000}, 'compact_repr'),
+    ],
+)
+def test_large_simple_artifact_preview_is_bounded(tmp_path, data_type: str, value: object, preview_field: str) -> None:
+    project_root = init_project_root(tmp_path / 'project').root
+    app = create_app(project_path=project_root)
+    client = TestClient(app)
+
+    opened = client.get('/api/v1/project/snapshot')
+    graph_version = opened.json()['graph']['meta']['graph_version']
+    created = client.patch(
+        '/api/v1/graph',
+        json={
+            'graph_version': graph_version,
+            'operations': [
+                {
+                    'type': 'add_constant_node',
+                    'node_id': 'large_value',
+                    'title': 'Large Value',
+                    'data_type': data_type,
+                    'value': value,
+                }
+            ],
+        },
+    )
+    assert created.status_code == 200
+
+    preview = client.get('/api/v1/artifacts/large_value/value').json()['preview']
+    assert len(preview[preview_field].encode('utf-8')) <= 400
+    assert preview['truncated'] is True
+    assert len(preview['inspector_text'].encode('utf-8')) <= 10_000
+    assert preview['inspector_truncated'] is False
 
 
 def test_file_artifact_content_endpoint_renders_inline_image(tmp_path) -> None:
