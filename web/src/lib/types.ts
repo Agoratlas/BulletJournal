@@ -153,6 +153,8 @@ export type ArtifactRecord = {
   upstream_data_hash: string | null
   run_id: string | null
   lineage_mode: string | null
+  override_kind: string | null
+  override_source_version_id: number | null
   created_at: string | null
   warnings: Array<Record<string, unknown>>
   storage_kind: string | null
@@ -186,6 +188,8 @@ export type AssetRecord = {
   upstream_data_hash: string | null
   run_id: string | null
   lineage_mode: string | null
+  override_kind: string | null
+  override_source_version_id: number | null
   definition: Record<string, unknown> | null
   modifier_schema: Array<Record<string, unknown>>
   default_modifiers: Record<string, unknown>

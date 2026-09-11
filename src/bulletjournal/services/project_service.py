@@ -194,6 +194,14 @@ class ProjectService:
                 )
             ):
                 db.set_artifact_head_state(node.id, str(head['artifact_name']), ArtifactState.STALE)
+            elif (
+                node.kind == NodeKind.NOTEBOOK
+                and head['state'] == ArtifactState.STALE.value
+                and self._startup_lineage_matches(
+                    head, source_hash, f'{node.id}/{head["artifact_name"]}', input_lineage
+                )
+            ):
+                db.restore_artifact_head_ready(node.id, str(head['artifact_name']))
 
         for head in db.list_asset_heads(node_id=node.id):
             if head.get('current_asset_version_id') is None:
@@ -221,6 +229,12 @@ class ProjectService:
                 )
             ):
                 db.set_asset_head_state(node.id, str(head['asset_name']), ArtifactState.STALE)
+            elif (
+                node.kind == NodeKind.NOTEBOOK
+                and head['state'] == ArtifactState.STALE.value
+                and self._startup_lineage_matches(head, source_hash, f'{node.id}/{head["asset_name"]}', input_lineage)
+            ):
+                db.restore_asset_head_ready(node.id, str(head['asset_name']))
 
         execution = db.get_notebook_execution_head(node.id)
         if execution is not None and node.kind == NodeKind.NOTEBOOK:
@@ -961,6 +975,14 @@ class ProjectService:
                     continue
                 project.state_db.set_asset_head_state(head['node_id'], head['asset_name'], ArtifactState.STALE)
                 stale_count += 1
+            for node_id in notebook_ids - frozen_ids:
+                execution = project.state_db.get_notebook_execution_head(node_id)
+                if (
+                    execution is not None
+                    and execution.get('last_run_finished_at')
+                    and execution['state'] != ArtifactState.STALE.value
+                ):
+                    project.state_db.set_notebook_execution_head_state(node_id, ArtifactState.STALE)
             graph_version = int(graph.meta['graph_version'])
             self.event_service.publish(
                 'project.environment_changed',

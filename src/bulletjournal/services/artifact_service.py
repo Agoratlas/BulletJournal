@@ -14,6 +14,7 @@ import pandas as pd
 from bulletjournal.domain.enums import ArtifactRole, ArtifactState, LineageMode, NodeKind, StorageKind
 from bulletjournal.domain.errors import InvalidRequestError, NotFoundError
 from bulletjournal.domain.graph_bindings import resolve_input_binding
+from bulletjournal.domain.hashing import combine_hashes, hash_json
 from bulletjournal.domain.models import constant_artifact_name, constant_data_type
 from bulletjournal.services.graph_service import GraphService
 from bulletjournal.storage.project_lock import ProjectLock
@@ -340,10 +341,6 @@ class ArtifactService:
         state: ArtifactState,
         propagate_downstream_stale: bool = True,
     ) -> dict[str, Any]:
-        if state == ArtifactState.READY and not self._node_inputs_are_ready(node_id):
-            raise InvalidRequestError(
-                f'Node `{node_id}` has stale or pending inputs. Its outputs cannot be marked ready.'
-            )
         head = self.get_artifact(node_id, artifact_name)
         if head.get('current_version_id') is None:
             raise InvalidRequestError(
@@ -353,7 +350,16 @@ class ArtifactService:
         if current_state == state.value:
             return head
         project = self.project_service.require_project()
-        project.state_db.set_artifact_head_state(node_id, artifact_name, state)
+        lineage = self._manual_override_lineage(node_id, artifact_name, head, state)
+        version_id = project.state_db.create_manual_artifact_override(
+            node_id=node_id,
+            artifact_name=artifact_name,
+            source_hash=lineage['source_hash'],
+            upstream_code_hash=lineage['upstream_code_hash'],
+            upstream_data_hash=lineage['upstream_data_hash'],
+            state=state,
+            override_kind=f'mark_{state.value}',
+        )
         self.project_service.event_service.publish(
             'artifact.state_changed',
             project_id=project.metadata.project_id,
@@ -363,10 +369,13 @@ class ArtifactService:
                 'artifact_name': artifact_name,
                 'old_state': current_state,
                 'new_state': state.value,
+                'version_id': version_id,
             },
         )
         if state == ArtifactState.STALE and propagate_downstream_stale:
             GraphService(self.project_service).mark_downstream_stale([node_id])
+        elif state == ArtifactState.READY:
+            GraphService(self.project_service).restore_nodes_and_downstream_ready_if_lineage_matches([node_id])
         return self.get_artifact(node_id, artifact_name)
 
     def set_node_output_states(
@@ -412,7 +421,18 @@ class ArtifactService:
             if current_state == state:
                 continue
             asset_name = str(head['asset_name'])
-            project.state_db.set_asset_head_state(node_id, asset_name, state)
+            if state == ArtifactState.READY:
+                self._assert_asset_objects_valid(head)
+            lineage = self._manual_override_lineage(node_id, asset_name, head, state)
+            version_id = project.state_db.create_manual_asset_override(
+                node_id=node_id,
+                asset_name=asset_name,
+                source_hash=lineage['source_hash'],
+                upstream_code_hash=lineage['upstream_code_hash'],
+                upstream_data_hash=lineage['upstream_data_hash'],
+                state=state,
+                override_kind=f'mark_{state.value}',
+            )
             self.project_service.event_service.publish(
                 'asset.state_changed',
                 project_id=project.metadata.project_id,
@@ -422,11 +442,14 @@ class ArtifactService:
                     'asset_name': asset_name,
                     'old_state': current_state.value,
                     'new_state': state.value,
+                    'version_id': version_id,
                 },
             )
             changed_assets.append(asset_name)
         if (changed_artifacts or changed_assets) and state == ArtifactState.STALE:
             GraphService(self.project_service).mark_downstream_stale([node_id])
+        elif (changed_artifacts or changed_assets) and state == ArtifactState.READY:
+            GraphService(self.project_service).restore_nodes_and_downstream_ready_if_lineage_matches([node_id])
         return {
             'node_id': node_id,
             'artifact_names': changed_artifacts,
@@ -456,6 +479,89 @@ class ArtifactService:
             if head.get('state') != ArtifactState.READY.value:
                 return False
         return True
+
+    def _manual_override_lineage(
+        self,
+        node_id: str,
+        output_name: str,
+        head: dict[str, Any],
+        state: ArtifactState,
+    ) -> dict[str, str]:
+        if state == ArtifactState.STALE:
+            token = f'manual_override:stale:{uuid.uuid4()}'
+            source_hash = head.get('source_hash')
+            if not isinstance(source_hash, str) or not source_hash:
+                raise InvalidRequestError(f'Artifact `{node_id}/{output_name}` has invalid lineage metadata.')
+            return {'source_hash': source_hash, 'upstream_data_hash': token, 'upstream_code_hash': token}
+
+        node = self.project_service.get_node(node_id)
+        if node.kind == NodeKind.CONSTANT:
+            artifact_hash = head.get('artifact_hash')
+            source_hash = head.get('source_hash')
+            if (
+                not isinstance(artifact_hash, str)
+                or not artifact_hash
+                or not isinstance(source_hash, str)
+                or not source_hash
+            ):
+                raise InvalidRequestError(f'Constant `{node_id}` has invalid lineage metadata.')
+            return {
+                'source_hash': source_hash,
+                'upstream_data_hash': artifact_hash,
+                'upstream_code_hash': artifact_hash,
+            }
+
+        interface = self.project_service.latest_interface(node_id)
+        if interface is None or not isinstance(interface.get('source_hash'), str):
+            raise InvalidRequestError(f'Node `{node_id}` does not have a parsed interface yet.')
+        source_hash = str(interface['source_hash'])
+        graph = self.project_service.graph()
+        data_hashes: list[str] = []
+        code_hashes: list[str] = []
+        state_db = self.project_service.require_project().state_db
+        for port in interface.get('inputs', []):
+            binding = resolve_input_binding(graph, node_id=node_id, input_name=str(port['name']))
+            if binding is None:
+                if not bool(port.get('has_default', False)):
+                    raise InvalidRequestError(f'Node `{node_id}` has an unbound input.')
+                data_hashes.append(hash_json(port.get('default')))
+                code_hashes.append('default')
+                continue
+            upstream = state_db.get_artifact_head(*binding)
+            if upstream is None or upstream.get('current_version_id') is None:
+                raise InvalidRequestError(
+                    f'Node `{node_id}` has stale or pending inputs. Its outputs cannot be marked ready.'
+                )
+            if upstream.get('state') != ArtifactState.READY.value:
+                raise InvalidRequestError(
+                    f'Node `{node_id}` has stale or pending inputs. Its outputs cannot be marked ready.'
+                )
+            artifact_hash = upstream.get('artifact_hash')
+            upstream_code_hash = upstream.get('upstream_code_hash')
+            if not isinstance(artifact_hash, str) or not isinstance(upstream_code_hash, str):
+                raise InvalidRequestError(f'Node `{node_id}` has invalid upstream lineage.')
+            data_hashes.append(artifact_hash)
+            code_hashes.append(upstream_code_hash)
+        logical_output = f'{node_id}/{output_name}'
+        return {
+            'source_hash': source_hash,
+            'upstream_data_hash': combine_hashes([source_hash, logical_output, *data_hashes]),
+            'upstream_code_hash': combine_hashes([source_hash, logical_output, *code_hashes]),
+        }
+
+    def _assert_asset_objects_valid(self, head: dict[str, Any]) -> None:
+        project = self.project_service.require_project()
+        for item in head.get('objects', []):
+            artifact_hash = item.get('artifact_hash')
+            if not isinstance(artifact_hash, str) or not artifact_hash:
+                raise InvalidRequestError('Asset has an invalid object reference.')
+            record = project.state_db.get_object_record(artifact_hash)
+            if record is None or record.get('gc_state') != 'active':
+                raise InvalidRequestError('Asset object is unavailable and cannot be marked ready.')
+            try:
+                project.object_store.verify_object(artifact_hash, int(record['size_bytes']))
+            except (OSError, ValueError):
+                raise InvalidRequestError('Asset object is invalid and cannot be marked ready.') from None
 
     def download_file(self, node_id: str, artifact_name: str, *, download_format: str | None = None) -> dict[str, Any]:
         head = self.get_artifact(node_id, artifact_name)

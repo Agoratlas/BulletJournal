@@ -494,4 +494,13 @@ MIGRATIONS: list[tuple[str, str | MigrationCallable]] = [
         CREATE INDEX IF NOT EXISTS idx_mutation_requests_created_at ON mutation_requests (created_at);
         """,
     ),
+    (
+        '013_manual_override_provenance',
+        """
+        ALTER TABLE artifact_versions ADD COLUMN override_kind TEXT NULL;
+        ALTER TABLE artifact_versions ADD COLUMN override_source_version_id INTEGER NULL;
+        ALTER TABLE asset_versions ADD COLUMN override_kind TEXT NULL;
+        ALTER TABLE asset_versions ADD COLUMN override_source_version_id INTEGER NULL;
+        """,
+    ),
 ]

@@ -1137,12 +1137,89 @@ class StateDB:
             connection.commit()
 
     def set_asset_head_state(self, node_id: str, asset_name: str, state: ArtifactState) -> None:
+        if state == ArtifactState.READY:
+            raise ValueError('Ready heads must be advanced through a lineage-validated version.')
         with self._connection() as connection:
             connection.execute(
                 'UPDATE asset_heads SET state = ? WHERE node_id = ? AND asset_name = ?',
                 (state.value, node_id, asset_name),
             )
             connection.commit()
+
+    def restore_asset_head_ready(self, node_id: str, asset_name: str) -> None:
+        with self._connection() as connection:
+            connection.execute(
+                'UPDATE asset_heads SET state = ? WHERE node_id = ? AND asset_name = ?',
+                (ArtifactState.READY.value, node_id, asset_name),
+            )
+            connection.commit()
+
+    def create_manual_asset_override(
+        self,
+        *,
+        node_id: str,
+        asset_name: str,
+        source_hash: str,
+        upstream_code_hash: str,
+        upstream_data_hash: str,
+        state: ArtifactState,
+        override_kind: str,
+    ) -> int:
+        """Clone the active asset version and atomically advance its head."""
+        now = utc_now_iso()
+        with self._connection() as connection:
+            incarnation_id = self._live_incarnation_id(connection, node_id)
+            previous = connection.execute(
+                'SELECT ah.current_asset_version_id, av.* FROM asset_heads ah '
+                'JOIN asset_versions av ON av.asset_version_id = ah.current_asset_version_id '
+                'WHERE ah.node_id = ? AND ah.asset_name = ? AND ah.incarnation_id IS ?',
+                (node_id, asset_name, incarnation_id),
+            ).fetchone()
+            if previous is None:
+                raise ValueError(f'Asset `{node_id}/{asset_name}` has no current version.')
+            cursor = connection.execute(
+                'INSERT INTO asset_versions '
+                '(node_id, asset_name, asset_type, interactive, source_hash, upstream_code_hash, upstream_data_hash, '
+                'run_id, lineage_mode, definition_json, modifier_schema_json, default_modifiers_json, '
+                'override_schema_hash, warning_json, created_at, incarnation_id, publication_id, override_kind, '
+                'override_source_version_id) '
+                'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)',
+                (
+                    node_id,
+                    asset_name,
+                    previous['asset_type'],
+                    previous['interactive'],
+                    source_hash,
+                    upstream_code_hash,
+                    upstream_data_hash,
+                    f'manual_override:{uuid.uuid4()}',
+                    LineageMode.MANUAL_OVERRIDE.value,
+                    previous['definition_json'],
+                    previous['modifier_schema_json'],
+                    previous['default_modifiers_json'],
+                    previous['override_schema_hash'],
+                    previous['warning_json'],
+                    now,
+                    incarnation_id,
+                    override_kind,
+                    int(previous['current_asset_version_id']),
+                ),
+            )
+            version_id = int(cursor.lastrowid)
+            connection.execute(
+                'INSERT INTO asset_version_objects '
+                '(asset_version_id, object_role, object_index, artifact_hash, metadata_json) '
+                'SELECT ?, object_role, object_index, artifact_hash, metadata_json FROM asset_version_objects '
+                'WHERE asset_version_id = ?',
+                (version_id, int(previous['current_asset_version_id'])),
+            )
+            connection.execute(
+                'UPDATE asset_heads SET current_asset_version_id = ?, state = ? '
+                'WHERE node_id = ? AND asset_name = ? AND incarnation_id IS ?',
+                (version_id, state.value, node_id, asset_name, incarnation_id),
+            )
+            connection.commit()
+            return version_id
 
     def create_asset_version(
         self,
@@ -1233,6 +1310,7 @@ class StateDB:
                 'ad.title, ad.description, ad.declared_asset_type, ad.declaration_index, '
                 'ad.source_hash AS declaration_source_hash, av.asset_version_id, av.asset_type, av.interactive, '
                 'av.source_hash, av.upstream_code_hash, av.upstream_data_hash, av.run_id, av.lineage_mode, '
+                'av.override_kind, av.override_source_version_id, '
                 'av.definition_json, av.modifier_schema_json, av.default_modifiers_json, '
                 'av.override_schema_hash, av.warning_json, av.created_at '
                 'FROM asset_heads ah '
@@ -1256,6 +1334,7 @@ class StateDB:
                 'ad.title, ad.description, ad.declared_asset_type, ad.declaration_index, '
                 'ad.source_hash AS declaration_source_hash, av.asset_version_id, av.asset_type, av.interactive, '
                 'av.source_hash, av.upstream_code_hash, av.upstream_data_hash, av.run_id, av.lineage_mode, '
+                'av.override_kind, av.override_source_version_id, '
                 'av.definition_json, av.modifier_schema_json, av.default_modifiers_json, '
                 'av.override_schema_hash, av.warning_json, av.created_at '
                 'FROM asset_heads ah '
@@ -1274,6 +1353,7 @@ class StateDB:
                     'ad.title, ad.description, ad.declared_asset_type, ad.declaration_index, '
                     'ad.source_hash AS declaration_source_hash, av.asset_version_id, av.asset_type, av.interactive, '
                     'av.source_hash, av.upstream_code_hash, av.upstream_data_hash, av.run_id, av.lineage_mode, '
+                    'av.override_kind, av.override_source_version_id, '
                     'av.definition_json, av.modifier_schema_json, av.default_modifiers_json, '
                     'av.override_schema_hash, av.warning_json, av.created_at FROM asset_heads ah '
                     'LEFT JOIN asset_declarations ad ON ad.node_id = ah.node_id AND ad.asset_name = ah.asset_name '
@@ -1493,12 +1573,77 @@ class StateDB:
             connection.commit()
 
     def set_artifact_head_state(self, node_id: str, artifact_name: str, state: ArtifactState) -> None:
+        if state == ArtifactState.READY:
+            raise ValueError('Ready heads must be advanced through a lineage-validated version.')
         with self._connection() as connection:
             connection.execute(
                 'UPDATE artifact_heads SET state = ? WHERE node_id = ? AND artifact_name = ?',
                 (state.value, node_id, artifact_name),
             )
             connection.commit()
+
+    def restore_artifact_head_ready(self, node_id: str, artifact_name: str) -> None:
+        with self._connection() as connection:
+            connection.execute(
+                'UPDATE artifact_heads SET state = ? WHERE node_id = ? AND artifact_name = ?',
+                (ArtifactState.READY.value, node_id, artifact_name),
+            )
+            connection.commit()
+
+    def create_manual_artifact_override(
+        self,
+        *,
+        node_id: str,
+        artifact_name: str,
+        source_hash: str,
+        upstream_code_hash: str,
+        upstream_data_hash: str,
+        state: ArtifactState,
+        override_kind: str,
+    ) -> int:
+        """Clone the active artifact version and atomically advance its head."""
+        now = utc_now_iso()
+        with self._connection() as connection:
+            incarnation_id = self._live_incarnation_id(connection, node_id)
+            previous = connection.execute(
+                'SELECT ah.current_version_id, av.* FROM artifact_heads ah '
+                'JOIN artifact_versions av ON av.version_id = ah.current_version_id '
+                'WHERE ah.node_id = ? AND ah.artifact_name = ? AND ah.incarnation_id IS ?',
+                (node_id, artifact_name, incarnation_id),
+            ).fetchone()
+            if previous is None:
+                raise ValueError(f'Artifact `{node_id}/{artifact_name}` has no current version.')
+            cursor = connection.execute(
+                'INSERT INTO artifact_versions '
+                '(node_id, artifact_name, role, artifact_hash, source_hash, upstream_code_hash, upstream_data_hash, '
+                'run_id, lineage_mode, created_at, warning_json, incarnation_id, publication_id, override_kind, '
+                'override_source_version_id) '
+                'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)',
+                (
+                    node_id,
+                    artifact_name,
+                    previous['role'],
+                    previous['artifact_hash'],
+                    source_hash,
+                    upstream_code_hash,
+                    upstream_data_hash,
+                    f'manual_override:{uuid.uuid4()}',
+                    LineageMode.MANUAL_OVERRIDE.value,
+                    now,
+                    previous['warning_json'],
+                    incarnation_id,
+                    override_kind,
+                    int(previous['current_version_id']),
+                ),
+            )
+            version_id = int(cursor.lastrowid)
+            connection.execute(
+                'UPDATE artifact_heads SET current_version_id = ?, state = ? '
+                'WHERE node_id = ? AND artifact_name = ? AND incarnation_id IS ?',
+                (version_id, state.value, node_id, artifact_name, incarnation_id),
+            )
+            connection.commit()
+            return version_id
 
     def upsert_artifact_object(
         self,
@@ -1652,7 +1797,8 @@ class StateDB:
             row = connection.execute(
                 'SELECT ah.node_id, ah.artifact_name, ah.current_version_id, ah.state, '
                 'av.role, av.artifact_hash, av.source_hash, av.upstream_code_hash, av.upstream_data_hash, '
-                'av.run_id, av.lineage_mode, av.created_at, av.warning_json, ao.storage_kind, ao.data_type, '
+                'av.run_id, av.lineage_mode, av.override_kind, av.override_source_version_id, av.created_at, '
+                'av.warning_json, ao.storage_kind, ao.data_type, '
                 'ao.size_bytes, ao.extension, ao.mime_type, ao.preview_json '
                 'FROM artifact_heads ah '
                 'LEFT JOIN artifact_versions av ON av.version_id = ah.current_version_id '
@@ -1667,7 +1813,8 @@ class StateDB:
             rows = connection.execute(
                 'SELECT ah.node_id, ah.artifact_name, ah.current_version_id, ah.state, '
                 'av.role, av.artifact_hash, av.source_hash, av.upstream_code_hash, av.upstream_data_hash, '
-                'av.run_id, av.lineage_mode, av.created_at, av.warning_json, ao.storage_kind, ao.data_type, '
+                'av.run_id, av.lineage_mode, av.override_kind, av.override_source_version_id, av.created_at, '
+                'av.warning_json, ao.storage_kind, ao.data_type, '
                 'ao.size_bytes, ao.extension, ao.mime_type, ao.preview_json '
                 'FROM artifact_heads ah '
                 'LEFT JOIN artifact_versions av ON av.version_id = ah.current_version_id '
@@ -2193,6 +2340,8 @@ class StateDB:
             'upstream_data_hash': row['upstream_data_hash'],
             'run_id': row['run_id'],
             'lineage_mode': row['lineage_mode'],
+            'override_kind': row['override_kind'],
+            'override_source_version_id': row['override_source_version_id'],
             'definition': definition,
             'modifier_schema': []
             if row['modifier_schema_json'] is None
@@ -2220,6 +2369,8 @@ class StateDB:
             'upstream_data_hash': row['upstream_data_hash'],
             'run_id': row['run_id'],
             'lineage_mode': row['lineage_mode'],
+            'override_kind': row['override_kind'],
+            'override_source_version_id': row['override_source_version_id'],
             'created_at': row['created_at'],
             'warnings': [] if row['warning_json'] is None else json.loads(str(row['warning_json'])),
             'storage_kind': row['storage_kind'],

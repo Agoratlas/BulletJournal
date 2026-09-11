@@ -468,11 +468,7 @@ class GraphService:
                 or head.get('upstream_code_hash') != expected_upstream_code_hash
             ):
                 continue
-            project.state_db.set_artifact_head_state(
-                node_id,
-                artifact_name,
-                ArtifactState.READY,
-            )
+            project.state_db.restore_artifact_head_ready(node_id, artifact_name)
             self.project_service.event_service.publish(
                 'artifact.state_changed',
                 project_id=project.metadata.project_id,
@@ -511,7 +507,7 @@ class GraphService:
                 or asset.get('upstream_code_hash') != expected_upstream_code_hash
             ):
                 continue
-            project.state_db.set_asset_head_state(node_id, asset_name, ArtifactState.READY)
+            project.state_db.restore_asset_head_ready(node_id, asset_name)
             self.project_service.event_service.publish(
                 'asset.state_changed',
                 project_id=project.metadata.project_id,

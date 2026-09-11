@@ -43,6 +43,8 @@ export function ArtifactCard({ artifact }: { artifact: ArtifactRecord }) {
     upstream_data_hash: artifact.upstream_data_hash,
     run_id: artifact.run_id,
     lineage_mode: artifact.lineage_mode,
+    override_kind: artifact.override_kind,
+    override_source_version_id: artifact.override_source_version_id,
     definition: {
       row_count: artifact.preview?.kind === 'dataframe' ? artifact.preview.rows : 0,
       table_columns: artifact.preview?.kind === 'dataframe' ? artifact.preview.column_names : [],

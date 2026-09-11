@@ -30,6 +30,7 @@ class RunMode(StrEnum):
 class LineageMode(StrEnum):
     MANAGED = 'managed'
     INTERACTIVE_HEURISTIC = 'interactive_heuristic'
+    MANUAL_OVERRIDE = 'manual_override'
 
 
 class ValidationSeverity(StrEnum):

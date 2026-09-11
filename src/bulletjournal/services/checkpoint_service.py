@@ -405,13 +405,13 @@ class CheckpointService:
                     continue
                 version = restored['version']
                 if self._lineage_matches(node, name, source_hash, inputs, version):
-                    project.state_db.set_artifact_head_state(node_id, name, ArtifactState.READY)
+                    project.state_db.restore_artifact_head_ready(node_id, name)
                     restored['state'] = ArtifactState.READY.value
             for (owner_id, name), restored in selected_assets.items():
                 if owner_id != node_id or restored['state'] == ArtifactState.PENDING.value:
                     continue
                 if self._lineage_matches(node, name, source_hash, inputs, restored['version']):
-                    project.state_db.set_asset_head_state(node_id, name, ArtifactState.READY)
+                    project.state_db.restore_asset_head_ready(node_id, name)
                     restored['state'] = ArtifactState.READY.value
             execution = selected_execution.get(node_id)
             if execution is not None:

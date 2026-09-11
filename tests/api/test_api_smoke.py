@@ -3652,6 +3652,17 @@ def test_artifact_state_endpoints_can_mark_outputs_stale_and_ready(tmp_path) -> 
     )
     assert stale.status_code == 200
     assert stale.json()['state'] == 'stale'
+    stale_version_id = stale.json()['current_version_id']
+    assert stale.json()['lineage_mode'] == 'manual_override'
+    assert stale.json()['override_kind'] == 'mark_stale'
+    assert stale.json()['upstream_data_hash'].startswith('manual_override:stale:')
+    assert stale.json()['upstream_code_hash'].startswith('manual_override:stale:')
+
+    container = app.state.container
+    container.graph_service.restore_nodes_and_downstream_ready_if_lineage_matches(['sample_node'])
+    still_stale = client.get('/api/v1/artifacts/sample_node/sample_df')
+    assert still_stale.status_code == 200
+    assert still_stale.json()['state'] == 'stale'
 
     ready = client.post(
         '/api/v1/artifacts/sample_node/sample_df/state',
@@ -3659,6 +3670,11 @@ def test_artifact_state_endpoints_can_mark_outputs_stale_and_ready(tmp_path) -> 
     )
     assert ready.status_code == 200
     assert ready.json()['state'] == 'ready'
+    assert ready.json()['current_version_id'] > stale_version_id
+    assert ready.json()['lineage_mode'] == 'manual_override'
+    assert ready.json()['override_kind'] == 'mark_ready'
+    assert ready.json()['override_source_version_id'] == stale_version_id
+    assert not ready.json()['upstream_data_hash'].startswith('manual_override:')
 
     bulk_stale = client.post(
         '/api/v1/nodes/sample_node/outputs/state',
@@ -3738,6 +3754,10 @@ def _():
     stale_asset = client.get('/api/v1/nodes/asset_node/assets/notes')
     assert stale_asset.status_code == 200
     assert stale_asset.json()['state'] == 'stale'
+    assert stale_asset.json()['lineage_mode'] == 'manual_override'
+    assert stale_asset.json()['override_kind'] == 'mark_stale'
+    assert stale_asset.json()['upstream_data_hash'].startswith('manual_override:stale:')
+    stale_version_id = stale_asset.json()['current_asset_version_id']
 
     ready = client.post(
         '/api/v1/nodes/asset_node/outputs/state',
@@ -3750,6 +3770,10 @@ def _():
     ready_asset = client.get('/api/v1/nodes/asset_node/assets/notes')
     assert ready_asset.status_code == 200
     assert ready_asset.json()['state'] == 'ready'
+    assert ready_asset.json()['current_asset_version_id'] > stale_version_id
+    assert ready_asset.json()['lineage_mode'] == 'manual_override'
+    assert ready_asset.json()['override_kind'] == 'mark_ready'
+    assert ready_asset.json()['override_source_version_id'] == stale_version_id
 
 
 def test_marking_node_outputs_stale_also_stales_downstream_nodes(tmp_path) -> None:
