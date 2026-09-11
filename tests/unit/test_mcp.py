@@ -8,8 +8,16 @@ from pydantic import TypeAdapter, ValidationError
 
 from bulletjournal.api.app import create_app
 from bulletjournal.config import ServerConfig, mcp_enabled_from_env
-from bulletjournal.mcp.server import McpGraphOperation
+from bulletjournal.mcp.server import McpGraphOperation, _validate_area_only_resizes
+from bulletjournal.services.graph_service import GraphService
+from bulletjournal.services.project_service import ProjectService
+from bulletjournal.services.template_service import TemplateService
 from bulletjournal.storage.project_fs import init_project_root
+
+
+class _FakeEventService:
+    def publish(self, *args, **kwargs) -> None:
+        pass
 
 
 def _initialize_mcp(client: TestClient, path: str = '/mcp') -> dict[str, str]:
@@ -118,6 +126,17 @@ def test_mcp_tool_discovery_documents_closed_values_and_workflows(monkeypatch, t
     assert tools['list_templates']['inputSchema']['properties']['kind']['anyOf'][0]['enum'] == ['notebook', 'pipeline']
     assert 'graph_version' in tools['apply_graph_changes']['description']
     assert 'cancellation is asynchronous' in tools['cancel_run']['description'].lower()
+    assert 'update_node_layout' in tools['apply_graph_changes']['description']
+    source_properties = tools['get_notebook_source']['inputSchema']['properties']
+    assert source_properties['offset']['minimum'] == 0
+    assert source_properties['limit']['anyOf'][0]['maximum'] == 100
+    assert 'inclusive range' in tools['patch_notebook_source']['description'].lower()
+    assert 'full-document replacement' in tools['update_notebook_source']['description']
+    assert tools['get_execution_logs']['inputSchema']['properties']['stream']['anyOf'][0]['enum'] == [
+        'stdout',
+        'stderr',
+    ]
+    assert 'dashboard_version' in tools['update_dashboard']['description']
 
 
 def test_mcp_resource_discovery_describes_safe_context(monkeypatch, tmp_path: Path) -> None:
@@ -127,7 +146,13 @@ def test_mcp_resource_discovery_describes_safe_context(monkeypatch, tmp_path: Pa
     request = {'jsonrpc': '2.0', 'id': 1, 'method': 'resources/list', 'params': {}}
 
     with TestClient(app) as client:
-        response = client.post('/mcp', json=request, headers=_initialize_mcp(client))
+        headers = _initialize_mcp(client)
+        response = client.post('/mcp', json=request, headers=headers)
+        templates_response = client.post(
+            '/mcp',
+            json={'jsonrpc': '2.0', 'id': 2, 'method': 'resources/templates/list', 'params': {}},
+            headers=headers,
+        )
 
     assert response.status_code == 200
     resources = {resource['uri']: resource for resource in response.json()['result']['resources']}
@@ -135,13 +160,56 @@ def test_mcp_resource_discovery_describes_safe_context(monkeypatch, tmp_path: Pa
     assert graph['name'] == 'Project graph'
     assert 'before graph mutations' in graph['description']
     assert resources['bulletjournal://project/validation']['name'] == 'Project validation'
+    assert templates_response.status_code == 200
+    templates = {item['uriTemplate']: item for item in templates_response.json()['result']['resourceTemplates']}
+    assert templates['bulletjournal://nodes/{node_id}/source']['mimeType'] == 'text/x-python'
 
 
-def test_mcp_graph_operation_schema_accepts_only_supported_rest_operations() -> None:
+def test_mcp_graph_operation_schema_accepts_all_supported_graph_operations() -> None:
     adapter = TypeAdapter(McpGraphOperation)
 
     pipeline = adapter.validate_python({'type': 'add_pipeline_template', 'template_ref': 'provider/pipeline'})
 
     assert pipeline.template_ref == 'provider/pipeline'
+    area = adapter.validate_python({'type': 'add_area_node', 'node_id': 'area', 'title': 'Area'})
+    layout = adapter.validate_python({'type': 'update_node_layout', 'node_id': 'area', 'x': 100, 'y': 200})
+    rename = adapter.validate_python(
+        {'type': 'rename_node', 'node_id': 'area', 'new_node_id': 'renamed_area', 'title': 'Renamed area'}
+    )
+
+    assert area.node_id == 'area'
+    assert layout.w is None
+    assert rename.new_node_id == 'renamed_area'
     with pytest.raises(ValidationError):
-        adapter.validate_python({'type': 'add_area_node', 'node_id': 'area', 'title': 'Area'})
+        adapter.validate_python({'type': 'not_a_graph_operation'})
+
+
+def test_mcp_allows_area_only_resizes(tmp_path: Path) -> None:
+    project = init_project_root(tmp_path / 'project')
+    project_service = ProjectService(event_service=_FakeEventService(), template_service=TemplateService())
+    project_service.open_project(project.root)
+    graph_service = GraphService(project_service)
+    adapter = TypeAdapter(McpGraphOperation)
+
+    assert (
+        _validate_area_only_resizes(
+            graph_service,
+            [
+                adapter.validate_python({'type': 'add_area_node', 'node_id': 'area'}),
+                adapter.validate_python({'type': 'update_node_layout', 'node_id': 'area', 'x': 10, 'y': 20, 'w': 320}),
+            ],
+        )
+        is None
+    )
+    assert (
+        _validate_area_only_resizes(
+            graph_service,
+            [
+                adapter.validate_python({'type': 'add_notebook_node', 'node_id': 'notebook', 'title': 'Notebook'}),
+                adapter.validate_python(
+                    {'type': 'update_node_layout', 'node_id': 'notebook', 'x': 10, 'y': 20, 'w': 320}
+                ),
+            ],
+        )
+        == 'Only area blocks can be resized. Omit `w` and `h` to move another block.'
+    )

@@ -48,6 +48,28 @@ class ArtifactService:
             raise InvalidRequestError(f'Constant block `{node_id}` has no value.')
         return self.project_service.require_project().object_store.load_value(str(artifact_hash), data_type)
 
+    def get_execution_logs(self, node_id: str) -> dict[str, Any]:
+        execution_meta = self.project_service.require_project().state_db.list_orchestrator_execution_meta().get(node_id)
+        if execution_meta is None:
+            raise NotFoundError(f'No execution metadata found for node `{node_id}`.')
+        return {'node_id': node_id, 'stdout': execution_meta.get('stdout'), 'stderr': execution_meta.get('stderr')}
+
+    def get_execution_log(self, node_id: str, stream: str) -> dict[str, Any]:
+        if stream not in {'stdout', 'stderr'}:
+            raise InvalidRequestError(f'Unknown execution log stream `{stream}`. Expected `stdout` or `stderr`.')
+        project = self.project_service.require_project()
+        execution_meta = project.state_db.list_orchestrator_execution_meta().get(node_id)
+        if execution_meta is None:
+            raise NotFoundError(f'No execution metadata found for node `{node_id}`.')
+        summary = execution_meta.get(stream)
+        if summary is None:
+            raise NotFoundError(f'No `{stream}` execution log found for node `{node_id}`.')
+        run_id = execution_meta.get('run_id')
+        log_path = project.paths.execution_logs_dir / f'{run_id}_{node_id}.{stream}.log'
+        if not isinstance(run_id, str) or not run_id or not log_path.is_file():
+            raise NotFoundError(f'No `{stream}` execution log found for node `{node_id}`.')
+        return {'node_id': node_id, 'stream': stream, **summary, 'filename': log_path.name}
+
     def upload_file(
         self,
         node_id: str,

@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from bulletjournal.domain.errors import GraphValidationError, InvalidRequestError, NotFoundError, RunConflictError
+from bulletjournal.services.dashboard_service import DashboardVersionConflictError
 
 
 def tool_error(
@@ -16,6 +17,13 @@ def map_error(exc: Exception) -> dict[str, Any]:
         return tool_error('not_found', str(exc))
     if isinstance(exc, RunConflictError):
         return tool_error('run_conflict', str(exc), retryable=True)
+    if isinstance(exc, DashboardVersionConflictError):
+        return tool_error(
+            'dashboard_version_conflict',
+            'The dashboard changed after it was read.',
+            retryable=True,
+            details={'dashboard': exc.latest_dashboard},
+        )
     if isinstance(exc, GraphValidationError):
         message = str(exc)
         if message == 'Graph version conflict.':

@@ -68,7 +68,10 @@ and ranges from `0..100`.
 
 Applies a nonempty ordered batch atomically. It requires the current
 `expected_graph_version`, a nonblank idempotency `request_id`, and `operations`.
-Only these operation types are accepted; unknown fields are rejected.
+Only these operation types are accepted; unknown fields are rejected. Read the
+current `graph_version` first. `x`, `y`, `w`, and `h` are integer canvas units.
+Use a new `request_id` for each logical edit and reuse it only for an exact
+retry.
 
 | Type | Required fields | Optional fields | Notes |
 | --- | --- | --- | --- |
@@ -77,6 +80,17 @@ Only these operation types are accepted; unknown fields are rejected.
 | `add_constant_node` | `node_id`, `data_type` | `title`, layout, `value`, `value_json`, `ui` | Data type must be nonblank. Initial values follow constant-value type rules. |
 | `add_edge` | `source_node`, `source_port`, `target_node`, `target_port` | None | Ports must exist, have exactly matching types, and preserve an acyclic graph. |
 | `remove_edge` | `edge_id` | None | Missing edges are a successful no-op. Edge IDs are `{source_node}.{source_port}__{target_node}.{target_port}`. |
+| `add_organizer_node` | `node_id` | `title`, `x`, `y`, `w`, `h`, `ui` | Creates an organizer. Put initial ports in `ui.organizer_ports`. |
+| `add_area_node` | `node_id` | `title`, `x`, `y`, `w`, `h`, `ui` | Creates a visual area. |
+| `add_dashboard_node` | `node_id` | `title`, `x`, `y`, `w`, `h`, `ui` | Creates an empty dashboard block. Use `create_dashboard` when it needs sources or panels. |
+| `update_node_layout` | `node_id`, `x`, `y` | `w`, `h` | Moves a block. Only areas can be resized: include `w` and/or `h` for an area; omit both dimensions to move every other block. Multiple moves can share one atomic batch. |
+| `update_node_title` | `node_id`, `title` | None | Changes only the displayed title. |
+| `rename_node` | `node_id`, `new_node_id`, `title` | None | Changes both ID and title. The new ID and title must be nonblank. |
+| `update_organizer_ports` | `node_id`, `ports` | None | Replaces all ports. Every port is `{key, name, data_type}` with nonblank, unique `key`. Changing/removing ports can remove edges. |
+| `update_area_style` | `node_id`, `title_position`, `color`, `filled` | None | Updates area presentation. `title_position`: `top-left`, `top-center`, `top-right`, `right-center`, `bottom-right`, `bottom-center`, `bottom-left`, `left-center`. `color`: `red`, `orange`, `yellow`, `green`, `blue`, `purple`, `white`, `black`. |
+| `update_constant_node` | `node_id`, `data_type` | None | Changes a constant block's declared data type. |
+| `update_node_frozen` | `node_id`, `frozen` | None | Freezes or unfreezes a block. |
+| `delete_node` | `node_id` | None | Removes a block and connected edges, retaining a tombstone for REST/UI restoration. |
 
 Operations execute in supplied order, so a batch can create nodes before adding
 edges. A graph edit can invalidate downstream work and interrupt an affected run.
@@ -108,6 +122,51 @@ Requests cancellation for the active matching `run_id`. It returns `cancelling`
 when accepted or `not_running` when no matching run is active. Cancellation is
 asynchronous and this call is safe to retry.
 
+### Notebook source
+
+`get_notebook_source` reads UTF-8 `source_text` for an existing notebook block.
+`offset` is a zero-based physical-line offset: `0` starts at source line 1.
+Omit `limit` to return all remaining lines, or set it from `1` through `100` to
+return a page. The result includes `total_lines`, `returned_lines`, and
+`next_offset`; use `next_offset` as the following `offset`, or stop when it is
+null. An offset equal to `total_lines` returns an empty page; greater offsets
+are invalid. It rejects every other node kind.
+
+`update_notebook_source` replaces the entire notebook document. The source is
+saved even if it has parser or validation errors. The response contains the
+parsed interface; reread validation to inspect errors.
+
+`patch_notebook_source` replaces an inclusive range of existing lines without
+sending the whole document. `start_line` and `end_line` are one-based line
+numbers, so line `1` is the first source line. `replacement` replaces all lines
+from start through end, and may contain zero, one, or many lines. Use an empty
+string to delete the selected lines. Read the affected range first with
+`get_notebook_source`; its zero-based `offset` intentionally differs from this
+tool's one-based line numbers. A source update can remove incompatible edges,
+stale downstream work, and interrupt an affected run.
+
+### Dashboards
+
+`get_dashboard` returns a dashboard document and its `version`.
+`create_dashboard` creates both a dashboard block and document. Its `sources`
+are unique notebook objects `{node_id}`. Each panel requires `node_id` and
+`asset_name`, and can include `panel_id`, `visible`, `position`, `panel_height`,
+`modifier_overrides`, and `override_schema_hash`; each panel node must appear in
+`sources`.
+
+`update_dashboard` requires the exact `dashboard_version` returned by
+`get_dashboard`; omitted `title`, `sources`, and `panels` are unchanged, while
+supplied source/panel lists replace their full respective lists. On
+`dashboard_version_conflict`, reread the dashboard and submit a new desired
+update.
+
+### Execution logs
+
+`get_execution_logs(node_id)` returns the latest managed stdout/stderr
+summaries for a node. Set `stream` to exactly `stdout` or `stderr` to retrieve
+that stream's text and truncation metadata. Logs are only retained for the
+node's latest managed execution; this is not a historical run archive.
+
 ## Resources
 
 | URI | Contents |
@@ -117,6 +176,7 @@ asynchronous and this call is safe to retry.
 | `bulletjournal://project/validation` | Current graph and node validation findings. |
 | `bulletjournal://templates/{ref}/documentation` | Markdown documentation for one template. |
 | `bulletjournal://templates/{ref}/interface` | Parsed interface for one notebook template. |
+| `bulletjournal://nodes/{node_id}/source` | Complete UTF-8 source for one notebook block. |
 
 For template resource URIs, percent-encode `ref` exactly once. Resources are
 current snapshots, not subscriptions; read them again when freshness matters.
@@ -133,4 +193,5 @@ current snapshots, not subscriptions; read them again when freshness matters.
 | `run_conflict` | Retryable. Another managed run is active; wait for it or ask the user. |
 | `confirmation_required` | Inspect details and obtain a user decision before retrying with an action. |
 | `run_blocked` | Required inputs remain unavailable; inspect details and repair the project state. |
+| `dashboard_version_conflict` | Retryable. Reread the dashboard and construct a new desired update. |
 | `internal_error` | The operation could not complete. Preserve the error details for the user rather than blindly retrying a write. |

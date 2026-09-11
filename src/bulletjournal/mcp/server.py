@@ -11,11 +11,24 @@ from pydantic import Field
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from bulletjournal.api.schemas import (
+    AddAreaNodeOperation,
     AddConstantNodeOperation,
+    AddDashboardNodeOperation,
     AddEdgeOperation,
     AddNotebookNodeOperation,
+    AddOrganizerNodeOperation,
     AddPipelineTemplateOperation,
+    DashboardPanelInput,
+    DashboardSourceInput,
+    DeleteNodeOperation,
     RemoveEdgeOperation,
+    RenameNodeOperation,
+    UpdateAreaStyleOperation,
+    UpdateConstantNodeOperation,
+    UpdateNodeFrozenOperation,
+    UpdateNodeLayoutOperation,
+    UpdateNodeTitleOperation,
+    UpdateOrganizerPortsOperation,
 )
 from bulletjournal.config import ServerConfig, mcp_bearer_token_from_env
 from bulletjournal.mcp.auth import is_controller_request, is_loopback_host, validate_local_request
@@ -25,8 +38,19 @@ McpGraphOperation = Annotated[
     AddNotebookNodeOperation
     | AddPipelineTemplateOperation
     | AddConstantNodeOperation
+    | AddOrganizerNodeOperation
+    | AddAreaNodeOperation
+    | AddDashboardNodeOperation
     | AddEdgeOperation
-    | RemoveEdgeOperation,
+    | RemoveEdgeOperation
+    | UpdateNodeLayoutOperation
+    | UpdateNodeTitleOperation
+    | RenameNodeOperation
+    | UpdateConstantNodeOperation
+    | UpdateOrganizerPortsOperation
+    | UpdateAreaStyleOperation
+    | DeleteNodeOperation
+    | UpdateNodeFrozenOperation,
     Field(discriminator='type'),
 ]
 McpTemplateKind = Literal['notebook', 'pipeline']
@@ -35,6 +59,7 @@ McpRunTarget = Literal['node', 'selection', 'all_stale']
 McpRunMode = Literal['run_stale', 'run_all']
 McpRunScope = Literal['node', 'ancestors', 'descendants']
 McpRunAction = Literal['use_stale', 'run_upstream']
+McpLogStream = Literal['stdout', 'stderr']
 _READ_ONLY = ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False)
 _MUTATING = ToolAnnotations(readOnlyHint=False, destructiveHint=True, idempotentHint=False, openWorldHint=False)
 _IDEMPOTENT_MUTATING = ToolAnnotations(
@@ -151,11 +176,22 @@ def create_mcp_app(container: Any, server_config: ServerConfig):
     @server.tool(
         annotations=_IDEMPOTENT_MUTATING,
         description=(
-            'Apply graph changes using the supported operation schemas: `add_notebook_node`, '
-            '`add_pipeline_template`, `add_constant_node`, `add_edge`, and `remove_edge`. '
-            'Pipeline templates can create their complete graph in one `add_pipeline_template` operation. '
+            'Apply an atomic ordered graph-edit batch. Read `get_project_state` first and use its current '
+            '`graph_version` as `expected_graph_version`. Supported operations are: create `add_notebook_node`, '
+            '`add_constant_node`, `add_organizer_node`, `add_area_node`, or '
+            '`add_dashboard_node`; instantiate `add_pipeline_template`; connect `add_edge` or disconnect '
+            '`remove_edge`; move `update_node_layout` (x/y required); resize only an area with '
+            '`update_node_layout` (include w and/or h; omit w/h to retain size); '
+            'change a title with `update_node_title`; change an ID and title together with `rename_node`; '
+            'update `update_organizer_ports`, `update_area_style`, `update_constant_node`, or '
+            '`update_node_frozen`; and remove a block with `delete_node`. `delete_node` creates a restorable '
+            'tombstone. Pipeline templates can create their complete graph in one operation. '
             'Read `get_project_state` first and pass its `graph_version`; use a new nonblank `request_id` for '
-            'each logical mutation and reuse it only to retry that same mutation. Operations run in order.'
+            'each logical mutation and reuse it only to retry that same mutation. Operations run in order. '
+            'Organizer ports are objects with nonblank `key`, `name`, and `data_type`. Area `title_position` '
+            'is one of `top-left`, `top-center`, `top-right`, `right-center`, `bottom-right`, `bottom-center`, '
+            '`bottom-left`, or `left-center`; `color` is `red`, `orange`, `yellow`, `green`, `blue`, `purple`, '
+            '`white`, or `black`; `filled` is boolean.'
         ),
     )
     async def apply_graph_changes(
@@ -165,6 +201,9 @@ def create_mcp_app(container: Any, server_config: ServerConfig):
             return tool_error('invalid_argument', 'request_id is required.')
         if not operations:
             return tool_error('invalid_argument', 'At least one graph operation is required.')
+        resize_error = _validate_area_only_resizes(container.graph_service, operations)
+        if resize_error is not None:
+            return tool_error('invalid_argument', resize_error)
         return await invoke(
             container.graph_service.apply_operations,
             expected_graph_version,
@@ -234,6 +273,136 @@ def create_mcp_app(container: Any, server_config: ServerConfig):
     async def cancel_run(run_id: str) -> dict[str, Any]:
         return await invoke(container.run_service.cancel_run, run_id)
 
+    @server.tool(
+        annotations=_READ_ONLY,
+        description=(
+            'Read UTF-8 Python source for one notebook block. `offset` is a zero-based physical-line offset; '
+            'omit `limit` to return all remaining lines, or set it from 1 through 100. The result includes '
+            '`total_lines`, `returned_lines`, and `next_offset` for pagination. `node_id` must name an existing '
+            'notebook, not a constant, organizer, area, dashboard, or file-input block.'
+        ),
+    )
+    async def get_notebook_source(
+        node_id: str,
+        offset: Annotated[int, Field(ge=0)] = 0,
+        limit: Annotated[int | None, Field(ge=1, le=100)] = None,
+    ) -> dict[str, Any]:
+        return await invoke(container.notebook_service.get_notebook_source, node_id, offset=offset, limit=limit)
+
+    @server.tool(
+        annotations=_MUTATING,
+        description=(
+            'Replace the complete source of an existing notebook block. This is full-document replacement, not '
+            'a partial update: use `patch_notebook_source` to replace only selected lines. The source is saved '
+            'even when parsing reports validation errors; '
+            'the result returns the parsed interface, and project validation contains those errors. A valid '
+            'interface change can remove incompatible edges, stale downstream work, and interrupt affected runs.'
+        ),
+    )
+    async def update_notebook_source(node_id: str, source_text: str) -> dict[str, Any]:
+        return await invoke(container.notebook_service.update_notebook_source, node_id, source_text)
+
+    @server.tool(
+        annotations=_MUTATING,
+        description=(
+            'Replace an inclusive range of existing notebook source lines without sending the whole document. '
+            '`start_line` and `end_line` are one-based line numbers; line 1 is the first line. `replacement` '
+            'replaces every line from start through end and may contain zero, one, or many lines. Use an empty '
+            'string to delete the selected lines. Read the relevant range with `get_notebook_source` first; its '
+            'zero-based `offset` is different from these one-based line numbers. The patch reparses the notebook '
+            'and can change ports, remove incompatible edges, stale downstream work, or interrupt affected runs.'
+        ),
+    )
+    async def patch_notebook_source(
+        node_id: str,
+        start_line: Annotated[int, Field(ge=1)],
+        end_line: Annotated[int, Field(ge=1)],
+        replacement: str,
+    ) -> dict[str, Any]:
+        return await invoke(
+            container.notebook_service.patch_notebook_source,
+            node_id,
+            start_line=start_line,
+            end_line=end_line,
+            replacement=replacement,
+        )
+
+    @server.tool(
+        annotations=_READ_ONLY,
+        description=(
+            'Read the latest managed execution log for a node. Omit `stream` to get stdout/stderr summaries. '
+            'Set `stream` to exactly `stdout` or `stderr` to get that stream text and truncation metadata. '
+            'Only the latest managed execution for the node is available; logs are not a historical run archive.'
+        ),
+    )
+    async def get_execution_logs(node_id: str, stream: McpLogStream | None = None) -> dict[str, Any]:
+        if stream is None:
+            return await invoke(container.artifact_service.get_execution_logs, node_id)
+        return await invoke(container.artifact_service.get_execution_log, node_id, stream)
+
+    @server.tool(
+        annotations=_READ_ONLY,
+        description=(
+            'Read a dashboard document, including its required `version`. Read it before `update_dashboard`; '
+            'that tool requires the exact current version to prevent overwriting another edit.'
+        ),
+    )
+    async def get_dashboard(dashboard_id: str) -> dict[str, Any]:
+        return await invoke(container.dashboard_service.get_dashboard, dashboard_id)
+
+    @server.tool(
+        annotations=_MUTATING,
+        description=(
+            'Create a dashboard block and its dashboard document. `sources` is a list of unique notebook '
+            'objects `{node_id}`. Each `panels` object needs `node_id` and `asset_name`, and may set '
+            '`panel_id`, `visible`, `position`, `panel_height`, `modifier_overrides`, and '
+            '`override_schema_hash`. Every panel node must be in `sources`; positions are normalized. '
+            '`dashboard_id` is optional and otherwise derived from the title.'
+        ),
+    )
+    async def create_dashboard(
+        title: str,
+        sources: list[DashboardSourceInput],
+        panels: list[DashboardPanelInput],
+        dashboard_id: str | None = None,
+        x: int = 80,
+        y: int = 80,
+    ) -> dict[str, Any]:
+        return await invoke(
+            container.dashboard_service.create_dashboard,
+            dashboard_id=dashboard_id,
+            title=title,
+            sources=[source.model_dump(mode='python') for source in sources],
+            panels=[panel.model_dump(mode='python') for panel in panels],
+            x=x,
+            y=y,
+        )
+
+    @server.tool(
+        annotations=_MUTATING,
+        description=(
+            'Update an existing dashboard document. First call `get_dashboard`, then pass its exact `version` '
+            'as `dashboard_version`. Supply only fields to replace: `title`, complete `sources`, and/or complete '
+            '`panels`; omitted fields are unchanged. Sources and panels follow `create_dashboard` rules. On a '
+            'version conflict, reread the dashboard and construct a new desired update.'
+        ),
+    )
+    async def update_dashboard(
+        dashboard_id: str,
+        dashboard_version: int,
+        title: str | None = None,
+        sources: list[DashboardSourceInput] | None = None,
+        panels: list[DashboardPanelInput] | None = None,
+    ) -> dict[str, Any]:
+        return await invoke(
+            container.dashboard_service.patch_dashboard,
+            dashboard_id,
+            dashboard_version=dashboard_version,
+            title=title,
+            sources=None if sources is None else [source.model_dump(mode='python') for source in sources],
+            panels=None if panels is None else [panel.model_dump(mode='python') for panel in panels],
+        )
+
     @server.resource(
         'bulletjournal://project/summary',
         name='Project summary',
@@ -280,6 +449,16 @@ def create_mcp_app(container: Any, server_config: ServerConfig):
     async def template_interface(ref: str) -> dict[str, Any]:
         return await asyncio.to_thread(container.template_service.get_template, unquote(ref), include_interface=True)
 
+    @server.resource(
+        'bulletjournal://nodes/{node_id}/source',
+        name='Notebook source',
+        description='Complete UTF-8 source for one notebook block. This resource rejects non-notebook node IDs.',
+        mime_type='text/x-python',
+    )
+    async def notebook_source(node_id: str) -> str:
+        result = await asyncio.to_thread(container.notebook_service.get_notebook_source, unquote(node_id))
+        return str(result['source_text'])
+
     app = server.streamable_http_app(
         streamable_http_path='/', json_response=True, host=server_config.host, transport_security=None
     )
@@ -295,3 +474,21 @@ def create_mcp_app(container: Any, server_config: ServerConfig):
 
     app.add_middleware(BaseHTTPMiddleware, dispatch=local_mcp_auth)
     return app
+
+
+def _validate_area_only_resizes(graph_service: Any, operations: list[McpGraphOperation]) -> str | None:
+    graph = graph_service.project_service.graph()
+    node_kinds = {node.id: node.kind.value for node in graph.nodes}
+    for operation in operations:
+        payload = operation.model_dump(mode='python')
+        if payload['type'] == 'add_area_node':
+            node_kinds[payload['node_id']] = 'area'
+        elif payload['type'] == 'rename_node':
+            old_node_id = payload['node_id']
+            node_kinds[payload['new_node_id']] = node_kinds.pop(old_node_id, '')
+        elif payload['type'] == 'delete_node':
+            node_kinds.pop(payload['node_id'], None)
+        elif payload['type'] == 'update_node_layout' and (payload['w'] is not None or payload['h'] is not None):
+            if node_kinds.get(payload['node_id']) != 'area':
+                return 'Only area blocks can be resized. Omit `w` and `h` to move another block.'
+    return None

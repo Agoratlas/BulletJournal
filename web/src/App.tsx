@@ -315,6 +315,8 @@ function App() {
   const graphMutationInFlightRef = useRef<QueuedGraphMutation[]>([])
   const graphMutationProcessorRef = useRef<Promise<void> | null>(null)
   const graphMutationFlushScheduledRef = useRef(false)
+  const deferredGraphEventRef = useRef(false)
+  const deferredGraphEventVersionRef = useRef<number | null>(null)
   const lastSnapshotRefreshAtRef = useRef(0)
   const startupSearch = useMemo(() => new URLSearchParams(window.location.search), [])
   const [pathname, setPathname] = useState(() => window.location.pathname)
@@ -375,6 +377,37 @@ function App() {
       ?? serverSnapshot
       ?? snapshot
       ?? null
+  }
+
+  function inMemoryGraphVersion(): number | null {
+    // Query data is updated synchronously when a graph mutation response arrives.
+    return currentCommittedSnapshot()?.graph.meta.graph_version ?? null
+  }
+
+  function processGraphUpdatedEvent(graphVersion: number | null) {
+    if (graphMutationInFlightRef.current.length) {
+      // The response may already contain this event's graph version.
+      deferredGraphEventRef.current = true
+      if (graphVersion !== null) {
+        deferredGraphEventVersionRef.current = Math.max(deferredGraphEventVersionRef.current ?? graphVersion, graphVersion)
+      }
+      return
+    }
+    const currentVersion = inMemoryGraphVersion()
+    if (graphVersion !== null && currentVersion !== null && graphVersion <= currentVersion) {
+      return
+    }
+    void scheduleSnapshotRefresh()
+  }
+
+  function processDeferredGraphUpdatedEvent() {
+    if (!deferredGraphEventRef.current) {
+      return
+    }
+    const graphVersion = deferredGraphEventVersionRef.current
+    deferredGraphEventRef.current = false
+    deferredGraphEventVersionRef.current = null
+    processGraphUpdatedEvent(graphVersion)
   }
 
   function allPendingGraphMutations(): QueuedGraphMutation[] {
@@ -545,6 +578,8 @@ function App() {
       snapshotRefreshTimeoutRef.current = null
     }
     snapshotRefreshQueuedRef.current = false
+    deferredGraphEventRef.current = false
+    deferredGraphEventVersionRef.current = null
   }, [projectId])
 
   useEffect(() => {
@@ -804,6 +839,11 @@ function App() {
         if (shouldRefreshSnapshotForDashboardEvent(eventGraphVersion, currentGraphVersion)) {
           void scheduleSnapshotRefresh()
         }
+        return
+      }
+
+      if (eventType === 'graph.updated') {
+        processGraphUpdatedEvent(eventGraphVersion)
         return
       }
 
@@ -2555,6 +2595,7 @@ function App() {
           setSnapshotData(queryClient, committedSnapshot, (current) => applyGraphPatchResponse(current, response))
           graphMutationInFlightRef.current = []
           syncGraphMutationOptimisticState(currentCommittedSnapshot(committedSnapshot))
+          processDeferredGraphUpdatedEvent()
           const historyEntries = batch
             .map((mutation) => {
               if (!mutation.history) {
@@ -2586,6 +2627,7 @@ function App() {
             reportClientError('graph-update', 'graph_update_failed', message)
           }
           await refreshSnapshot()
+          processDeferredGraphUpdatedEvent()
           ;[...batch, ...pending].forEach((mutation) => mutation.resolve(false))
           return
         }

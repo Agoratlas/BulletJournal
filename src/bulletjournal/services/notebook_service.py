@@ -9,6 +9,7 @@ from bulletjournal.domain.models import AssetDeclaration, NotebookInterface, Par
 from bulletjournal.parser import parse_notebook_contract
 from bulletjournal.parser.validation import build_issue
 from bulletjournal.services.notebook_freshness import lineage_metadata_for_notebook, notebook_uses_execution_head
+from bulletjournal.storage.atomic_write import atomic_write_text
 
 
 class NotebookService:
@@ -92,6 +93,86 @@ class NotebookService:
             payload={'node_id': node_id, 'issues': [issue.to_dict() for issue in contract.issues]},
         )
         return interface_payload
+
+    def get_notebook_source(
+        self,
+        node_id: str,
+        *,
+        offset: int = 0,
+        limit: int | None = None,
+    ) -> dict[str, Any]:
+        project = self.project_service.require_project()
+        node = self.project_service.get_node(node_id)
+        if node.kind != NodeKind.NOTEBOOK:
+            raise InvalidRequestError(f'Node `{node_id}` is not a notebook.')
+        if not isinstance(offset, int) or isinstance(offset, bool) or offset < 0:
+            raise InvalidRequestError('offset must be a non-negative integer.')
+        if limit is not None and (not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= 100):
+            raise InvalidRequestError('limit must be between 1 and 100.')
+        notebook_path = project.paths.notebook_path(node_id)
+        if not notebook_path.exists():
+            raise FileNotFoundError(f'Notebook file not found: {notebook_path}')
+        lines = notebook_path.read_text(encoding='utf-8').splitlines(keepends=True)
+        total_lines = len(lines)
+        if offset > total_lines:
+            raise InvalidRequestError('offset is beyond the end of the notebook source.')
+        selected_lines = lines[offset:] if limit is None else lines[offset : offset + limit]
+        returned_lines = len(selected_lines)
+        next_offset = offset + returned_lines if offset + returned_lines < total_lines else None
+        return {
+            'node_id': node_id,
+            'source_text': ''.join(selected_lines),
+            'offset': offset,
+            'limit': limit,
+            'total_lines': total_lines,
+            'returned_lines': returned_lines,
+            'next_offset': next_offset,
+        }
+
+    def update_notebook_source(self, node_id: str, source_text: str) -> dict[str, Any]:
+        project = self.project_service.require_project()
+        node = self.project_service.get_node(node_id)
+        if node.kind != NodeKind.NOTEBOOK:
+            raise InvalidRequestError(f'Node `{node_id}` is not a notebook.')
+        if not isinstance(source_text, str):
+            raise InvalidRequestError('source_text must be a string.')
+        notebook_path = project.paths.notebook_path(node_id)
+        if not notebook_path.exists():
+            raise FileNotFoundError(f'Notebook file not found: {notebook_path}')
+        atomic_write_text(notebook_path, source_text)
+        interface = self.reparse_notebook(node_id)
+        return {'node_id': node_id, 'interface': interface}
+
+    def patch_notebook_source(
+        self,
+        node_id: str,
+        *,
+        start_line: int,
+        end_line: int,
+        replacement: str,
+    ) -> dict[str, Any]:
+        if not isinstance(start_line, int) or isinstance(start_line, bool) or start_line < 1:
+            raise InvalidRequestError('start_line must be a one-based positive integer.')
+        if not isinstance(end_line, int) or isinstance(end_line, bool) or end_line < start_line:
+            raise InvalidRequestError('end_line must be a one-based integer greater than or equal to start_line.')
+        if not isinstance(replacement, str):
+            raise InvalidRequestError('replacement must be a string.')
+        source = self.get_notebook_source(node_id)['source_text']
+        lines = source.splitlines(keepends=True)
+        total_lines = len(lines)
+        if not total_lines:
+            raise InvalidRequestError('Cannot patch an empty notebook source.')
+        if end_line > total_lines:
+            raise InvalidRequestError(f'end_line must not exceed the notebook source line count ({total_lines}).')
+        updated_source = ''.join([*lines[: start_line - 1], replacement, *lines[end_line:]])
+        result = self.update_notebook_source(node_id, updated_source)
+        return {
+            **result,
+            'start_line': start_line,
+            'end_line': end_line,
+            'replacement': replacement,
+            'line_count': len(updated_source.splitlines(keepends=True)),
+        }
 
     def create_notebook_file(self, node_id: str, source: str) -> Path:
         project = self.project_service.require_project()

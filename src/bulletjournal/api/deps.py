@@ -12,6 +12,7 @@ from bulletjournal.services import (
     RunService,
     TemplateService,
 )
+from bulletjournal.services.notebook_service import NotebookService
 
 
 class ServiceContainer:
@@ -25,6 +26,7 @@ class ServiceContainer:
         self.dashboard_service = DashboardService(self.project_service)
         self.project_service.dashboard_service = self.dashboard_service
         self.artifact_service = ArtifactService(self.project_service)
+        self.notebook_service = NotebookService(self.project_service)
         self.run_service = RunService(self.project_service)
         self.project_service.run_service = self.run_service
         self.checkpoint_service = CheckpointService(self.project_service)
