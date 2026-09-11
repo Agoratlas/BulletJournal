@@ -33,6 +33,7 @@ from bulletjournal.api.schemas import (
 from bulletjournal.config import ServerConfig, mcp_bearer_token_from_env
 from bulletjournal.mcp.auth import is_controller_request, is_loopback_host, validate_local_request
 from bulletjournal.mcp.errors import map_error, tool_error
+from bulletjournal.services.graph_service import GRID_SIZE
 
 McpGraphOperation = Annotated[
     AddNotebookNodeOperation
@@ -209,6 +210,41 @@ def create_mcp_app(container: Any, server_config: ServerConfig):
             expected_graph_version,
             [operation.model_dump(mode='python') for operation in operations],
             request_id=request_id,
+        )
+
+    @server.tool(
+        annotations=_IDEMPOTENT_MUTATING,
+        description=(
+            'Move every node entirely within the inclusive rectangle `x_min`, `x_max`, `y_min`, `y_max` by the '
+            'relative offset `dx`, `dy`. Node bounds include x, y, width, and height; intersecting nodes are not '
+            'selected. The offsets must be aligned to the 20px grid. Read '
+            '`get_project_state` first and pass its current `graph_version`; use a new nonblank `request_id` for '
+            'each logical mutation and reuse it only to retry that same mutation.'
+        ),
+    )
+    async def move_nodes_in_rectangle(
+        expected_graph_version: int,
+        request_id: str,
+        x_min: int,
+        x_max: int,
+        y_min: int,
+        y_max: int,
+        dx: int,
+        dy: int,
+    ) -> dict[str, Any]:
+        if not request_id.strip():
+            return tool_error('invalid_argument', 'request_id is required.')
+        return await invoke(
+            _move_nodes_in_rectangle,
+            container.graph_service,
+            expected_graph_version=expected_graph_version,
+            request_id=request_id,
+            x_min=x_min,
+            x_max=x_max,
+            y_min=y_min,
+            y_max=y_max,
+            dx=dx,
+            dy=dy,
         )
 
     @server.tool(
@@ -492,3 +528,31 @@ def _validate_area_only_resizes(graph_service: Any, operations: list[McpGraphOpe
             if node_kinds.get(payload['node_id']) != 'area':
                 return 'Only area blocks can be resized. Omit `w` and `h` to move another block.'
     return None
+
+
+def _move_nodes_in_rectangle(
+    graph_service: Any,
+    *,
+    expected_graph_version: int,
+    request_id: str,
+    x_min: int,
+    x_max: int,
+    y_min: int,
+    y_max: int,
+    dx: int,
+    dy: int,
+) -> dict[str, Any]:
+    values = {'dx': dx, 'dy': dy}
+    unaligned = [name for name, value in values.items() if value % GRID_SIZE]
+    if unaligned:
+        raise ValueError(f'{", ".join(unaligned)} must be aligned to the {GRID_SIZE}px grid.')
+    if x_min > x_max or y_min > y_max:
+        raise ValueError('Rectangle minimum bounds must not exceed maximum bounds.')
+    operations = [
+        {'type': 'update_node_layout', 'node_id': entry.node_id, 'x': entry.x + dx, 'y': entry.y + dy}
+        for entry in graph_service.project_service.graph().layout
+        if x_min <= entry.x and entry.x + entry.w <= x_max and y_min <= entry.y and entry.y + entry.h <= y_max
+    ]
+    if not operations:
+        return graph_service.get_graph()
+    return graph_service.apply_operations(expected_graph_version, operations, request_id=request_id)

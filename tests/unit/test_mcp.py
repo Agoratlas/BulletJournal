@@ -8,7 +8,7 @@ from pydantic import TypeAdapter, ValidationError
 
 from bulletjournal.api.app import create_app
 from bulletjournal.config import ServerConfig, mcp_enabled_from_env
-from bulletjournal.mcp.server import McpGraphOperation, _validate_area_only_resizes
+from bulletjournal.mcp.server import McpGraphOperation, _move_nodes_in_rectangle, _validate_area_only_resizes
 from bulletjournal.services.graph_service import GraphService
 from bulletjournal.services.project_service import ProjectService
 from bulletjournal.services.template_service import TemplateService
@@ -127,6 +127,8 @@ def test_mcp_tool_discovery_documents_closed_values_and_workflows(monkeypatch, t
     assert 'graph_version' in tools['apply_graph_changes']['description']
     assert 'cancellation is asynchronous' in tools['cancel_run']['description'].lower()
     assert 'update_node_layout' in tools['apply_graph_changes']['description']
+    assert 'move_nodes_in_rectangle' in tools
+    assert '20' in tools['move_nodes_in_rectangle']['description']
     source_properties = tools['get_notebook_source']['inputSchema']['properties']
     assert source_properties['offset']['minimum'] == 0
     assert source_properties['limit']['anyOf'][0]['maximum'] == 100
@@ -213,3 +215,35 @@ def test_mcp_allows_area_only_resizes(tmp_path: Path) -> None:
         )
         == 'Only area blocks can be resized. Omit `w` and `h` to move another block.'
     )
+
+
+def test_mcp_moves_only_nodes_entirely_within_rectangle(tmp_path: Path) -> None:
+    project = init_project_root(tmp_path / 'project')
+    project_service = ProjectService(event_service=_FakeEventService(), template_service=TemplateService())
+    project_service.open_project(project.root)
+    graph_service = GraphService(project_service)
+    graph_service.apply_operations(
+        project_service.graph().meta['graph_version'],
+        [
+            {'type': 'add_notebook_node', 'node_id': 'inside', 'title': 'Inside', 'x': 20, 'y': 40, 'w': 100, 'h': 80},
+            {'type': 'add_notebook_node', 'node_id': 'edge', 'title': 'Edge', 'x': 140, 'y': 40, 'w': 100, 'h': 80},
+        ],
+    )
+
+    result = _move_nodes_in_rectangle(
+        graph_service,
+        expected_graph_version=project_service.graph().meta['graph_version'],
+        request_id='move-inside',
+        x_min=20,
+        x_max=120,
+        y_min=40,
+        y_max=120,
+        dx=20,
+        dy=40,
+    )
+
+    layout = {entry['node_id']: entry for entry in result['graph']['layout']}
+    assert layout['inside']['x'] == 40
+    assert layout['inside']['y'] == 80
+    assert layout['edge']['x'] == 140
+    assert layout['edge']['y'] == 40

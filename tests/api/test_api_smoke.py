@@ -1550,6 +1550,41 @@ def test_graph_layout_batch_patch_persists_all_node_positions(tmp_path) -> None:
     assert layout_by_node_id['second']['y'] == 460
 
 
+def test_graph_layout_patch_rejects_values_not_aligned_to_grid(tmp_path) -> None:
+    project_root = init_project_root(tmp_path / 'project').root
+    client = TestClient(create_app(project_path=project_root))
+    graph_version = client.get('/api/v1/graph').json()['meta']['graph_version']
+    created = client.patch(
+        '/api/v1/graph',
+        json={
+            'graph_version': graph_version,
+            'operations': [
+                {'type': 'add_area_node', 'node_id': 'area', 'title': 'Area', 'x': 20, 'y': 40, 'w': 480, 'h': 280}
+            ],
+        },
+    )
+
+    moved = client.patch(
+        '/api/v1/graph',
+        json={
+            'graph_version': created.json()['graph']['meta']['graph_version'],
+            'operations': [{'type': 'update_node_layout', 'node_id': 'area', 'x': 25, 'y': 40}],
+        },
+    )
+    resized = client.patch(
+        '/api/v1/graph',
+        json={
+            'graph_version': created.json()['graph']['meta']['graph_version'],
+            'operations': [{'type': 'update_node_layout', 'node_id': 'area', 'x': 20, 'y': 40, 'w': 485}],
+        },
+    )
+
+    assert moved.status_code == 409
+    assert resized.status_code == 409
+    assert '20' in moved.json()['detail']
+    assert '20' in resized.json()['detail']
+
+
 def test_warning_notice_can_be_dismissed_via_api(tmp_path) -> None:
     project_root = init_project_root(tmp_path / 'project').root
     app = create_app(project_path=project_root)

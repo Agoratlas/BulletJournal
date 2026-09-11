@@ -40,6 +40,8 @@ from bulletjournal.storage.atomic_write import atomic_write_text
 from bulletjournal.storage.graph_store import GraphStore
 from bulletjournal.utils import json_dumps, utc_now_iso
 
+GRID_SIZE = 20
+
 
 @dataclass(slots=True)
 class _InlineNotebookSource:
@@ -1033,6 +1035,12 @@ class GraphService:
             if entry.node_id == node_id:
                 width = entry.w if operation.get('w') is None else int(operation['w'])
                 height = entry.h if operation.get('h') is None else int(operation['h'])
+                self._validate_layout_grid_alignment(
+                    x=int(operation.get('x', entry.x)),
+                    y=int(operation.get('y', entry.y)),
+                    w=width,
+                    h=height,
+                )
                 graph.layout[index] = LayoutEntry(
                     node_id=node_id,
                     x=int(operation.get('x', entry.x)),
@@ -1497,6 +1505,15 @@ class GraphService:
             w=int(operation.get('w', 320)),
             h=int(operation.get('h', 220)),
         )
+
+    @staticmethod
+    def _validate_layout_grid_alignment(*, x: int, y: int, w: int, h: int) -> None:
+        values = {'x': x, 'y': y, 'w': w, 'h': h}
+        unaligned = [name for name, value in values.items() if value % GRID_SIZE]
+        if unaligned:
+            raise GraphValidationError(
+                f'Layout {", ".join(unaligned)} values must be aligned to the {GRID_SIZE}px grid.'
+            )
 
 
 def _port_data_type(ports: list[dict[str, Any]], name: str) -> str | None:
