@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import math
 from typing import Annotated, Any, Literal
 from urllib.parse import unquote
 
@@ -156,6 +157,18 @@ def create_mcp_app(container: Any, server_config: ServerConfig):
             node_ids=node_ids,
             run_history_limit=run_history_limit,
         )
+
+    @server.tool(
+        annotations=_READ_ONLY,
+        description=(
+            'Analyze the current graph layout for potential improvements. Returns up to `limit` longest edges, '
+            'edges whose source is to the right of its target, and pairs of overlapping non-area nodes. Edge '
+            'length is the Euclidean distance between node centers; touching node boundaries do not count as an '
+            'overlap. Results are suggestions only and do not modify the graph.'
+        ),
+    )
+    async def layout_helper(limit: Annotated[int, Field(ge=1, le=100)] = 10) -> dict[str, Any]:
+        return await invoke(_layout_helper, container.graph_service, limit=limit)
 
     @server.tool(
         annotations=_READ_ONLY,
@@ -528,6 +541,64 @@ def _validate_area_only_resizes(graph_service: Any, operations: list[McpGraphOpe
             if node_kinds.get(payload['node_id']) != 'area':
                 return 'Only area blocks can be resized. Omit `w` and `h` to move another block.'
     return None
+
+
+def _layout_helper(graph_service: Any, *, limit: int) -> dict[str, list[dict[str, Any]]]:
+    graph = graph_service.project_service.graph()
+    layouts = {entry.node_id: entry for entry in graph.layout}
+    edge_details: list[dict[str, Any]] = []
+    right_to_left_edges: list[dict[str, Any]] = []
+    for edge in graph.edges:
+        source = layouts.get(edge.source_node)
+        target = layouts.get(edge.target_node)
+        if source is None or target is None:
+            continue
+        source_center_x = source.x + source.w / 2
+        source_center_y = source.y + source.h / 2
+        target_center_x = target.x + target.w / 2
+        target_center_y = target.y + target.h / 2
+        detail = {
+            'edge_id': edge.id,
+            'source_node': edge.source_node,
+            'target_node': edge.target_node,
+            'length': math.hypot(target_center_x - source_center_x, target_center_y - source_center_y),
+        }
+        edge_details.append(detail)
+        if source_center_x > target_center_x:
+            right_to_left_edges.append(
+                {
+                    'edge_id': edge.id,
+                    'source_node': edge.source_node,
+                    'target_node': edge.target_node,
+                    'horizontal_distance': source_center_x - target_center_x,
+                }
+            )
+    node_kinds = {node.id: node.kind.value for node in graph.nodes}
+    non_area_layouts = sorted(
+        (entry for entry in graph.layout if node_kinds.get(entry.node_id) != 'area'), key=lambda entry: entry.node_id
+    )
+    overlaps = [
+        {'node_ids': [first.node_id, second.node_id]}
+        for index, first in enumerate(non_area_layouts)
+        for second in non_area_layouts[index + 1 :]
+        if _layouts_overlap(first, second)
+    ]
+    return {
+        'longest_edges': sorted(edge_details, key=lambda edge: (-edge['length'], edge['edge_id']))[:limit],
+        'right_to_left_edges': sorted(
+            right_to_left_edges, key=lambda edge: (-edge['horizontal_distance'], edge['edge_id'])
+        )[:limit],
+        'overlapping_nodes': overlaps[:limit],
+    }
+
+
+def _layouts_overlap(first: Any, second: Any) -> bool:
+    return (
+        first.x < second.x + second.w
+        and second.x < first.x + first.w
+        and first.y < second.y + second.h
+        and second.y < first.y + first.h
+    )
 
 
 def _move_nodes_in_rectangle(

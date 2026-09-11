@@ -8,7 +8,13 @@ from pydantic import TypeAdapter, ValidationError
 
 from bulletjournal.api.app import create_app
 from bulletjournal.config import ServerConfig, mcp_enabled_from_env
-from bulletjournal.mcp.server import McpGraphOperation, _move_nodes_in_rectangle, _validate_area_only_resizes
+from bulletjournal.domain.models import Edge
+from bulletjournal.mcp.server import (
+    McpGraphOperation,
+    _layout_helper,
+    _move_nodes_in_rectangle,
+    _validate_area_only_resizes,
+)
 from bulletjournal.services.graph_service import GraphService
 from bulletjournal.services.project_service import ProjectService
 from bulletjournal.services.template_service import TemplateService
@@ -129,6 +135,7 @@ def test_mcp_tool_discovery_documents_closed_values_and_workflows(monkeypatch, t
     assert 'update_node_layout' in tools['apply_graph_changes']['description']
     assert 'move_nodes_in_rectangle' in tools
     assert '20' in tools['move_nodes_in_rectangle']['description']
+    assert 'layout_helper' in tools
     source_properties = tools['get_notebook_source']['inputSchema']['properties']
     assert source_properties['offset']['minimum'] == 0
     assert source_properties['limit']['anyOf'][0]['maximum'] == 100
@@ -247,3 +254,54 @@ def test_mcp_moves_only_nodes_entirely_within_rectangle(tmp_path: Path) -> None:
     assert layout['inside']['y'] == 80
     assert layout['edge']['x'] == 140
     assert layout['edge']['y'] == 40
+
+
+def test_layout_helper_reports_long_edges_backwards_edges_and_non_area_overlaps(tmp_path: Path) -> None:
+    project = init_project_root(tmp_path / 'project')
+    project_service = ProjectService(event_service=_FakeEventService(), template_service=TemplateService())
+    project_service.open_project(project.root)
+    graph_service = GraphService(project_service)
+    graph_service.apply_operations(
+        project_service.graph().meta['graph_version'],
+        [
+            {'type': 'add_notebook_node', 'node_id': 'left', 'title': 'Left', 'x': 0, 'y': 0, 'w': 100, 'h': 100},
+            {'type': 'add_notebook_node', 'node_id': 'right', 'title': 'Right', 'x': 200, 'y': 0, 'w': 100, 'h': 100},
+            {
+                'type': 'add_constant_node',
+                'node_id': 'overlap',
+                'title': 'Overlap',
+                'x': 40,
+                'y': 40,
+                'w': 100,
+                'h': 100,
+                'data_type': 'int',
+            },
+            {'type': 'add_area_node', 'node_id': 'area', 'title': 'Area', 'x': 0, 'y': 0, 'w': 400, 'h': 200},
+        ],
+    )
+    graph = project_service.graph()
+    graph.edges.append(
+        Edge(
+            id='right:output->left:input',
+            source_node='right',
+            source_port='output',
+            target_node='left',
+            target_port='input',
+        )
+    )
+    project_service.write_graph(graph, increment_version=False)
+
+    result = _layout_helper(graph_service, limit=1)
+
+    assert result['longest_edges'] == [
+        {'edge_id': 'right:output->left:input', 'source_node': 'right', 'target_node': 'left', 'length': 200.0}
+    ]
+    assert result['right_to_left_edges'] == [
+        {
+            'edge_id': 'right:output->left:input',
+            'source_node': 'right',
+            'target_node': 'left',
+            'horizontal_distance': 200,
+        }
+    ]
+    assert result['overlapping_nodes'] == [{'node_ids': ['left', 'overlap']}]
