@@ -3,7 +3,7 @@ import type { EdgeRecord, GraphPatchOperation, LayoutRecord, NodeRecord, NoticeR
 export type PalettePreviewBlock = {
   key: string
   title: string
-  kind: 'notebook' | 'constant' | 'file_input' | 'organizer' | 'area' | 'dashboard'
+  kind: 'notebook' | 'constant' | 'organizer' | 'area' | 'dashboard'
   x: number
   y: number
   width: number

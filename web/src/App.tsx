@@ -2,18 +2,18 @@ import { Suspense, lazy, useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import type { Connection, EdgeChange, Node } from 'reactflow'
 
-import { appBasePath, appUrl, cancelRun, clearConstantValue, createCheckpoint, currentProject, dashboardUrl, dismissNotice, downloadNotebookSource, getConstantValue, getDashboard, getSnapshot, listNodeAssets, listSessions, notebookAssetsUrl, notebookDownloadUrl, patchDashboard, patchGraph, redoGraphTombstone, restoreCheckpoint, restoreGraphTombstone, runAll, runNode, runSelection, setArtifactState, setConstantValue, setNodeOutputsState, stopSession, uploadConstantFile, uploadFile } from './lib/api'
+import { appBasePath, appUrl, cancelRun, clearConstantValue, createCheckpoint, currentProject, dashboardUrl, dismissNotice, downloadNotebookSource, getConstantValue, getDashboard, getSnapshot, listNodeAssets, listSessions, notebookAssetsUrl, notebookDownloadUrl, patchDashboard, patchGraph, redoGraphTombstone, restoreCheckpoint, restoreGraphTombstone, runAll, runNode, runSelection, setArtifactState, setConstantValue, setNodeOutputsState, stopSession, uploadConstantFile } from './lib/api'
 import { CONSTANT_NODE_HEIGHT, CONSTANT_NODE_PORT_CENTER_OFFSET, CONSTANT_NODE_WIDTH, GRID_SIZE, PORT_ROW_HEIGHT, STANDARD_NODE_PORT_CENTER_OFFSET, activeRunNodeId, artifactFor, artifactsForDisplay, currentRun, formatTimestamp, globalArtifactCounts, inputState, inputsForNode, outputsForNode, queuedRunNodeIds, templateByRef } from './lib/helpers'
 import { areaSettings, type AreaColorKey, type AreaTitlePosition } from './lib/area'
 import { useDocumentMetadata } from './lib/documentMetadata'
 import type { ArtifactRecord, DashboardRecord, GraphPatchOperation, LayoutRecord, NodeRecord, ProjectSnapshot, SessionRecord, TemplateRecord } from './lib/types'
 import type { AppNotice, ClipboardGraph, ClipboardNodeRecord, ConstantValueType, DataFrameUploadFormat, GraphHistoryEntry, GraphMutationPlan, NodeActionItem, OptimisticGraphState, PaletteEntry, PalettePreviewBlock, PortActionMenuState } from './appTypes'
-import { applyGraphPatchResponse, applyOptimisticDashboardSources, applyOptimisticGraphOperations, areaAddOperationForNode, artifactTargetForPort, blockCreateMode, clampContextMenuPosition, cloneSnapshot, constantAddOperationForNode, copiedTitle, createClientNotice, dashboardAddOperationForNode, edgeIdForPorts, edgeIdsForPort, editorSessionDetails, expandMutationPlan, fileInputAddOperationForNode, formatMarkdownCode, formatRunBlockedMessage, formatRunFailureMessage, freezeBlockMessage, frozenBlockBlockersForDelete, frozenBlockBlockersForRemovedEdges, frozenBlockBlockersForStaleRoots, isEditableTarget, isEditorOpenConflict, isFreezeConflict, isManagedRunFailure, normalizeNodeId, notebookAddOperationForNode, organizerAddOperationForNode, pipelineTemplateNodeRecords, pipelineTopLeftForCenter, SNAPSHOT_REFRESH_EVENTS, SNAPSHOT_REFRESH_THROTTLE_MS, snapToGrid, topologicallyOrderNodeIds, uniqueCopiedNodeId, upstreamNodeIds } from './lib/appHelpers'
+import { applyGraphPatchResponse, applyOptimisticDashboardSources, applyOptimisticGraphOperations, areaAddOperationForNode, artifactTargetForPort, blockCreateMode, clampContextMenuPosition, cloneSnapshot, constantAddOperationForNode, copiedTitle, createClientNotice, dashboardAddOperationForNode, edgeIdForPorts, edgeIdsForPort, editorSessionDetails, expandMutationPlan, formatMarkdownCode, formatRunBlockedMessage, formatRunFailureMessage, freezeBlockMessage, frozenBlockBlockersForDelete, frozenBlockBlockersForRemovedEdges, frozenBlockBlockersForStaleRoots, isEditableTarget, isEditorOpenConflict, isFreezeConflict, isManagedRunFailure, normalizeNodeId, notebookAddOperationForNode, organizerAddOperationForNode, pipelineTemplateNodeRecords, pipelineTopLeftForCenter, SNAPSHOT_REFRESH_EVENTS, SNAPSHOT_REFRESH_THROTTLE_MS, snapToGrid, topologicallyOrderNodeIds, uniqueCopiedNodeId, upstreamNodeIds } from './lib/appHelpers'
 import { ArtifactCard } from './components/ArtifactCard'
 import { ArtifactCounts } from './components/ArtifactCounts'
 import { BlockPalette } from './components/BlockPalette'
 import { ActionButtons } from './components/ActionButtons'
-import { ConfirmDialog, CreateFileDialog, CreateNotebookDialog, CreateOrganizerPortDialog, CreatePipelineDialog, EditAreaDialog, EditConstantDialog, EditOrganizerDialog, Modal } from './components/Dialogs'
+import { ConfirmDialog, CreateNotebookDialog, CreateOrganizerPortDialog, CreatePipelineDialog, EditAreaDialog, EditConstantDialog, EditOrganizerDialog, Modal } from './components/Dialogs'
 import { GraphCanvas } from './components/GraphCanvas'
 import { Info, Palette, Play, Plus, Redo, Stop, Undo } from './components/Icons'
 import { NodeInspector } from './components/NodeInspector'
@@ -60,13 +60,6 @@ type ConstantNodeEditState = {
   dataType: ConstantValueType
   initialJsonValue: string
   initialJsonTooLarge: boolean
-  frozen: boolean
-}
-
-type FileNodeEditState = {
-  nodeId: string
-  title: string
-  artifactName: string
   frozen: boolean
 }
 
@@ -279,7 +272,6 @@ function App() {
   const [pendingOrganizerConnection, setPendingOrganizerConnection] = useState<PendingOrganizerConnection | null>(null)
   const [pendingAreaCreation, setPendingAreaCreation] = useState<PendingAreaCreation | null>(null)
   const [constantNodeEdit, setConstantNodeEdit] = useState<ConstantNodeEditState | null>(null)
-  const [fileNodeEdit, setFileNodeEdit] = useState<FileNodeEditState | null>(null)
   const [organizerNodeEdit, setOrganizerNodeEdit] = useState<OrganizerNodeEditState | null>(null)
   const [areaNodeEdit, setAreaNodeEdit] = useState<AreaNodeEditState | null>(null)
   const [nodeActionMenu, setNodeActionMenu] = useState<NodeActionMenuState | null>(null)
@@ -1553,17 +1545,6 @@ function App() {
       })
     }
 
-    if (node.kind === 'file_input') {
-      actions.push({
-        key: 'edit-file-input',
-        label: 'Edit block',
-        onClick: () => {
-          dismissMenu()
-          openFileNodeEdit(node.id)
-        },
-      })
-    }
-
     if (node.kind === 'organizer') {
       actions.push({
         key: 'edit-organizer',
@@ -2191,7 +2172,6 @@ function App() {
       switch (operation.type) {
         case 'add_notebook_node':
         case 'add_constant_node':
-        case 'add_file_input_node':
         case 'add_organizer_node':
         case 'add_area_node':
           undoOperations.push({ type: 'delete_node', node_id: operation.node_id })
@@ -2369,7 +2349,7 @@ function App() {
       if (node.kind === 'dashboard') {
         return dashboardAddOperationForNode(node, layout, node.id, node.title)
       }
-      return fileInputAddOperationForNode(node, layout, node.id, node.title)
+      throw new Error(`Unsupported node kind: ${node.kind}`)
     })
     const restoredEdges = liveSnapshot.graph.edges.filter(
       (edge) => deletedNodeIdSet.has(edge.source_node) || deletedNodeIdSet.has(edge.target_node),
@@ -3927,23 +3907,6 @@ function App() {
     await mutateGraph(redo.operations, { history: liveSnapshot ? simpleHistoryEntryForPlan(liveSnapshot, redo) : null })
   }
 
-  async function handleUploadFile(nodeId: string, file: File) {
-    if (!projectId) {
-      return
-    }
-    try {
-      await uploadFile(nodeId, file)
-      await refreshSnapshot()
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Upload failed.'
-      if (isFreezeConflict(message)) {
-        reportClientWarning(`upload-frozen:${nodeId}`, 'frozen_block', message, { nodeId })
-      } else {
-        reportClientError(`upload:${nodeId}`, 'upload_failed', message, { nodeId })
-      }
-    }
-  }
-
   async function handleCreateCheckpoint() {
     if (!projectId) {
       return
@@ -4072,20 +4035,6 @@ function App() {
 
   function handleNodesDelete(nodes: Node[]) {
     requestDeleteSelection(nodes.map((node) => node.id), [])
-  }
-
-  function openFileNodeEdit(nodeId: string) {
-    const node = liveSnapshot?.graph.nodes.find((entry) => entry.id === nodeId)
-    if (!node || node.kind !== 'file_input') {
-      return
-    }
-    selectSingleNode(nodeId)
-    setFileNodeEdit({
-      nodeId,
-      title: node.title,
-      artifactName: node.ui?.artifact_name ?? 'file',
-      frozen: Boolean(node.ui?.frozen),
-    })
   }
 
   function openConstantNodeEdit(nodeId: string) {
@@ -4277,7 +4226,7 @@ function App() {
       } else if (item.node.kind === 'dashboard') {
         nodeOperations.push(dashboardAddOperationForNode(item.node, nextLayout, nextNodeId, nextTitle))
       } else {
-        nodeOperations.push(fileInputAddOperationForNode(item.node, nextLayout, nextNodeId, nextTitle))
+        throw new Error(`Unsupported node kind: ${item.node.kind}`)
       }
     }
 
@@ -4633,7 +4582,6 @@ function App() {
                   setPortActionMenu({ nodeId, portName, side, x: clamped.x, y: clamped.y })
                 }}
               onEditConstantNode={openConstantNodeEdit}
-              onEditFileNode={openFileNodeEdit}
               onEditOrganizerNode={openOrganizerNodeEdit}
               onEditAreaNode={openAreaNodeEdit}
               activeEditorNodeIds={activeEditorNodeIds}
@@ -4692,7 +4640,6 @@ function App() {
                 serverNowClientAnchorMs={clientNowAnchorMs}
                 nodeActions={nodeActionsForNode(selectedNode)}
                 assetCounts={notebookAssetCountsByNodeId[selectedNode.id] ?? { pending: 0, stale: 0, ready: 0 }}
-                onUploadFile={handleUploadFile}
                 existingNodeIds={existingNodeIds.filter((nodeId) => nodeId !== selectedNode.id)}
                 onRenameNode={handleRenameNode}
                 nodeIdEditDisabledReason={selectedNode.kind === 'notebook'
@@ -4975,33 +4922,6 @@ function App() {
             }
             await refreshSnapshot()
             setConstantNodeEdit(null)
-          }}
-        />
-      ) : null}
-
-      {fileNodeEdit ? (
-        <CreateFileDialog
-          mode="edit"
-          suggestedTitle={fileNodeEdit.title}
-          existingIds={existingNodeIds.filter((nodeId) => nodeId !== fileNodeEdit.nodeId)}
-          fixedNodeId={fileNodeEdit.nodeId}
-          initialArtifactName={fileNodeEdit.artifactName}
-          uploadDisabledMessage={fileNodeEdit.frozen ? 'This block is frozen. Unfreeze it before replacing the file.' : null}
-          onClose={() => setFileNodeEdit(null)}
-          onCreate={async (payload) => {
-            setFileNodeEdit(null)
-            if (!projectId) {
-              return
-            }
-            const redo = {
-              operations: [
-                { type: 'update_node_title', node_id: fileNodeEdit.nodeId, title: payload.title } satisfies GraphPatchOperation,
-              ],
-            }
-            await mutateGraph(redo.operations, { history: liveSnapshot ? simpleHistoryEntryForPlan(liveSnapshot, redo) : null })
-            if (payload.file) {
-              await handleUploadFile(fileNodeEdit.nodeId, payload.file)
-            }
           }}
         />
       ) : null}

@@ -13,7 +13,6 @@ from bulletjournal.domain.enums import ArtifactState, NodeKind, ValidationSeveri
 from bulletjournal.domain.errors import NotFoundError
 from bulletjournal.domain.graph_bindings import resolve_input_binding
 from bulletjournal.domain.hashing import combine_hashes, hash_json, sha256_bytes
-from bulletjournal.domain.models import file_input_artifact_name
 from bulletjournal.execution.planner import topological_nodes
 from bulletjournal.storage.atomic_write import atomic_write_text
 from bulletjournal.storage.project_lock import ProjectLock
@@ -573,7 +572,7 @@ class CheckpointService:
         return values
 
     def _lineage_matches(self, node, name: str, source_hash: Any, inputs, version: dict[str, Any]) -> bool:
-        if node.kind in {NodeKind.CONSTANT, NodeKind.FILE_INPUT}:
+        if node.kind == NodeKind.CONSTANT:
             artifact_hash = version.get('artifact_hash')
             return (
                 isinstance(artifact_hash, str)
@@ -793,11 +792,6 @@ class CheckpointService:
         project = self.project_service.require_project()
         allowed_artifacts: dict[str, set[str]] = {}
         for node in self.project_service.graph().nodes:
-            if node.kind == NodeKind.FILE_INPUT:
-                artifact_name = file_input_artifact_name(node)
-                allowed_artifacts[node.id] = {artifact_name}
-                project.state_db.ensure_artifact_head(node.id, artifact_name, ArtifactState.PENDING)
-                continue
             if node.kind in {NodeKind.ORGANIZER, NodeKind.AREA, NodeKind.DASHBOARD}:
                 allowed_artifacts[node.id] = set()
                 continue

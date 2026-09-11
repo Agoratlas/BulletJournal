@@ -83,10 +83,10 @@ def test_stale_or_pending_nodes_excludes_constants_by_default() -> None:
     ]
 
     selected = stale_or_pending_nodes(graph, artifact_heads)
-    selected_with_files = stale_or_pending_nodes(graph, artifact_heads, include_file_inputs=True)
+    selected_with_constants = stale_or_pending_nodes(graph, artifact_heads, include_constants=True)
 
     assert selected == ['middle', 'leaf']
-    assert selected_with_files == ['input_file', 'middle', 'leaf']
+    assert selected_with_constants == ['input_file', 'middle', 'leaf']
 
 
 def test_stale_or_pending_nodes_include_notebook_execution_heads() -> None:

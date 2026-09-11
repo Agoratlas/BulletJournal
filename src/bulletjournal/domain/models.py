@@ -269,13 +269,6 @@ class CheckpointRecord:
     restored_at: str | None = None
 
 
-def file_input_artifact_name(node: Node) -> str:
-    if node.kind != NodeKind.FILE_INPUT:
-        return 'file'
-    value = node.ui.get('artifact_name')
-    return str(value) if isinstance(value, str) and value else 'file'
-
-
 def constant_artifact_name(node: Node) -> str:
     if node.kind != NodeKind.CONSTANT:
         return 'value'

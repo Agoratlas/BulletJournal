@@ -38,7 +38,7 @@ export type TemplateRef = {
 export type NodeRecord = {
   id: string
   incarnation_id?: string
-  kind: 'notebook' | 'constant' | 'file_input' | 'organizer' | 'area' | 'dashboard'
+  kind: 'notebook' | 'constant' | 'organizer' | 'area' | 'dashboard'
   title: string
   path?: string | null
   template?: TemplateRef | null
@@ -452,7 +452,7 @@ export type TemplateRecord = {
       documentation?: string
       nodes?: Array<{
         id: string
-        kind: 'notebook' | 'constant' | 'file_input' | 'organizer' | 'area' | 'dashboard'
+        kind: 'notebook' | 'constant' | 'organizer' | 'area' | 'dashboard'
         title: string
         template_ref?: string
         data_type?: string
@@ -533,7 +533,6 @@ export type ProjectOpenResponse = ProjectSnapshot
 export type GraphPatchOperation =
   | { type: 'add_notebook_node'; node_id: string; title: string; x?: number; y?: number; w?: number; h?: number; template_ref?: string; source_text?: string; ui?: { frozen?: boolean } }
   | { type: 'add_constant_node'; node_id: string; title?: string; data_type: string; value?: unknown; value_json?: string; ui?: { artifact_name?: string; data_type?: string; frozen?: boolean }; x?: number; y?: number; w?: number; h?: number }
-  | { type: 'add_file_input_node'; node_id: string; title: string; artifact_name?: string; ui?: { frozen?: boolean }; x?: number; y?: number; w?: number; h?: number }
   | { type: 'add_organizer_node'; node_id: string; title?: string; ui?: { frozen?: boolean; organizer_ports?: Array<{ key: string; name: string; data_type: string }> }; x?: number; y?: number; w?: number; h?: number }
   | { type: 'add_area_node'; node_id: string; title?: string; ui?: { frozen?: boolean; title_position?: string; area_color?: string; area_filled?: boolean }; x?: number; y?: number; w?: number; h?: number }
   | { type: 'add_dashboard_node'; node_id: string; title?: string; ui?: { source_count?: number; panel_count?: number }; x?: number; y?: number; w?: number; h?: number }

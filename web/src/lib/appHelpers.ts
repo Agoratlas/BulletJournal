@@ -503,20 +503,6 @@ export function notebookAddOperationForNode(
   }
 }
 
-export function fileInputAddOperationForNode(node: NodeRecord, layout: LayoutRecord, nodeId: string, title: string): GraphPatchOperation {
-  return {
-    type: 'add_file_input_node',
-    node_id: nodeId,
-    title,
-    artifact_name: node.ui?.artifact_name ?? 'file',
-    ui: { frozen: Boolean(node.ui?.frozen) },
-    x: layout.x,
-    y: layout.y,
-    w: layout.w,
-    h: layout.h,
-  }
-}
-
 export function constantAddOperationForNode(
   node: NodeRecord,
   layout: LayoutRecord,
@@ -629,14 +615,12 @@ export function applyOptimisticGraphOperations(snapshot: ProjectSnapshot, operat
     if (type === 'add_pipeline_template') {
       continue
     }
-    if (type === 'add_notebook_node' || type === 'add_constant_node' || type === 'add_file_input_node' || type === 'add_organizer_node' || type === 'add_area_node' || type === 'add_dashboard_node') {
+    if (type === 'add_notebook_node' || type === 'add_constant_node' || type === 'add_organizer_node' || type === 'add_area_node' || type === 'add_dashboard_node') {
       const nodeId = String(operation.node_id)
       if (!next.graph.nodes.some((node) => node.id === nodeId)) {
         const kind = type === 'add_constant_node'
           ? 'constant'
-          : type === 'add_file_input_node'
-          ? 'file_input'
-            : type === 'add_organizer_node'
+          : type === 'add_organizer_node'
               ? 'organizer'
             : type === 'add_area_node'
               ? 'area'
@@ -656,8 +640,6 @@ export function applyOptimisticGraphOperations(snapshot: ProjectSnapshot, operat
               data_type: String(operation.data_type ?? (operation.ui as { data_type?: unknown } | undefined)?.data_type ?? 'object'),
               frozen: Boolean((operation.ui as { frozen?: unknown } | undefined)?.frozen),
             }
-            : type === 'add_file_input_node'
-            ? { artifact_name: String(operation.artifact_name ?? 'file'), frozen: false }
             : type === 'add_organizer_node'
               ? {
                 frozen: Boolean((operation.ui as { frozen?: unknown } | undefined)?.frozen),

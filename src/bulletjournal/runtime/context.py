@@ -174,7 +174,7 @@ class RuntimeContext:
         if binding is None:
             if self.interactive_contract_error is not None:
                 raise self.interactive_contract_error
-            raise KeyError(f'No binding configured for file input `{name}`.')
+            raise KeyError(f'No binding configured for file `{name}`.')
         if binding.data_type != 'file':
             raise TypeError(f'Input contract mismatch for `{name}`: expected {binding.data_type}, got file.')
         if not binding.source_node:

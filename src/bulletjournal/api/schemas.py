@@ -25,18 +25,6 @@ class AddNotebookNodeOperation(StrictModel):
     ui: dict[str, Any] | None = None
 
 
-class AddFileInputNodeOperation(StrictModel):
-    type: Literal['add_file_input_node']
-    node_id: str
-    title: str
-    x: int = 80
-    y: int = 80
-    w: int = 320
-    h: int = 220
-    artifact_name: str = 'file'
-    ui: dict[str, Any] | None = None
-
-
 class AddConstantNodeOperation(StrictModel):
     type: Literal['add_constant_node']
     node_id: str
@@ -161,7 +149,6 @@ class UpdateNodeFrozenOperation(StrictModel):
 GraphOperation = Annotated[
     AddNotebookNodeOperation
     | AddConstantNodeOperation
-    | AddFileInputNodeOperation
     | AddOrganizerNodeOperation
     | AddAreaNodeOperation
     | AddDashboardNodeOperation

@@ -6,7 +6,6 @@ from enum import StrEnum
 class NodeKind(StrEnum):
     NOTEBOOK = 'notebook'
     CONSTANT = 'constant'
-    FILE_INPUT = 'file_input'
     ORGANIZER = 'organizer'
     AREA = 'area'
     DASHBOARD = 'dashboard'

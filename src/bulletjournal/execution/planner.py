@@ -69,7 +69,7 @@ def stale_or_pending_nodes(
     graph: GraphData,
     artifact_heads: list[dict[str, object]],
     *,
-    include_file_inputs: bool = False,
+    include_constants: bool = False,
     notebook_execution_heads: list[dict[str, object]] | None = None,
 ) -> list[str]:
     states_by_node: dict[str, set[str]] = defaultdict(set)
@@ -82,7 +82,7 @@ def stale_or_pending_nodes(
     selected: list[str] = []
     for node_id in ordered:
         node = node_map[node_id]
-        if node.kind in {NodeKind.FILE_INPUT, NodeKind.CONSTANT} and not include_file_inputs:
+        if node.kind == NodeKind.CONSTANT and not include_constants:
             continue
         states = states_by_node.get(node_id, set())
         if ArtifactState.PENDING.value in states or ArtifactState.STALE.value in states:

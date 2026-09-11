@@ -31,7 +31,6 @@ from bulletjournal.domain.models import (
     Node,
     constant_artifact_name,
     constant_data_type,
-    file_input_artifact_name,
 )
 from bulletjournal.domain.type_system import types_compatible
 from bulletjournal.execution.planner import downstream_closure, topological_nodes, visible_edge_id
@@ -120,13 +119,6 @@ class GraphService:
                         pending_constant_values.append(
                             (node_id, operation.get('value'), _constant_value_json(operation))
                         )
-                    interruption_roots.add(node_id)
-                elif op_type == 'add_file_input_node':
-                    node_id = self._add_file_input_node(graph, operation)
-                    pending_input_heads.append(
-                        (node_id, file_input_artifact_name(next(node for node in graph.nodes if node.id == node_id)))
-                    )
-                    created_incarnations.append(next(node for node in graph.nodes if node.id == node_id))
                     interruption_roots.add(node_id)
                 elif op_type == 'add_organizer_node':
                     node_id = self._add_organizer_node(graph, operation)
@@ -606,26 +598,6 @@ class GraphService:
         interface = self._inline_notebook_interface(source_text=source, node_id=node_id)
         return node_id, source, interface
 
-    def _add_file_input_node(self, graph: GraphData, operation: dict[str, Any]) -> str:
-        node_id = str(operation['node_id'])
-        title = str(operation['title'])
-        if any(node.id == node_id for node in graph.nodes):
-            raise GraphValidationError(f'Node `{node_id}` already exists.')
-        artifact_name = str(operation.get('artifact_name', 'file'))
-        ui = operation.get('ui')
-        graph.nodes.append(
-            Node(
-                id=node_id,
-                kind=NodeKind.FILE_INPUT,
-                title=title,
-                ui={**({'artifact_name': artifact_name}), **ui}
-                if isinstance(ui, dict)
-                else {'artifact_name': artifact_name},
-            )
-        )
-        graph.layout.append(self._layout_entry(node_id, operation))
-        return node_id
-
     def _add_constant_node(self, graph: GraphData, operation: dict[str, Any]) -> tuple[str, str]:
         node_id = str(operation['node_id'])
         title = str(operation.get('title') or 'Constant')
@@ -807,22 +779,6 @@ class GraphService:
                 input_heads.append((node_id, artifact_name))
                 if 'value' in raw_node:
                     constant_values.append((node_id, raw_node.get('value'), None))
-            elif kind == NodeKind.FILE_INPUT.value:
-                artifact_name = str(raw_node.get('artifact_name') or '').strip()
-                if not artifact_name and isinstance(raw_node.get('ui'), dict):
-                    artifact_name = str(raw_node['ui'].get('artifact_name') or '').strip()
-                add_operation = {
-                    'node_id': resolved_node_id,
-                    'title': resolved_title,
-                    'artifact_name': artifact_name or 'file',
-                    'ui': raw_node.get('ui') if isinstance(raw_node.get('ui'), dict) else None,
-                    'x': int(layout.get('x', 80)) + offset_x,
-                    'y': int(layout.get('y', 80)) + offset_y,
-                    'w': int(layout.get('w', 320)),
-                    'h': int(layout.get('h', 220)),
-                }
-                node_id = self._add_file_input_node(graph, add_operation)
-                input_heads.append((node_id, artifact_name or 'file'))
             elif kind == NodeKind.ORGANIZER.value:
                 add_operation = {
                     'node_id': resolved_node_id,
@@ -979,8 +935,6 @@ class GraphService:
             return None
         if node.kind == NodeKind.CONSTANT:
             return self.project_service.synthetic_constant_interface(node).to_dict()
-        if node.kind == NodeKind.FILE_INPUT:
-            return self.project_service.synthetic_file_input_interface(node).to_dict()
         if node.kind == NodeKind.ORGANIZER:
             return organizer_interface_for_node(node).to_dict()
         if node.kind in {NodeKind.AREA, NodeKind.DASHBOARD}:

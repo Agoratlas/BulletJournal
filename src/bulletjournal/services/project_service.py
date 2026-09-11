@@ -23,7 +23,6 @@ from bulletjournal.domain.models import (
     ProjectMetadata,
     constant_artifact_name,
     constant_data_type,
-    file_input_artifact_name,
 )
 from bulletjournal.domain.state_machine import derive_node_state
 from bulletjournal.execution.planner import downstream_closure, upstream_closure
@@ -399,8 +398,6 @@ class ProjectService:
         node: Node | None = None,
     ) -> dict[str, Any] | None:
         node = self.get_node(node_id) if node is None else node
-        if node.kind == NodeKind.FILE_INPUT:
-            return self.synthetic_file_input_interface(node).to_dict()
         if node.kind == NodeKind.CONSTANT:
             return self.synthetic_constant_interface(node).to_dict()
         if node.kind == NodeKind.ORGANIZER:
@@ -423,27 +420,6 @@ class ProjectService:
             if interface is not None:
                 interfaces[node.id] = dict(interface)
         return interfaces
-
-    def synthetic_file_input_interface(self, node: Node) -> NotebookInterface:
-        artifact_name = file_input_artifact_name(node)
-        return NotebookInterface(
-            node_id=node.id,
-            source_hash='file_input',
-            inputs=[],
-            outputs=[
-                Port(
-                    name=artifact_name,
-                    data_type='file',
-                    role=ArtifactRole.OUTPUT,
-                    description='Uploaded file',
-                    kind='file',
-                    direction='output',
-                    declaration_index=0,
-                )
-            ],
-            docs='File input node.',
-            issues=[],
-        )
 
     def synthetic_constant_interface(self, node: Node) -> NotebookInterface:
         artifact_name = constant_artifact_name(node)
@@ -1030,9 +1006,6 @@ class ProjectService:
 
         notebook_service = NotebookService(self)
         for node in graph.nodes:
-            if node.kind == NodeKind.FILE_INPUT:
-                project.state_db.ensure_artifact_head(node.id, file_input_artifact_name(node), ArtifactState.PENDING)
-                continue
             if node.kind == NodeKind.CONSTANT:
                 project.state_db.ensure_artifact_head(node.id, constant_artifact_name(node), ArtifactState.PENDING)
                 continue

@@ -139,7 +139,6 @@ def validate_pipeline_template_definition(
             not in {
                 NodeKind.NOTEBOOK.value,
                 NodeKind.CONSTANT.value,
-                NodeKind.FILE_INPUT.value,
                 NodeKind.ORGANIZER.value,
                 NodeKind.AREA.value,
                 NodeKind.DASHBOARD.value,
@@ -360,17 +359,6 @@ def _pipeline_node_interface(
     raw_node: dict[str, Any], *, notebook_paths_by_ref: Mapping[str, Path | TemplateAsset]
 ) -> dict[str, Any]:
     kind_value = str(raw_node.get('kind'))
-    if kind_value == NodeKind.FILE_INPUT.value:
-        artifact_name = _pipeline_file_input_name(raw_node)
-        output = Port(
-            name=artifact_name,
-            data_type='file',
-            role=ArtifactRole.OUTPUT,
-            description='Uploaded file',
-            kind='file',
-            direction='output',
-        )
-        return {'inputs': [], 'outputs': [output.to_dict()]}
     if kind_value == NodeKind.CONSTANT.value:
         artifact_name = _pipeline_constant_name(raw_node)
         data_type = _pipeline_constant_data_type(raw_node)
@@ -401,22 +389,6 @@ def _pipeline_node_interface(
     fallback_node_id = template_path.stem if isinstance(template_path, Path) else template_path.name
     resolved_node_id = str(raw_node.get('id') or fallback_node_id)
     return parse_notebook_interface(template_path, node_id=resolved_node_id).to_dict()
-
-
-def _pipeline_file_input_name(raw_node: dict[str, Any]) -> str:
-    artifact_name = raw_node.get('artifact_name')
-    if isinstance(artifact_name, str) and artifact_name.strip():
-        return artifact_name.strip()
-    ui = raw_node.get('ui')
-    if isinstance(ui, dict):
-        candidate = ui.get('artifact_name')
-        if isinstance(candidate, str) and candidate.strip():
-            return candidate.strip()
-    resolved = 'file'
-    if not is_valid_artifact_name(resolved):
-        node_id = str(raw_node.get('id') or 'file_input').strip()
-        raise GraphValidationError(f'File input node `{node_id}` must define an artifact name matching `[a-z0-9_]+`.')
-    return resolved
 
 
 def _pipeline_constant_name(raw_node: dict[str, Any]) -> str:

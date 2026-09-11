@@ -1688,7 +1688,7 @@ def test_run_session_can_be_stopped_via_api(tmp_path) -> None:
     assert stopped_again.json()['status'] == 'stopped'
 
 
-def test_file_input_artifact_name_round_trips_in_snapshot(tmp_path) -> None:
+def test_file_constant_artifact_name_round_trips_in_snapshot(tmp_path) -> None:
     project_root = init_project_root(tmp_path / 'project').root
     app = create_app(project_path=project_root)
     client = TestClient(app)
@@ -1703,10 +1703,11 @@ def test_file_input_artifact_name_round_trips_in_snapshot(tmp_path) -> None:
             'graph_version': graph_version,
             'operations': [
                 {
-                    'type': 'add_file_input_node',
+                    'type': 'add_constant_node',
                     'node_id': 'uploaded_file',
                     'title': 'Uploaded File',
-                    'artifact_name': 'dataset',
+                    'data_type': 'file',
+                    'ui': {'artifact_name': 'dataset'},
                 }
             ],
         },
@@ -3043,7 +3044,7 @@ def test_add_constant_node_rejects_invalid_value_json(tmp_path) -> None:
     assert created.json()['detail'] == 'Constant value must be valid JSON: Extra data.'
 
 
-def test_file_input_node_can_use_custom_artifact_name(tmp_path) -> None:
+def test_file_constant_can_use_custom_artifact_name(tmp_path) -> None:
     project_root = init_project_root(tmp_path / 'project').root
     app = create_app(project_path=project_root)
     client = TestClient(app)
@@ -3058,10 +3059,11 @@ def test_file_input_node_can_use_custom_artifact_name(tmp_path) -> None:
             'graph_version': graph_version,
             'operations': [
                 {
-                    'type': 'add_file_input_node',
+                    'type': 'add_constant_node',
                     'node_id': 'source_file',
                     'title': 'Source File',
-                    'artifact_name': 'dataset',
+                    'data_type': 'file',
+                    'ui': {'artifact_name': 'dataset'},
                 }
             ],
         },
@@ -3481,10 +3483,11 @@ def test_file_artifact_content_endpoint_renders_inline_image(tmp_path) -> None:
             'graph_version': graph_version,
             'operations': [
                 {
-                    'type': 'add_file_input_node',
+                    'type': 'add_constant_node',
                     'node_id': 'image_source',
                     'title': 'Image Source',
-                    'artifact_name': 'preview_image',
+                    'data_type': 'file',
+                    'ui': {'artifact_name': 'preview_image'},
                 }
             ],
         },
@@ -3542,10 +3545,11 @@ def test_large_image_file_preview_is_not_marked_inline(tmp_path, monkeypatch) ->
             'graph_version': graph_version,
             'operations': [
                 {
-                    'type': 'add_file_input_node',
+                    'type': 'add_constant_node',
                     'node_id': 'large_image_source',
                     'title': 'Large Image Source',
-                    'artifact_name': 'preview_image',
+                    'data_type': 'file',
+                    'ui': {'artifact_name': 'preview_image'},
                 }
             ],
         },
@@ -4130,7 +4134,7 @@ def test_unfreezing_upstream_notebook_also_unfreezes_frozen_descendants(tmp_path
     assert nodes['table_sink']['ui']['frozen'] is False
 
 
-def test_freezing_downstream_block_also_freezes_upstream_file_blocks(tmp_path) -> None:
+def test_freezing_downstream_block_also_freezes_upstream_file_constants(tmp_path) -> None:
     project_root = init_project_root(tmp_path / 'project').root
     app = create_app(project_path=project_root)
     client = TestClient(app)
@@ -4145,9 +4149,11 @@ def test_freezing_downstream_block_also_freezes_upstream_file_blocks(tmp_path) -
             'graph_version': graph_version,
             'operations': [
                 {
-                    'type': 'add_file_input_node',
+                    'type': 'add_constant_node',
                     'node_id': 'source_file',
                     'title': 'Source File',
+                    'data_type': 'file',
+                    'ui': {'artifact_name': 'file'},
                 },
                 {
                     'type': 'add_notebook_node',
@@ -4218,7 +4224,7 @@ def test_freezing_downstream_block_also_freezes_upstream_file_blocks(tmp_path) -
     assert nodes['table_sink']['ui']['frozen'] is True
 
 
-def test_frozen_file_input_blocks_upload_and_shows_frozen_state(tmp_path) -> None:
+def test_frozen_file_constants_block_upload_and_show_frozen_state(tmp_path) -> None:
     project_root = init_project_root(tmp_path / 'project').root
     app = create_app(project_path=project_root)
     client = TestClient(app)
@@ -4232,9 +4238,11 @@ def test_frozen_file_input_blocks_upload_and_shows_frozen_state(tmp_path) -> Non
             'graph_version': graph_version,
             'operations': [
                 {
-                    'type': 'add_file_input_node',
+                    'type': 'add_constant_node',
                     'node_id': 'source_file',
                     'title': 'Source File',
+                    'data_type': 'file',
+                    'ui': {'artifact_name': 'file'},
                 }
             ],
         },

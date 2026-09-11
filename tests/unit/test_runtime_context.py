@@ -131,7 +131,7 @@ def test_runtime_context_validates_pull_contract_for_default_backed_input(tmp_pa
     context.validate_pull_contract(name='sample_count', data_type='int')
 
 
-def test_runtime_context_resolves_optional_missing_file_input(tmp_path) -> None:
+def test_runtime_context_resolves_optional_missing_file(tmp_path) -> None:
     project_root = init_project_root(tmp_path / 'project').root
     context = RuntimeContext(
         project_root=project_root,
@@ -160,7 +160,7 @@ def test_runtime_context_resolves_optional_missing_file_input(tmp_path) -> None:
     assert metadata['warnings'] == []
 
 
-def test_runtime_context_resolves_file_input_with_declared_extension(tmp_path) -> None:
+def test_runtime_context_resolves_file_with_declared_extension(tmp_path) -> None:
     project_root = init_project_root(tmp_path / 'project').root
     context = RuntimeContext(
         project_root=project_root,

@@ -14,7 +14,7 @@ import pandas as pd
 from bulletjournal.domain.enums import ArtifactRole, ArtifactState, LineageMode, NodeKind, StorageKind
 from bulletjournal.domain.errors import InvalidRequestError, NotFoundError
 from bulletjournal.domain.graph_bindings import resolve_input_binding
-from bulletjournal.domain.models import constant_artifact_name, constant_data_type, file_input_artifact_name
+from bulletjournal.domain.models import constant_artifact_name, constant_data_type
 from bulletjournal.services.graph_service import GraphService
 from bulletjournal.storage.project_lock import ProjectLock
 from bulletjournal.utils import utc_now_iso
@@ -61,17 +61,6 @@ class ArtifactService:
         blockers = self.project_service.frozen_block_blockers_for_stale_roots([node_id])
         if blockers:
             raise InvalidRequestError(self.project_service.freeze_block_message(blockers))
-        if node.kind == NodeKind.FILE_INPUT:
-            artifact_name = file_input_artifact_name(node)
-            persisted = self._persist_uploaded_file(filename=filename, content=content)
-            return self._save_managed_artifact(
-                node_id=node_id,
-                artifact_name=artifact_name,
-                persisted=persisted,
-                source_hash='file_input',
-                mime_type=mime_type,
-                original_filename=filename,
-            )
         if node.kind != NodeKind.CONSTANT:
             raise InvalidRequestError(f'Node `{node_id}` does not support file uploads.')
         data_type = constant_data_type(node)

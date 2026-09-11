@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 
 import { executionLogDownloadUrl, getExecutionLogs } from '../lib/api'
 import { artifactFor, artifactIsEmpty, formatBytes, formatDurationSeconds, formatType, inputBindingSource, inputState, templateByRef } from '../lib/helpers'
-import { frozenFileBlockMessage, normalizeNodeId } from '../lib/appHelpers'
+import { normalizeNodeId } from '../lib/appHelpers'
 import type { NodeActionItem } from '../appTypes'
 import type { ExecutionLogSummary, NodeRecord, ProjectSnapshot } from '../lib/types'
 import { ActionButtons } from './ActionButtons'
@@ -108,7 +108,6 @@ export function NodeInspector({
   serverNowClientAnchorMs,
   nodeActions,
   assetCounts,
-  onUploadFile,
   existingNodeIds,
   onRenameNode,
   nodeIdEditDisabledReason = null,
@@ -119,7 +118,6 @@ export function NodeInspector({
   serverNowClientAnchorMs: number
   nodeActions: NodeActionItem[]
   assetCounts: { pending: number; stale: number; ready: number }
-  onUploadFile: (nodeId: string, file: File) => Promise<void>
   existingNodeIds: string[]
   onRenameNode: (nodeId: string, payload: { nodeId: string; title: string }) => Promise<void>
   nodeIdEditDisabledReason?: string | null
@@ -137,7 +135,6 @@ export function NodeInspector({
   const [draftNodeId, setDraftNodeId] = useState(node.id)
   const [nodeIdTouched, setNodeIdTouched] = useState(false)
   const [renameBusy, setRenameBusy] = useState(false)
-  const fileInputRef = useRef<HTMLInputElement | null>(null)
   const isExecutionRunning = node.execution_meta?.status === 'running'
   const resolvedNodeId = useMemo(() => normalizeNodeId(draftNodeId), [draftNodeId])
   const titleError = !draftTitle.trim()
@@ -399,24 +396,6 @@ export function NodeInspector({
           ) : null}
         </div>
       </div>
-
-      {node.kind === 'file_input' ? (
-        <div className="inspector-block">
-          <h3>File upload</h3>
-          <input
-            ref={fileInputRef}
-            type="file"
-            disabled={Boolean(node.ui?.frozen)}
-            onChange={(event) => {
-              const file = event.target.files?.[0]
-              if (file) {
-                void onUploadFile(node.id, file)
-              }
-            }}
-          />
-          {node.ui?.frozen ? <p className="muted-copy">{frozenFileBlockMessage(node)}</p> : null}
-        </div>
-      ) : null}
 
       {node.template?.ref ? (
         <div className="inspector-block">

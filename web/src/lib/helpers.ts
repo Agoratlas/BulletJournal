@@ -130,9 +130,6 @@ export function badgeForNode(snapshot: ProjectSnapshot, node: NodeRecord): { lab
   if (node.kind === 'constant') {
     return { label: 'K', title: 'Constant block', tone: 'input' }
   }
-  if (node.kind === 'file_input') {
-    return { label: 'F', title: 'File input node', tone: 'input' }
-  }
   if (node.kind === 'organizer') {
     return { label: 'O', title: 'Organizer block', tone: 'custom' }
   }

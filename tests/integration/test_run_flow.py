@@ -1709,7 +1709,7 @@ if __name__ == '__main__':
     assert node['state'] == 'pending'
 
 
-def test_run_all_is_blocked_by_pending_file_input(tmp_path) -> None:
+def test_run_all_is_blocked_by_pending_file_constant(tmp_path) -> None:
     project_root = init_project_root(tmp_path / 'project').root
     app = create_app(project_path=project_root)
     client = TestClient(app)
@@ -1725,10 +1725,11 @@ def test_run_all_is_blocked_by_pending_file_input(tmp_path) -> None:
             'graph_version': graph_version,
             'operations': [
                 {
-                    'type': 'add_file_input_node',
+                    'type': 'add_constant_node',
                     'node_id': 'input_file',
                     'title': 'Input File',
-                    'artifact_name': 'file',
+                    'data_type': 'file',
+                    'ui': {'artifact_name': 'file'},
                 },
                 {
                     'type': 'add_notebook_node',
@@ -1994,7 +1995,7 @@ if __name__ == '__main__':
     assert artifact.json()['preview']['repr'] == '42'
 
 
-def test_use_stale_blocks_pending_file_inputs(tmp_path) -> None:
+def test_use_stale_blocks_pending_file_constants(tmp_path) -> None:
     project_root = init_project_root(tmp_path / 'project').root
     app = create_app(project_path=project_root)
     client = TestClient(app)
@@ -2009,7 +2010,13 @@ def test_use_stale_blocks_pending_file_inputs(tmp_path) -> None:
         json={
             'graph_version': graph_version,
             'operations': [
-                {'type': 'add_file_input_node', 'node_id': 'uploaded_file', 'title': 'Uploaded File'},
+                {
+                    'type': 'add_constant_node',
+                    'node_id': 'uploaded_file',
+                    'title': 'Uploaded File',
+                    'data_type': 'file',
+                    'ui': {'artifact_name': 'file'},
+                },
                 {'type': 'add_notebook_node', 'node_id': 'consumer', 'title': 'Consumer'},
             ],
         },
@@ -2073,7 +2080,7 @@ if __name__ == '__main__':
     assert blocked.json()['blocked_inputs'][0]['source'] == 'uploaded_file/file'
 
 
-def test_optional_missing_file_input_does_not_block_run(tmp_path) -> None:
+def test_optional_missing_file_does_not_block_run(tmp_path) -> None:
     project_root = init_project_root(tmp_path / 'project').root
     app = create_app(project_path=project_root)
     client = TestClient(app)
