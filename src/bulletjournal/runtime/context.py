@@ -469,7 +469,10 @@ class RuntimeContext:
         warnings: list[dict[str, Any]] = []
         warning_keys: set[str] = set()
         output_state = ArtifactState.READY
-        for metadata in self.loaded_inputs.values():
+        for input_name, binding in self.bindings.items():
+            metadata = self.loaded_inputs.get(input_name)
+            if metadata is None:
+                metadata = self._lineage_metadata_for_binding(binding)
             input_hashes.append(metadata['artifact_hash'])
             input_code_hashes.append(metadata['upstream_code_hash'])
             for warning in metadata['warnings']:
@@ -512,6 +515,37 @@ class RuntimeContext:
         upstream_data_hash = combine_hashes(input_hashes)
         upstream_code_hash = combine_hashes(input_code_hashes)
         return upstream_data_hash, upstream_code_hash, warnings, output_state
+
+    def _lineage_metadata_for_binding(self, binding: Binding) -> dict[str, Any]:
+        if not binding.source_node:
+            return {
+                'artifact_hash': hash_json(binding.default),
+                'upstream_code_hash': 'default',
+                'state': ArtifactState.READY.value,
+                'warnings': [],
+            }
+        head = self.db.get_artifact_head(binding.source_node, binding.source_artifact)
+        if head is None or head.get('current_version_id') is None:
+            raise FileNotFoundError(f'Artifact `{binding.source_node}/{binding.source_artifact}` is pending.')
+        artifact_hash = head.get('artifact_hash')
+        upstream_code_hash = head.get('upstream_code_hash')
+        if not isinstance(artifact_hash, str) or not artifact_hash:
+            raise RuntimeError(f'Artifact `{binding.source_node}/{binding.source_artifact}` has no content hash.')
+        if not isinstance(upstream_code_hash, str) or not upstream_code_hash:
+            raise RuntimeError(f'Artifact `{binding.source_node}/{binding.source_artifact}` has no code lineage hash.')
+        return {
+            'artifact_hash': artifact_hash,
+            'upstream_code_hash': upstream_code_hash,
+            'state': head['state'],
+            'warnings': (
+                [stale_input_warning(f'{binding.source_node}/{binding.source_artifact}')]
+                if head['state'] == ArtifactState.STALE.value
+                else []
+            ),
+            'source_node': binding.source_node,
+            'source_artifact': binding.source_artifact,
+            'loaded_version_id': head['current_version_id'],
+        }
 
     def _validate_output_contract(self, *, name: str, data_type: str, role: ArtifactRole, kind: str) -> None:
         expected = self.outputs.get(name)

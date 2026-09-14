@@ -396,6 +396,60 @@ def test_runtime_context_resolves_stale_upstream_with_warning_and_hashes(tmp_pat
     )
 
 
+def test_runtime_context_lineage_includes_declared_inputs_not_yet_pulled(tmp_path) -> None:
+    project_root = init_project_root(tmp_path / 'project').root
+    context = RuntimeContext(
+        project_root=project_root,
+        node_id='consumer',
+        run_id='run-complete-lineage',
+        source_hash='consumer-source',
+        lineage_mode=LineageMode.MANAGED,
+        bindings={
+            'first': Binding(source_node='producer', source_artifact='first', data_type='int'),
+            'second': Binding(source_node='producer', source_artifact='second', data_type='int'),
+        },
+        outputs={'result': Port(name='result', data_type='int', role=ArtifactRole.OUTPUT)},
+    )
+    upstream_hashes = {}
+    for artifact_name, value in (('first', 1), ('second', 2)):
+        persisted = context.object_store.persist_value(value, 'int')
+        context.db.upsert_artifact_object(
+            persisted['artifact_hash'],
+            persisted['storage_kind'],
+            persisted['data_type'],
+            persisted['size_bytes'],
+            persisted.get('extension'),
+            persisted.get('mime_type'),
+            persisted.get('preview'),
+        )
+        context.db.create_artifact_version(
+            node_id='producer',
+            artifact_name=artifact_name,
+            role=ArtifactRole.OUTPUT,
+            artifact_hash=persisted['artifact_hash'],
+            source_hash='producer-source',
+            upstream_code_hash=f'producer-{artifact_name}-code',
+            upstream_data_hash=f'producer-{artifact_name}-data',
+            run_id='producer-run',
+            lineage_mode=LineageMode.MANAGED,
+            warnings=[],
+        )
+        upstream_hashes[artifact_name] = persisted['artifact_hash']
+
+    context.record_pull('first', context.resolve_pull('first'))
+    context.finalize_value_push(name='result', value=3, data_type='int', role=ArtifactRole.OUTPUT)
+
+    head = context.db.get_artifact_head('consumer', 'result')
+
+    assert head is not None
+    assert head['upstream_data_hash'] == combine_hashes(
+        ['consumer-source', 'consumer/result', upstream_hashes['first'], upstream_hashes['second']]
+    )
+    assert head['upstream_code_hash'] == combine_hashes(
+        ['consumer-source', 'consumer/result', 'producer-first-code', 'producer-second-code']
+    )
+
+
 def test_runtime_context_rejects_type_mismatch_for_bound_input(tmp_path) -> None:
     project_root = init_project_root(tmp_path / 'project').root
     context = RuntimeContext(
