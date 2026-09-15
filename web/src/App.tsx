@@ -2592,7 +2592,8 @@ function App() {
             committedSnapshot.graph.meta.graph_version,
             batch.flatMap((mutation) => mutation.operations),
           )
-          setSnapshotData(queryClient, committedSnapshot, (current) => applyGraphPatchResponse(current, response))
+          const operations = batch.flatMap((mutation) => mutation.operations)
+          setSnapshotData(queryClient, committedSnapshot, (current) => applyGraphPatchResponse(current, response, operations))
           graphMutationInFlightRef.current = []
           syncGraphMutationOptimisticState(currentCommittedSnapshot(committedSnapshot))
           processDeferredGraphUpdatedEvent()
@@ -4304,16 +4305,18 @@ function App() {
     }
     const success = edgeOperations.length
       ? await mutateGraph(edgeOperations, { onSuccess: commitPasteSuccess })
-      : (() => {
-          commitPasteSuccess()
-          return Promise.resolve(true)
-        })()
+      : true
     if (!success) {
       if (nextNodeIds.length) {
         await mutateGraph(nextNodeIds.map((nextNodeId) => ({ type: 'delete_node', node_id: nextNodeId })))
       }
       return
     }
+    if (!edgeOperations.length) {
+      commitPasteSuccess()
+    }
+    // The graph patch response omits artifact heads; refresh so pasted constant values render immediately.
+    await refreshSnapshot()
   }
 
   async function handleUndo() {

@@ -436,11 +436,61 @@ export function mergeGraphIntoSnapshot(snapshot: SnapshotLike, graph: { meta: Pr
   return merged
 }
 
-export function applyGraphPatchResponse(snapshot: ProjectSnapshot, response: GraphPatchResponse): ProjectSnapshot {
+export function applyGraphPatchResponse(
+  snapshot: ProjectSnapshot,
+  response: GraphPatchResponse,
+  operations: GraphPatchOperation[] = [],
+): ProjectSnapshot {
   if (snapshot.graph.meta.graph_version > response.graph.meta.graph_version) {
     return snapshot
   }
-  return { ...mergeGraphIntoSnapshot(snapshot, response.graph), server_time: response.server_time }
+  const next = { ...mergeGraphIntoSnapshot(snapshot, response.graph), server_time: response.server_time }
+  for (const operation of operations) {
+    if (
+      operation.type !== 'add_constant_node'
+      || operation.value === undefined
+      || operation.data_type === 'file'
+      || operation.data_type === 'pandas.DataFrame'
+    ) {
+      continue
+    }
+    const repr = JSON.stringify(operation.value)
+    if (repr === undefined) {
+      continue
+    }
+    const artifactName = operation.ui?.artifact_name ?? 'value'
+    next.artifacts = [
+      ...next.artifacts.filter((artifact) => artifact.node_id !== operation.node_id || artifact.artifact_name !== artifactName),
+      {
+        node_id: operation.node_id,
+        artifact_name: artifactName,
+        current_version_id: null,
+        state: 'ready',
+        role: 'output',
+        artifact_hash: null,
+        source_hash: null,
+        upstream_code_hash: null,
+        upstream_data_hash: null,
+        run_id: null,
+        lineage_mode: null,
+        override_kind: null,
+        override_source_version_id: null,
+        created_at: null,
+        warnings: [],
+        storage_kind: 'json',
+        data_type: operation.data_type,
+        size_bytes: null,
+        extension: '.json',
+        mime_type: 'application/json',
+        preview: {
+          kind: 'simple',
+          repr,
+          ...(operation.data_type === 'list' || operation.data_type === 'dict' ? { compact_repr: repr } : {}),
+        },
+      },
+    ]
+  }
+  return next
 }
 
 export function clampContextMenuPosition(position: { x: number; y: number }, estimatedSize: { width: number; height: number } = { width: 260, height: 320 }) {
