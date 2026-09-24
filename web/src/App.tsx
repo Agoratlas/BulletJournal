@@ -15,11 +15,12 @@ import { BlockPalette } from './components/BlockPalette'
 import { ActionButtons } from './components/ActionButtons'
 import { ConfirmDialog, CreateNotebookDialog, CreateOrganizerPortDialog, CreatePipelineDialog, EditAreaDialog, EditConstantDialog, EditOrganizerDialog, Modal } from './components/Dialogs'
 import { GraphCanvas } from './components/GraphCanvas'
-import { Info, Palette, Play, Plus, Redo, Stop, Undo } from './components/Icons'
+import { Info, Palette, Play, Plus, Redo, Stop, Undo, X } from './components/Icons'
 import { NodeInspector } from './components/NodeInspector'
 import { NoticeOverlay } from './components/NoticeOverlay'
 import { SessionLoadingScreen } from './components/SessionLoadingScreen'
 import { SimpleMarkdown } from './components/SimpleMarkdown'
+import { NotebookAssetPanels } from './assets/NotebookAssetPanels'
 
 const NotebookAssetsPage = lazy(async () => {
   const module = await import('./assets/NotebookAssetsPage')
@@ -257,6 +258,7 @@ function App() {
   const [selectedEdgeIds, setSelectedEdgeIds] = useState<string[]>([])
   const [artifactNodeId, setArtifactNodeId] = useState<string | null>(null)
   const [artifactExplorerOpen, setArtifactExplorerOpen] = useState(false)
+  const [rightPanelMode, setRightPanelMode] = useState<'inspector' | 'assets' | null>(null)
   const [artifactFilter, setArtifactFilter] = useState('')
   const [artifactExplorerColumns, setArtifactExplorerColumns] = useState<1 | 2 | 3>(1)
   const [paletteInfoEntry, setPaletteInfoEntry] = useState<PaletteEntry | null>(null)
@@ -482,9 +484,11 @@ function App() {
     setSelectedNodeId(singleNodeId)
     if (options.openInspector !== undefined) {
       setInspectorOpen(options.openInspector && canOpenInspector)
+      if (options.openInspector && canOpenInspector && rightPanelMode !== 'assets') setRightPanelMode('inspector')
       return
     }
     setInspectorOpen(canOpenInspector)
+    if (canOpenInspector && rightPanelMode !== 'assets') setRightPanelMode('inspector')
   }
 
   function selectSingleNode(nodeId: string | null, options: { openInspector?: boolean } = {}) {
@@ -702,7 +706,9 @@ function App() {
   }, [serverSnapshot])
 
   useEffect(() => {
-    setInspectorOpen(Boolean(selectedNodeId))
+    if (rightPanelMode !== 'assets') {
+      setInspectorOpen(Boolean(selectedNodeId))
+    }
   }, [selectedNodeId])
 
   useEffect(() => {
@@ -4527,10 +4533,17 @@ function App() {
               <span className="node-status-summary-label">Artifacts</span>
               <ArtifactCounts counts={counts} segmented />
             </button>
-            <div className={`node-status-summary ${assetsAreReady ? 'is-ready' : 'needs-attention'}`}>
+            <button
+              type="button"
+              className={`node-status-summary ${assetsAreReady ? 'is-ready' : 'needs-attention'} ${rightPanelMode === 'assets' ? 'is-active' : ''}`}
+              onClick={() => setRightPanelMode('assets')}
+              aria-expanded={rightPanelMode === 'assets'}
+              aria-controls="right-side-panel"
+              disabled={!projectId}
+            >
               <span className="node-status-summary-label">Assets</span>
               <ArtifactCounts counts={assetCounts} segmented />
-            </div>
+            </button>
           </div>
         </div>
       </div>
@@ -4675,9 +4688,29 @@ function App() {
           )}
         </main>
 
-        <aside className={`sidebar right floating-panel ${selectedNode && inspectorOpen ? 'open' : 'closed'}`}>
-          <div className={`panel inspector-panel ${selectedNode && inspectorOpen ? 'open' : 'closed'}`}>
-            {selectedNode ? (
+        <aside id="right-side-panel" className={`sidebar right floating-panel ${rightPanelMode === 'assets' ? 'assets-viewer' : ''} ${rightPanelMode === 'assets' || selectedNode && inspectorOpen ? 'open' : 'closed'}`}>
+          <div className={`panel inspector-panel ${rightPanelMode === 'assets' ? 'assets-viewer-panel' : ''} ${rightPanelMode === 'assets' || selectedNode && inspectorOpen ? 'open' : 'closed'}`}>
+            {rightPanelMode === 'assets' ? (
+              <>
+                <header className="assets-side-panel-header">
+                  <h2>Notebook assets</h2>
+                  <button
+                    type="button"
+                    className="ghost-button modal-close-button"
+                    aria-label="Close Assets panel"
+                    onClick={() => {
+                      setRightPanelMode(null)
+                      setInspectorOpen(false)
+                    }}
+                  >
+                    <X width={18} height={18} />
+                  </button>
+                </header>
+                <div className="assets-side-panel-content">
+                  {selectedNode?.kind === 'notebook' ? <NotebookAssetPanels nodeId={selectedNode.id} /> : <div className="assets-empty-state"><p>Click on a notebook to view its assets</p></div>}
+                </div>
+              </>
+            ) : selectedNode ? (
               <NodeInspector
                 snapshot={liveSnapshot as ProjectSnapshot}
                 node={selectedNode}

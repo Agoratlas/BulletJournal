@@ -11,6 +11,7 @@ export function buildAxisSpec(overrides: ChartAxisOverrides, defaultLabel: strin
     tickCount: optionalIntegerFromInput(overrides.tickCount),
     tickSize: optionalNonNegativeNumberFromInput(overrides.tickSize),
     grid: overrides.showGridLines,
+    gridZindex: 0,
     labelFlush: false,
   }
 }

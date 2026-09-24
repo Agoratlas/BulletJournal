@@ -361,6 +361,8 @@ assets.Histogram(
     x,
     bin_count=None,
     granularity='auto',
+    group=None,
+    color=None,
     **modifiers,
 )
 ```
@@ -371,21 +373,29 @@ assets.Histogram(
 - `x`: the numeric, date, or datetime column to count.
 - `bin_count`: number of ranges for a numeric column. The default is `20`; accepted panel values are `1` through `100`.
 - `granularity`: grouping for a date or datetime column. Accepted values are `auto`, `year`, `month`, `week`, `day`, and `hour`. Date-only columns do not support `hour`.
+- `group`: optional column that splits every numeric or temporal bin into groups.
+- `color`: optional color column or dictionary whose keys match group values. `color` requires `group`; a color column must give each group one non-empty color string.
 
-Use `bin_count`, not `bins`. Histograms do not accept `color`, `shape`, or `size` columns.
+Use `bin_count`, not `bins`. Histograms do not accept `shape` or `size` columns.
 
 ### Modifiers
 
-- `bar_width`: bar width as a percentage from `0` to `100`. Default: `90`.
+- `bar_width`: bar width as a percentage from `0` to `100`. Default: `100` for grouped histograms, `90` for stacked or ungrouped histograms.
 - `border_thickness`: bar border width. Use `0` for no border. Default: `0`.
 - `x_axis`: shared axis modifier object. The default label is the `x` column.
 - `y_axis`: shared axis modifier object. The default label is `Rows`.
 - `title`: shared chart title modifier object.
 - `bin_count`: saved numeric-histogram setting, from `1` to `100`.
 - `granularity`: saved date-histogram setting.
+- `group_order`: order of groups, using the same modes and explicit-list form as `BarChart`. Default: `category_asc`.
+- `group_mode`: `grouped` or `stacked`. Default: `grouped`.
+- `group_normalize`: `none` (default), `max`, or `sum`. Within each bin, `max` scales the largest group's count to 100%, while `sum` scales the bin's total count to 100%. Both modes work in grouped and stacked charts. Legacy `True` means `sum` and `False` means `none`.
+- `group_spacing`: space between bins of grouped bars, not between bars within a bin, from `0` to `50`. Default: `20`.
+
+When normalized, both chart modes display a `Percentage` y-axis with `%` tick labels. Stacked bins total 100% with `sum`; with `max`, the tallest individual segment is 100% and the stack can exceed 100%.
 - `page`, `sort`, and `filters`: shared interactive modifiers.
 
-`bar_width`, `border_thickness`, `x_axis`, `y_axis`, and `title` can be passed to the constructor. `bin_count` and `granularity` have their own named constructor arguments. Paging, sorting, and filtering are panel settings.
+`bar_width`, `border_thickness`, `group_order`, `group_mode`, `group_normalize`, `group_spacing`, `x_axis`, `y_axis`, and `title` can be passed to the constructor. `bin_count`, `granularity`, `group`, and `color` have their own named constructor arguments. Paging, sorting, and filtering are panel settings.
 
 ### Example
 
@@ -409,7 +419,24 @@ assets.push(
 )
 ```
 
-This splits movie durations into 30 ranges, makes the bars slightly narrower, adds a thin border, changes both axis labels, and shows the chart title. Dragging across bars temporarily filters the table to the selected duration range.
+This splits movie durations into 30 ranges, makes the bars slightly narrower, adds a thin border, changes both axis labels, and shows the chart title. Dragging across bars temporarily filters the table to the selected duration range. For grouped histograms, clicking a group or legend value temporarily filters the linked table; this combines with any selected ranges.
+
+### Grouped example
+
+```python
+grouped_duration_histogram = assets.Histogram(
+    movies,
+    x='duration',
+    group='genre',
+    color={'Drama': '#5b5f97', 'Comedy': '#ffc145'},
+    bin_count=20,
+    group_order=['Drama', 'Comedy'],
+    group_mode='stacked',
+    group_normalize='sum',
+)
+```
+
+The chart emits one entry for every bin and observed group, including zero-count combinations. Each entry includes `group`, `group_label`, `group_index`, and `color`; temporal entries retain their `start`, `end`, and `label` metadata.
 
 ## BarChart
 
@@ -441,13 +468,15 @@ assets.BarChart(
 
 ### Modifiers
 
-- `bar_width`: bar width as a percentage from `0` to `100`. Default: `90`.
+- `bar_width`: bar width as a percentage from `0` to `100`. Default: `100` in grouped mode, `90` in stacked mode or without a group.
 - `border_thickness`: bar border width. Default: `0`.
 - `category_order`: order of categories. Default: `category_asc`.
-- `group_order`: accepted group-order setting. Default: `category_asc`. It is currently stored but does not change the rendered group order.
+- `group_order`: order of groups. Default: `category_asc`.
 - `group_mode`: `grouped` or `stacked`. Default: `grouped`.
-- `group_normalize`: when `group_mode='stacked'`, `True` shows each category as parts of a whole. Default: `False`.
-- `group_spacing`: space between grouped bars, from `0` to `50`. Default: `10`.
+- `group_normalize`: `none` (default), `max`, or `sum`. Within each category, `max` scales the largest group's value to 100%, while `sum` scales the category's total value to 100%. Both modes work in grouped and stacked charts. Legacy `True` means `sum` and `False` means `none`.
+- `group_spacing`: space between categories of grouped bars, not between bars within a category, from `0` to `50`. Default: `20`.
+
+When normalized, both chart modes display a `Percentage` y-axis with `%` tick labels. Stacked categories total 100% with `sum`; with `max`, the tallest individual segment is 100% and the stack can exceed 100%.
 - `x_axis`: shared axis modifier object. The default label is the category column.
 - `y_axis`: shared axis modifier object. Its default label describes the calculation.
 - `title`: shared chart title modifier object.
@@ -475,6 +504,7 @@ regional_sales = assets.BarChart(
     color={'Online': '#3568d4', 'Store': '#e07a3f'},
     category_order='value_desc',
     group_mode='stacked',
+    group_normalize='max',
     group_spacing=4,
     x_axis={'label': 'Sales region'},
     y_axis={'label': 'Revenue', 'show_grid_lines': True},

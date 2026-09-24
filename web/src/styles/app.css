@@ -1164,8 +1164,21 @@ label span,
   overflow: hidden;
 }
 
+.sidebar.right .panel:first-child.assets-viewer-panel {
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 12px;
+}
+
+.assets-side-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
 .sidebar.right .panel:first-child > .muted-copy,
-.sidebar.right .panel:first-child > .inspector-stack {
+.sidebar.right .panel:first-child > .inspector-stack,
+.sidebar.right .panel:first-child > .assets-side-panel-content {
   min-height: 0;
   overflow-y: auto;
   padding-right: 4px;
@@ -1175,17 +1188,20 @@ label span,
 }
 
 .sidebar.right .panel:first-child > .muted-copy::-webkit-scrollbar,
-.sidebar.right .panel:first-child > .inspector-stack::-webkit-scrollbar {
+.sidebar.right .panel:first-child > .inspector-stack::-webkit-scrollbar,
+.sidebar.right .panel:first-child > .assets-side-panel-content::-webkit-scrollbar {
   width: 10px;
 }
 
 .sidebar.right .panel:first-child > .muted-copy::-webkit-scrollbar-track,
-.sidebar.right .panel:first-child > .inspector-stack::-webkit-scrollbar-track {
+.sidebar.right .panel:first-child > .inspector-stack::-webkit-scrollbar-track,
+.sidebar.right .panel:first-child > .assets-side-panel-content::-webkit-scrollbar-track {
   background: transparent;
 }
 
 .sidebar.right .panel:first-child > .muted-copy::-webkit-scrollbar-thumb,
-.sidebar.right .panel:first-child > .inspector-stack::-webkit-scrollbar-thumb {
+.sidebar.right .panel:first-child > .inspector-stack::-webkit-scrollbar-thumb,
+.sidebar.right .panel:first-child > .assets-side-panel-content::-webkit-scrollbar-thumb {
   background: rgba(98, 108, 108, 0.34);
   border-radius: 999px;
   border: 2px solid transparent;
@@ -1193,9 +1209,22 @@ label span,
 }
 
 .sidebar.right .panel:first-child > .muted-copy::-webkit-scrollbar-thumb:hover,
-.sidebar.right .panel:first-child > .inspector-stack::-webkit-scrollbar-thumb:hover {
+.sidebar.right .panel:first-child > .inspector-stack::-webkit-scrollbar-thumb:hover,
+.sidebar.right .panel:first-child > .assets-side-panel-content::-webkit-scrollbar-thumb:hover {
   background: rgba(98, 108, 108, 0.5);
   background-clip: padding-box;
+}
+
+.assets-side-panel-content {
+  display: grid;
+  align-content: start;
+  gap: 12px;
+  min-width: 0;
+}
+
+.assets-side-panel-content .assets-panel-list {
+  width: 100%;
+  min-width: 0;
 }
 
 .stack-list.subtle > div {
@@ -6338,6 +6367,17 @@ input.invalid {
 
   .asset-collection-list--3_columns {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (min-width: 769px) {
+  .sidebar.right.assets-viewer {
+    width: min(50vw, calc(100vw - 44px));
+    left: auto;
+    right: 22px;
+    top: 92px;
+    bottom: auto;
+    height: calc(100vh - 114px);
   }
 }
 

@@ -269,6 +269,10 @@ export type PreparedHistogramBin = {
   end: number
   count: number
   label?: string
+  group?: string | number | boolean
+  group_label?: string
+  group_index?: number
+  color?: string
 }
 
 export type PreparedHistogramPayload = {
@@ -284,6 +288,7 @@ export type PreparedHistogramPayload = {
   bins: PreparedHistogramBin[]
   x_value_kind?: 'numeric' | 'temporal'
   time_granularity?: 'year' | 'month' | 'week' | 'day' | 'hour'
+  group_column?: string
 }
 
 export type PreparedScatterPlotPoint = {

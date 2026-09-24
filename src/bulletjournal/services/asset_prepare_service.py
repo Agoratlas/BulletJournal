@@ -6,6 +6,7 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from bulletjournal.assets.group_normalization import normalize_group_normalization
 from bulletjournal.assets.prepare_utils import ALLOWED_PAGE_SIZES, backing_dataset_object
 from bulletjournal.assets.registry import asset_registration_for_type_id
 from bulletjournal.domain.errors import InvalidRequestError, NotFoundError
@@ -176,7 +177,7 @@ class AssetPrepareService:
                 dataset_path=dataset_path,
                 definition={},
                 default_modifiers={
-                    'page': {'index': 0, 'size': 25},
+                    'page': {'index': 0, 'size': 10},
                     'sort': [],
                     'filters': [],
                     'highlights': [],
@@ -312,6 +313,10 @@ class AssetPrepareService:
             return
         if kind == 'enum':
             cls._validate_enum_override(key=key, value=value, schema_entry=schema_entry)
+            return
+        if key == 'group_normalize':
+            if normalize_group_normalization(value) is None:
+                raise InvalidRequestError('modifier_overrides.group_normalize must be "none", "max", "sum", or a bool.')
             return
         default_value = schema_entry.get('default_value')
         cls._validate_partial_value_shape(label=key, value=value, default_value=default_value)

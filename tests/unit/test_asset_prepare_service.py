@@ -185,6 +185,40 @@ def test_asset_prepare_service_prepares_dataframe_artifact(tmp_path) -> None:
     assert response['resolved_modifiers']['highlights'][0]['highlight_color'] == '#ff0000'
 
 
+def test_asset_prepare_service_defaults_dataframe_artifact_preview_to_ten_rows(tmp_path) -> None:
+    project_root = init_project_root(tmp_path / 'project').root
+    context = RuntimeContext(
+        project_root=project_root,
+        node_id='producer',
+        run_id='run-artifact-preview-page-size',
+        source_hash='producer-source',
+        lineage_mode=LineageMode.MANAGED,
+        bindings={},
+        outputs={'table': Port(name='table', data_type='pandas.DataFrame', role=ArtifactRole.OUTPUT)},
+    )
+    context.finalize_value_push(
+        name='table',
+        value=pd.DataFrame({'value': list(range(12))}),
+        data_type='pandas.DataFrame',
+        role=ArtifactRole.OUTPUT,
+    )
+    service = AssetPrepareService(
+        _FakeProjectService(project=SimpleNamespace(state_db=context.db, object_store=context.object_store))
+    )
+
+    response = service.prepare_artifact_dataframe(
+        'producer',
+        'table',
+        artifact_version_id=None,
+        modifier_overrides={},
+        transient_modifiers={},
+    )
+
+    assert response['resolved_modifiers']['page'] == {'index': 0, 'size': 10}
+    assert response['payloads']['table']['rows_total'] == 12
+    assert len(response['payloads']['table']['rows']) == 10
+
+
 def test_asset_prepare_service_prepares_empty_dataframe_artifact(tmp_path) -> None:
     project_root = init_project_root(tmp_path / 'project').root
     context = RuntimeContext(

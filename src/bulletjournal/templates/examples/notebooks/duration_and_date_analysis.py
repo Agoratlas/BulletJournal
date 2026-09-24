@@ -35,9 +35,18 @@ def _():
 
 @app.cell
 def _(movies_df):
+    short_movies_df = movies_df[movies_df['duration'] < 180].copy()
+    short_movies_df['language_group'] = (
+        short_movies_df['language']
+        .str.contains('English', regex=False, na=False)
+        .map({True: 'English', False: 'Non-English'})
+    )
     duration_hist = assets.Histogram(
-        movies_df[movies_df['duration'] < 180],
+        short_movies_df,
         x='duration',
+        group='language_group',
+        group_order=['English', 'Non-English'],
+        color={'English': '#14b8a6', 'Non-English': '#f59e0b'},
         highlights=[
             {
                 'kind': 'range',

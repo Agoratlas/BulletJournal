@@ -3,6 +3,8 @@ import { useQuery } from '@tanstack/react-query'
 import embed, { type Result as VegaEmbedResult, type VisualizationSpec } from 'vega-embed'
 
 import { prepareAsset } from '../../lib/api'
+import { backgroundCategoryGridLayer } from '../shared/backgroundGrid'
+import { barChartCategoryPadding, normalizeGroupedValues, stackStarts, topStackSegmentIndexes } from '../shared/groupedChart'
 import type { AssetFilter, AssetHighlight, AssetSort, PreparedBarChartPayload } from '../../lib/types'
 import {
   buildAxisSpec,
@@ -31,6 +33,8 @@ import {
   buildModifierOverridesRecord,
   clampPercentage,
   defaultBarChartChartOverrides,
+  defaultBarWidthForGroupMode,
+  groupedChartDefaultsForDiff,
   barChartChartOverridesFromModifiers,
   filterKindsForDataType,
   initialTableStateFromModifiers,
@@ -76,7 +80,7 @@ export function BarChartAssetPanel({
   const preparePanelContext = prepareTarget?.panelContext ?? null
   const modifierColumns = useMemo(() => modifierColumnsFromSchema(asset.modifier_schema), [asset.modifier_schema])
   const chartOverrideDefaults = useMemo(
-    () => defaultBarChartChartOverrides(asset.default_modifiers, asset.modifier_schema),
+    () => defaultBarChartChartOverrides(asset.default_modifiers, asset.modifier_schema, Boolean(asset.definition?.bar_group_column)),
     [asset.default_modifiers, asset.modifier_schema],
   )
   const persistedOverrideKey = useMemo(
@@ -92,7 +96,7 @@ export function BarChartAssetPanel({
     [asset.default_modifiers, persistedOverrideKey, persistedState?.modifier_overrides],
   )
   const initialChartOverrides = useMemo(
-    () => barChartChartOverridesFromModifiers(asset.default_modifiers, persistedState?.modifier_overrides ?? {}, asset.modifier_schema),
+    () => barChartChartOverridesFromModifiers(asset.default_modifiers, persistedState?.modifier_overrides ?? {}, asset.modifier_schema, Boolean(asset.definition?.bar_group_column)),
     [asset.default_modifiers, asset.modifier_schema, persistedOverrideKey, persistedState?.modifier_overrides],
   )
   const [pageIndex, setPageIndex] = useState(initialTableState.page.index)
@@ -132,7 +136,7 @@ export function BarChartAssetPanel({
       filters,
       highlights,
       ...serializeBarChartModifierValues(chartOverrides),
-    }, asset.default_modifiers),
+    }, groupedChartDefaultsForDiff(asset.default_modifiers, chartOverrides, Boolean(asset.definition?.bar_group_column))),
     [asset.default_modifiers, chartOverrides, filters, highlights, pageIndex, pageSize, sort],
   )
   const overrideValidationKey = requiresOverrideValidation ? stableValueKey(modifierOverrides) : null
@@ -234,7 +238,7 @@ export function BarChartAssetPanel({
   const resolvedPanelHeight = normalizePanelHeight(panelHeight) ?? DEFAULT_HISTOGRAM_CHART_HEIGHT
   const hasSettingsOverrides = Object.keys(buildModifierOverridesRecord(
     serializeBarChartModifierValues(chartOverrides),
-    asset.default_modifiers,
+    groupedChartDefaultsForDiff(asset.default_modifiers, chartOverrides, Boolean(asset.definition?.bar_group_column)),
   )).length > 0
 
   useEffect(() => {
@@ -360,6 +364,9 @@ export function BarChartAssetPanel({
                 onChange={(event) => setChartOverrides((current) => ({
                   ...current,
                   groupMode: event.target.value as 'grouped' | 'stacked',
+                  barWidth: current.barWidth === defaultBarWidthForGroupMode(asset.default_modifiers, current.groupMode, true)
+                    ? defaultBarWidthForGroupMode(asset.default_modifiers, event.target.value as 'grouped' | 'stacked', true)
+                    : current.barWidth,
                 }))}
               >
                 <option value="grouped">Grouped</option>
@@ -369,15 +376,11 @@ export function BarChartAssetPanel({
 
             <label className="asset-dataviz-field">
               <span className={modifierFieldLabelClassName(!valuesEqual(chartOverrides.groupNormalize, chartOverrideDefaults.groupNormalize))}>{modifierTitle(asset.modifier_schema, 'group_normalize', 'Normalize groups')}</span>
-              <input
-                type="checkbox"
-                className="asset-dataviz-checkbox-field"
-                checked={chartOverrides.groupNormalize}
-                onChange={(event) => setChartOverrides((current) => ({
-                  ...current,
-                  groupNormalize: event.target.checked,
-                }))}
-              />
+              <select value={chartOverrides.groupNormalize} onChange={(event) => setChartOverrides((current) => ({ ...current, groupNormalize: event.target.value as 'none' | 'max' | 'sum' }))}>
+                <option value="none">No normalization</option>
+                <option value="max">Normalize by max</option>
+                <option value="sum">Normalize by sum</option>
+              </select>
             </label>
 
             <label className="asset-dataviz-field">
@@ -683,8 +686,17 @@ function buildBarChartVegaLiteSpec(
   const yScaleType = buildScaleType(overrides.yAxis.scale)
   const hasGroup = Boolean(barChart.group_column)
   const isStacked = overrides.groupMode === 'stacked'
-  const isNormalized = overrides.groupNormalize
-  const groupSpacing = overrides.groupSpacing / 100
+  const isNormalized = hasGroup && overrides.groupNormalize !== 'none'
+  const displayValues = normalizeGroupedValues(
+    barChart.bars.map((bar, index) => ({ bucketIndex: bar.category_index ?? index, value: bar.aggregate_value })),
+    isNormalized ? overrides.groupNormalize : 'none',
+  )
+  const starts = stackStarts(displayValues, barChart.bars.map((bar, index) => bar.category_index ?? index))
+  const topSegments = topStackSegmentIndexes(barChart.bars.map((bar, index) => ({
+    bucketIndex: bar.category_index ?? index,
+    groupIndex: bar.group_index ?? 0,
+    value: displayValues[index] ?? bar.aggregate_value,
+  })))
 
   const tooltipFields: Record<string, unknown>[] = [
     { field: 'category_label', type: 'nominal' as const, title: barChart.category_column },
@@ -696,11 +708,7 @@ function buildBarChartVegaLiteSpec(
     tooltipFields.push({
       field: 'aggregate_label', type: 'nominal' as const, title: `${capitalizeAggregation(barChart.aggregation)} of ${barChart.value_column}`,
     })
-    if (isNormalized) {
-      tooltipFields.push({
-        field: 'group_proportion_label', type: 'nominal' as const, title: 'Proportion',
-      })
-    }
+    if (isNormalized) tooltipFields.push({ field: 'display_label', type: 'nominal' as const, title: 'Percentage' })
   } else {
     tooltipFields.push({
       field: 'aggregate_label', type: 'nominal' as const, title: `${capitalizeAggregation(barChart.aggregation)} of ${barChart.value_column}`,
@@ -709,7 +717,7 @@ function buildBarChartVegaLiteSpec(
 
   const colorScale = hasGroup ? buildBarChartColorScale(barChart.bars) : null
 
-  const xPaddingInner = Math.max(0.02, 1 - (barWidth / 100))
+  const xPaddingInner = barChartCategoryPadding(hasGroup, isStacked, barWidth, overrides.groupSpacing)
 
   const spec: VisualizationSpec = {
     $schema: 'https://vega.github.io/schema/vega-lite/v6.json',
@@ -723,12 +731,17 @@ function buildBarChartVegaLiteSpec(
     data: {
       values: barChart.bars.map((bar, index) => {
         const selectionValue = hasGroup ? (bar.group ?? bar.value) : bar.value
+        const displayValue = displayValues[index] ?? bar.aggregate_value
         return {
           category_label: bar.label,
           group_label: bar.group_label ?? '',
           group_index: bar.group_index ?? 0,
           category_index: bar.category_index ?? index,
           aggregate_value: bar.aggregate_value,
+          display_value: displayValue,
+          stack_start: starts[index] ?? 0,
+          stack_end: (starts[index] ?? 0) + displayValue,
+          display_label: isNormalized ? `${formatBarChartAggregateValue(displayValue)}%` : '',
           aggregate_label: formatBarChartAggregateValue(bar.aggregate_value),
           group_proportion_label: hasGroup && bar.group_proportion !== undefined
             ? formatBarChartProportion(bar.group_proportion)
@@ -736,20 +749,21 @@ function buildBarChartVegaLiteSpec(
           color: bar.color,
           raw_values: [selectionValue],
           is_selected: barChartSelectionIncludes(selectedGroups, [selectionValue]),
+          is_stack_top: topSegments.has(index),
         }
       }),
     },
     mark: {
-      type: 'bar',
+      type: hasGroup && isStacked ? 'rect' : 'bar',
       cursor: 'pointer',
       stroke: opaqueColor(theme.axisDomainColor),
       strokeWidth: borderThickness,
-      ...(isStacked
+      ...(isStacked && hasGroup
         ? {
-          cornerRadiusTopLeft: { signal: 'datum.max_aggregate_value_end > 0 ? 3 : 0' },
-          cornerRadiusTopRight: { signal: 'datum.max_aggregate_value_end > 0 ? 3 : 0' },
-          cornerRadiusBottomLeft: { signal: 'datum.min_aggregate_value_start < 0 ? 3 : 0' },
-          cornerRadiusBottomRight: { signal: 'datum.min_aggregate_value_start < 0 ? 3 : 0' },
+          cornerRadiusTopLeft: { signal: 'datum.is_stack_top ? 3 : 0' },
+          cornerRadiusTopRight: { signal: 'datum.is_stack_top ? 3 : 0' },
+          cornerRadiusBottomLeft: 0,
+          cornerRadiusBottomRight: 0,
         }
         : {
           cornerRadiusTopLeft: { signal: 'datum.aggregate_value > 0 ? 3 : 0' },
@@ -762,30 +776,32 @@ function buildBarChartVegaLiteSpec(
       x: {
         field: 'category_label',
         type: 'nominal',
-        sort: { field: 'category_index', order: 'ascending' },
+        sort: { field: 'category_index', op: 'min', order: 'ascending' },
         scale: {
           paddingInner: xPaddingInner,
           paddingOuter: 0.08,
         },
         axis: {
           ...buildAxisSpec(overrides.xAxis, defaultOverrides.xAxis.label, chartScale),
+          grid: false,
           labelAngle: -30,
         },
       },
       y: {
-        field: 'aggregate_value',
+        field: hasGroup && isStacked ? 'stack_end' : 'display_value',
         type: 'quantitative',
-        stack: isStacked ? (isNormalized ? 'normalize' : 'zero') : false,
+        stack: false,
         scale: {
           type: yScaleType,
-          ...(yScaleType !== 'log' ? { zero: !isNormalized } : {}),
+          ...(yScaleType !== 'log' ? { zero: true } : {}),
           nice: yScaleType !== 'log',
         },
         axis: {
           ...buildAxisSpec(overrides.yAxis, defaultOverrides.yAxis.label, chartScale),
-          ...(isNormalized ? { title: 'Percentage', format: isStacked ? '.1%' : '.1f' } : {}),
+          ...(isNormalized ? { title: 'Percentage', labelExpr: "format(datum.value, '.0f') + '%'" } : {}),
         },
       },
+      ...(hasGroup && isStacked ? { y2: { field: 'stack_start' } } : {}),
       color: colorScale ? {
         field: 'group_label',
         type: 'nominal',
@@ -800,9 +816,9 @@ function buildBarChartVegaLiteSpec(
       opacity: {
         condition: {
           test: selectedGroups.length ? 'datum.is_selected' : 'true',
-          value: 0.96,
+          value: 1,
         },
-        value: selectedGroups.length ? 0.34 : 0.96,
+        value: selectedGroups.length ? 0.34 : 1,
       },
       tooltip: tooltipFields,
     },
@@ -826,13 +842,25 @@ function buildBarChartVegaLiteSpec(
         type: 'nominal',
         sort: { field: 'group_index', order: 'ascending' },
         scale: {
-          paddingInner: groupSpacing,
+          paddingInner: 1 - barWidth / 100,
         },
       },
     }
   }
 
-  return spec
+  if (!overrides.xAxis.showGridLines) {
+    return spec
+  }
+
+  const { mark, encoding, params, ...chartSpec } = spec
+  const selectionParams = params?.filter((param) => 'select' in param)
+  return {
+    ...chartSpec,
+    layer: [
+      backgroundCategoryGridLayer(theme.gridColor, xPaddingInner),
+      { mark, encoding, ...(selectionParams?.length ? { params: selectionParams } : {}) },
+    ],
+  }
 }
 
 function buildBarChartColorScale(

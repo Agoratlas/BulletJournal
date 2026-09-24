@@ -70,7 +70,7 @@ def _(movies_df_single_genre):
         value='genre_single',
         aggregation='count',
         group_mode='stacked',
-        group_normalize=True,
+        group_normalize='sum',
     )
 
     assets.push(

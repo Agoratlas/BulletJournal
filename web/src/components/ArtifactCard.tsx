@@ -50,7 +50,7 @@ export function ArtifactCard({ artifact }: { artifact: ArtifactRecord }) {
       table_columns: artifact.preview?.kind === 'dataframe' ? artifact.preview.column_names : [],
     },
     modifier_schema: [],
-    default_modifiers: { page: { index: 0, size: 25 }, sort: [], filters: [], highlights: [] },
+    default_modifiers: { page: { index: 0, size: 10 }, sort: [], filters: [], highlights: [] },
     override_schema_hash: null,
     warnings: artifact.warnings,
     created_at: artifact.created_at,

@@ -78,24 +78,25 @@ def resolve_category_order(
     default_mode: str,
     column: str,
     dtype: pl.DataType,
+    modifier_id: str = 'category_order',
 ) -> str | list[Any]:
     candidate = (
-        default_modifiers.get('category_order', default_mode) if isinstance(default_modifiers, dict) else default_mode
+        default_modifiers.get(modifier_id, default_mode) if isinstance(default_modifiers, dict) else default_mode
     )
-    if 'category_order' in modifier_overrides:
-        candidate = modifier_overrides['category_order']
+    if modifier_id in modifier_overrides:
+        candidate = modifier_overrides[modifier_id]
     mode = normalize_category_order_mode(candidate)
     if mode is not None:
         return mode
     if not isinstance(candidate, list):
         allowed = ', '.join(sorted(CATEGORY_ORDER_MODES))
-        raise InvalidRequestError(f'category_order must be one of: {allowed}, or an array of category values.')
+        raise InvalidRequestError(f'{modifier_id} must be one of: {allowed}, or an array of category values.')
     resolved: list[Any] = []
     seen_keys: set[str] = set()
     for value in candidate:
-        coerced = coerce_filter_value(dtype, value, column=column, kind='category_order')
+        coerced = coerce_filter_value(dtype, value, column=column, kind=modifier_id)
         if coerced is None:
-            raise InvalidRequestError('category_order cannot contain null values.')
+            raise InvalidRequestError(f'{modifier_id} cannot contain null values.')
         value_key = category_order_value_key(coerced)
         if value_key in seen_keys:
             continue

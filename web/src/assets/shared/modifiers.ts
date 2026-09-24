@@ -13,6 +13,7 @@ import type {
   TableState,
   TimeHistogramGranularity,
 } from './types'
+import { resolveGroupMode, resolveGroupNormalization } from './groupedChart'
 import {
   DEFAULT_DATAVIZ_TABLE_PAGE_SIZE,
   DEFAULT_TABLE_PAGE_SIZE,
@@ -72,30 +73,43 @@ export function emptyChartTitleOverrides(): ChartTitleOverrides {
 export function defaultBarChartChartOverrides(
   defaultModifiers: Record<string, unknown>,
   modifierSchema: Array<Record<string, unknown>>,
+  hasGroup = false,
 ): BarChartChartOverrides {
-  const histogram = defaultHistogramChartOverrides(defaultModifiers, modifierSchema)
-  return {
-    ...histogram,
-    groupMode: modifierDefaultValue(defaultModifiers, modifierSchema, 'group_mode') === 'stacked' ? 'stacked' : 'grouped',
-    groupNormalize: Boolean(modifierDefaultValue(defaultModifiers, modifierSchema, 'group_normalize')),
-    groupSpacing: clampPercentage(modifierDefaultValue(defaultModifiers, modifierSchema, 'group_spacing'), 10),
-  }
+  return defaultHistogramChartOverrides(defaultModifiers, modifierSchema, hasGroup)
 }
 
 export function barChartChartOverridesFromModifiers(
   defaultModifiers: Record<string, unknown>,
   modifierOverrides: Record<string, unknown>,
   modifierSchema: Array<Record<string, unknown>>,
+  hasGroup = false,
 ): BarChartChartOverrides {
-  const defaults = defaultBarChartChartOverrides(defaultModifiers, modifierSchema)
-  const histogram = histogramChartOverridesFromModifiers(defaultModifiers, modifierOverrides, modifierSchema)
+  return histogramChartOverridesFromModifiers(defaultModifiers, modifierOverrides, modifierSchema, hasGroup)
+}
+
+export function groupNormalizationFromValue(value: unknown): 'none' | 'max' | 'sum' {
+  return resolveGroupNormalization(value)
+}
+
+export function defaultBarWidthForGroupMode(
+  defaultModifiers: Record<string, unknown>,
+  mode: 'grouped' | 'stacked',
+  hasGroup: boolean,
+): number {
+  const publishedWidth = clampPercentage(defaultModifiers.bar_width, 90)
+  if (!hasGroup || (publishedWidth !== 90 && publishedWidth !== 100)) return publishedWidth
+  return mode === 'grouped' ? 100 : 90
+}
+
+export function groupedChartDefaultsForDiff(
+  defaultModifiers: Record<string, unknown>,
+  overrides: HistogramChartOverrides,
+  hasGroup: boolean,
+): Record<string, unknown> {
   return {
-    ...histogram,
-    groupMode: mergedModifierValue(defaultModifiers.group_mode, modifierOverrides.group_mode) === 'stacked' ? 'stacked' : defaults.groupMode,
-    groupNormalize: typeof mergedModifierValue(defaultModifiers.group_normalize, modifierOverrides.group_normalize) === 'boolean'
-      ? mergedModifierValue(defaultModifiers.group_normalize, modifierOverrides.group_normalize) as boolean
-      : defaults.groupNormalize,
-    groupSpacing: clampPercentage(mergedModifierValue(defaultModifiers.group_spacing, modifierOverrides.group_spacing), defaults.groupSpacing),
+    ...defaultModifiers,
+    group_normalize: groupNormalizationFromValue(defaultModifiers.group_normalize),
+    bar_width: defaultBarWidthForGroupMode(defaultModifiers, overrides.groupMode, hasGroup),
   }
 }
 
@@ -111,13 +125,18 @@ export function serializeBarChartModifierValues(overrides: BarChartChartOverride
 export function defaultHistogramChartOverrides(
   defaultModifiers: Record<string, unknown>,
   modifierSchema: Array<Record<string, unknown>>,
+  hasGroup = false,
 ): HistogramChartOverrides {
+  const groupMode = resolveGroupMode(modifierDefaultValue(defaultModifiers, modifierSchema, 'group_mode'))
   return {
     xAxis: chartAxisOverridesFromValue(modifierDefaultValue(defaultModifiers, modifierSchema, 'x_axis'), emptyChartAxisOverrides()),
     yAxis: chartAxisOverridesFromValue(modifierDefaultValue(defaultModifiers, modifierSchema, 'y_axis'), emptyChartAxisOverrides()),
     title: chartTitleOverridesFromValue(modifierDefaultValue(defaultModifiers, modifierSchema, 'title'), emptyChartTitleOverrides()),
-    barWidth: clampPercentage(modifierDefaultValue(defaultModifiers, modifierSchema, 'bar_width'), 0),
+    barWidth: defaultBarWidthForGroupMode(defaultModifiers, groupMode, hasGroup),
     borderThickness: numericInputString(modifierDefaultValue(defaultModifiers, modifierSchema, 'border_thickness'), ''),
+    groupMode,
+    groupNormalize: groupNormalizationFromValue(modifierDefaultValue(defaultModifiers, modifierSchema, 'group_normalize')),
+    groupSpacing: clampPercentage(modifierDefaultValue(defaultModifiers, modifierSchema, 'group_spacing'), 20),
   }
 }
 
@@ -168,14 +187,21 @@ export function histogramChartOverridesFromModifiers(
   defaultModifiers: Record<string, unknown>,
   modifierOverrides: Record<string, unknown>,
   modifierSchema: Array<Record<string, unknown>>,
+  hasGroup = false,
 ): HistogramChartOverrides {
-  const defaults = defaultHistogramChartOverrides(defaultModifiers, modifierSchema)
+  const defaults = defaultHistogramChartOverrides(defaultModifiers, modifierSchema, hasGroup)
+  const groupMode = resolveGroupMode(mergedModifierValue(defaultModifiers.group_mode, modifierOverrides.group_mode))
   return {
     xAxis: chartAxisOverridesFromValue(mergedModifierValue(defaultModifiers.x_axis, modifierOverrides.x_axis), defaults.xAxis),
     yAxis: chartAxisOverridesFromValue(mergedModifierValue(defaultModifiers.y_axis, modifierOverrides.y_axis), defaults.yAxis),
     title: chartTitleOverridesFromValue(mergedModifierValue(defaultModifiers.title, modifierOverrides.title), defaults.title),
-    barWidth: clampPercentage(mergedModifierValue(defaultModifiers.bar_width, modifierOverrides.bar_width), defaults.barWidth),
+    barWidth: modifierOverrides.bar_width === undefined
+      ? defaultBarWidthForGroupMode(defaultModifiers, groupMode, hasGroup)
+      : clampPercentage(modifierOverrides.bar_width, defaults.barWidth),
     borderThickness: numericInputString(mergedModifierValue(defaultModifiers.border_thickness, modifierOverrides.border_thickness), defaults.borderThickness),
+    groupMode,
+    groupNormalize: groupNormalizationFromValue(mergedModifierValue(defaultModifiers.group_normalize, modifierOverrides.group_normalize)),
+    groupSpacing: clampPercentage(mergedModifierValue(defaultModifiers.group_spacing, modifierOverrides.group_spacing), defaults.groupSpacing),
   }
 }
 
@@ -265,6 +291,9 @@ export function serializeHistogramChartModifierValues(overrides: HistogramChartO
     x_axis: serializeChartAxisModifierValue(overrides.xAxis),
     y_axis: serializeChartAxisModifierValue(overrides.yAxis),
     title: serializeChartTitleModifierValue(overrides.title),
+    group_mode: overrides.groupMode,
+    group_normalize: overrides.groupNormalize,
+    group_spacing: overrides.groupSpacing,
   }
 }
 

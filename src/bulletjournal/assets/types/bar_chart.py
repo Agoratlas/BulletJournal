@@ -16,6 +16,7 @@ from bulletjournal.assets.category_ordering import (
     sort_category_rows,
     validate_category_order_value,
 )
+from bulletjournal.assets.group_normalization import normalize_group_normalization
 from bulletjournal.assets.prepare_utils import (
     coerce_filter_value,
     frame_with_filters,
@@ -166,8 +167,8 @@ def validate_bar_chart_modifier_defaults(value: dict[str, object] | None) -> Non
         validate_category_order_value(value['group_order'], label='Bar chart modifier `group_order`')
     if 'group_mode' in value and value['group_mode'] not in ('grouped', 'stacked'):
         raise TypeError('Bar chart modifier `group_mode` must be "grouped" or "stacked".')
-    if 'group_normalize' in value and not isinstance(value['group_normalize'], bool):
-        raise TypeError('Bar chart modifier `group_normalize` must be a bool.')
+    if 'group_normalize' in value and normalize_group_normalization(value['group_normalize']) is None:
+        raise TypeError('Bar chart modifier `group_normalize` must be "none", "max", "sum", or a bool.')
     if 'group_spacing' in value:
         validate_number(value['group_spacing'], label='Bar chart modifier `group_spacing`')
         if float(value['group_spacing']) < 0 or float(value['group_spacing']) > 50:
@@ -195,15 +196,17 @@ def normalize_bar_chart_aggregation(value: object) -> str | None:
     return BAR_CHART_AGGREGATION_ALIASES.get(value.strip().lower())
 
 
-def bar_chart_modifier_defaults(*, title: str, category_column: str, y_axis_label: str) -> dict[str, Any]:
+def bar_chart_modifier_defaults(
+    *, title: str, category_column: str, y_axis_label: str, group_mode: str = 'stacked'
+) -> dict[str, Any]:
     return {
-        'bar_width': 90,
+        'bar_width': 100 if group_mode == 'grouped' else 90,
         'border_thickness': 0,
         'category_order': DEFAULT_BAR_CHART_CATEGORY_ORDER,
         'group_order': DEFAULT_BAR_CHART_CATEGORY_ORDER,
         'group_mode': 'grouped',
-        'group_normalize': False,
-        'group_spacing': 10,
+        'group_normalize': 'none',
+        'group_spacing': 20,
         'x_axis': axis_modifier_defaults(category_column),
         'y_axis': axis_modifier_defaults(y_axis_label),
         'title': title_modifier_defaults(title),
@@ -260,7 +263,7 @@ def bar_chart_modifier_schema(default_modifiers: dict[str, Any]) -> list[dict[st
         {
             'id': 'group_normalize',
             'title': 'Normalize groups',
-            'kind': 'bool',
+            'kind': 'value',
             'category': 'saved_view',
             'server_targets': [],
             'default_value': default_modifiers['group_normalize'],
@@ -337,6 +340,7 @@ def serialize_bar_chart(
                 title=title,
                 category_column=str(asset.category),
                 y_axis_label=bar_chart_y_axis_label(str(asset.value), normalized_aggregation),
+                group_mode=(asset.modifier_defaults or {}).get('group_mode', 'grouped') if has_group else 'stacked',
             ),
             asset.modifier_defaults,
         ),
@@ -349,6 +353,7 @@ def serialize_bar_chart(
         default_modifiers.get('group_order', DEFAULT_BAR_CHART_CATEGORY_ORDER),
         label='Bar chart modifier `group_order`',
     )
+    default_modifiers['group_normalize'] = normalize_group_normalization(default_modifiers['group_normalize'])
     modifier_schema = [
         *dataset_modifier_schema(column_definitions, default_modifiers, filters_targets=['main', 'table']),
         *bar_chart_modifier_schema(default_modifiers),
@@ -465,6 +470,7 @@ def prepare_bar_chart(
                 dtype=schema[column_id_map[group_column]]
                 if group_column and group_column in column_id_map
                 else pl.Utf8,
+                modifier_id='group_order',
             )
             if group_column
             else None,

@@ -10,7 +10,16 @@ import pandas as pd
 import polars as pl
 
 from bulletjournal.assets.base import BaseAsset
+from bulletjournal.assets.category_ordering import (
+    category_order_value_key,
+    normalize_category_order_modifier_value,
+    resolve_category_order,
+    sort_category_rows,
+    validate_category_order_value,
+)
+from bulletjournal.assets.group_normalization import normalize_group_normalization
 from bulletjournal.assets.prepare_utils import (
+    coerce_filter_value,
     dtype_category,
     frame_with_filters,
     frame_with_sort,
@@ -31,6 +40,13 @@ from bulletjournal.assets.serialization import (
     dataset_modifier_schema,
     title_modifier_defaults,
 )
+from bulletjournal.assets.types.pie_chart import (
+    DEFAULT_PIE_CHART_COLOR,
+    normalize_pie_chart_color_mapping,
+    pie_chart_color_for_value,
+    pie_chart_color_mapping_from_definition,
+    validate_pie_chart_color,
+)
 from bulletjournal.assets.validation import (
     merge_nested_dicts,
     validate_axis_modifier_defaults,
@@ -46,12 +62,15 @@ MAX_HISTOGRAM_BIN_COUNT = 100
 DEFAULT_HISTOGRAM_TIME_GRANULARITY = 'auto'
 HISTOGRAM_TIME_GRANULARITIES = ('auto', 'year', 'month', 'week', 'day', 'hour')
 TEMPORAL_TIME_GRANULARITIES = ('year', 'month', 'week', 'day', 'hour')
+DEFAULT_HISTOGRAM_CATEGORY_ORDER = 'category_asc'
 
 
 @dataclass(slots=True, init=False)
 class Histogram(BaseAsset):
     dataframe: pd.DataFrame
     x: str
+    group: str | None
+    color: str | dict[object, str] | None
     bin_count: int | None
     time_granularity: str
     modifier_defaults: dict[str, object] | None
@@ -66,11 +85,13 @@ class Histogram(BaseAsset):
         x,
         bin_count: int | None = None,
         granularity: str = DEFAULT_HISTOGRAM_TIME_GRANULARITY,
+        group: str | None = None,
+        color: str | dict[object, str] | None = None,
         **modifier_kwargs: Any,
     ) -> None:
         if 'bins' in modifier_kwargs:
             raise TypeError('Histogram assets do not support a `bins` argument. Use `bin_count` instead.')
-        unsupported_encodings = sorted(set(modifier_kwargs) & {'shape', 'size', 'color'})
+        unsupported_encodings = sorted(set(modifier_kwargs) & {'shape', 'size'})
         if unsupported_encodings:
             joined = ', '.join(f'`{key}`' for key in unsupported_encodings)
             raise TypeError(f'Histogram assets do not support {joined} arguments.')
@@ -78,6 +99,8 @@ class Histogram(BaseAsset):
         self.x = x
         self.bin_count = DEFAULT_HISTOGRAM_BIN_COUNT if bin_count is None else bin_count
         self.time_granularity = granularity
+        self.group = group
+        self.color = color
         self.modifier_defaults = modifier_kwargs or None
         self.__post_init__()
 
@@ -88,6 +111,15 @@ class Histogram(BaseAsset):
             raise TypeError('Histogram assets require `x` to be a non-empty column name.')
         if self.x not in self.dataframe.columns:
             raise ValueError(f'Histogram column `{self.x}` was not found in the provided DataFrame.')
+        if self.group is not None:
+            if not isinstance(self.group, str) or not self.group:
+                raise TypeError('Histogram assets require `group` to be a non-empty column name when provided.')
+            if self.group not in self.dataframe.columns:
+                raise ValueError(f'Histogram group column `{self.group}` was not found in the provided DataFrame.')
+        if self.color is not None and self.group is None:
+            raise TypeError('Histogram assets require `group` when `color` is provided.')
+        if self.group is not None:
+            validate_pie_chart_color(self.dataframe, category_column=self.group, color=self.color, label='Histogram')
         series = self.dataframe[self.x]
         if pd.api.types.is_numeric_dtype(series):
             if not isinstance(self.bin_count, int) or self.bin_count < 1:
@@ -111,7 +143,18 @@ class Histogram(BaseAsset):
 def validate_histogram_modifier_defaults(value: dict[str, object] | None) -> None:
     validate_modifier_defaults(
         value,
-        allowed_keys={'bar_width', 'border_thickness', 'x_axis', 'y_axis', 'title', 'highlights'},
+        allowed_keys={
+            'bar_width',
+            'border_thickness',
+            'group_order',
+            'group_mode',
+            'group_normalize',
+            'group_spacing',
+            'x_axis',
+            'y_axis',
+            'title',
+            'highlights',
+        },
         context='Histogram assets',
     )
     if value is None:
@@ -120,6 +163,16 @@ def validate_histogram_modifier_defaults(value: dict[str, object] | None) -> Non
         validate_number(value['bar_width'], label='Histogram modifier `bar_width`')
     if 'border_thickness' in value:
         validate_number(value['border_thickness'], label='Histogram modifier `border_thickness`')
+    if 'group_order' in value:
+        validate_category_order_value(value['group_order'], label='Histogram modifier `group_order`')
+    if 'group_mode' in value and value['group_mode'] not in ('grouped', 'stacked'):
+        raise TypeError('Histogram modifier `group_mode` must be "grouped" or "stacked".')
+    if 'group_normalize' in value and normalize_group_normalization(value['group_normalize']) is None:
+        raise TypeError('Histogram modifier `group_normalize` must be "none", "max", "sum", or a bool.')
+    if 'group_spacing' in value:
+        validate_number(value['group_spacing'], label='Histogram modifier `group_spacing`')
+        if float(value['group_spacing']) < 0 or float(value['group_spacing']) > 50:
+            raise TypeError('Histogram modifier `group_spacing` must be between 0 and 50.')
     if 'x_axis' in value:
         validate_axis_modifier_defaults(value['x_axis'], label='Histogram modifier `x_axis`')
     if 'y_axis' in value:
@@ -129,11 +182,21 @@ def validate_histogram_modifier_defaults(value: dict[str, object] | None) -> Non
 
 
 def histogram_chart_modifier_defaults(
-    *, title: str, x_column: str, y_axis_label: str, bin_count: int | None, time_granularity: str | None
+    *,
+    title: str,
+    x_column: str,
+    y_axis_label: str,
+    bin_count: int | None,
+    time_granularity: str | None,
+    group_mode: str = 'stacked',
 ) -> dict[str, Any]:
     defaults = {
-        'bar_width': 90,
+        'bar_width': 100 if group_mode == 'grouped' else 90,
         'border_thickness': 0,
+        'group_order': DEFAULT_HISTOGRAM_CATEGORY_ORDER,
+        'group_mode': 'grouped',
+        'group_normalize': 'none',
+        'group_spacing': 20,
         'x_axis': axis_modifier_defaults(x_column),
         'y_axis': axis_modifier_defaults(y_axis_label),
         'title': title_modifier_defaults(title),
@@ -176,6 +239,41 @@ def histogram_chart_modifier_schema(default_modifiers: dict[str, Any]) -> list[d
         )
     return [
         *histogram_settings,
+        {
+            'id': 'group_order',
+            'title': 'Group order',
+            'kind': 'value',
+            'category': 'saved_view',
+            'server_targets': ['main'],
+            'default_value': default_modifiers['group_order'],
+        },
+        {
+            'id': 'group_mode',
+            'title': 'Group mode',
+            'kind': 'value',
+            'category': 'saved_view',
+            'server_targets': [],
+            'default_value': default_modifiers['group_mode'],
+        },
+        {
+            'id': 'group_normalize',
+            'title': 'Normalize groups',
+            'kind': 'value',
+            'category': 'saved_view',
+            'server_targets': [],
+            'default_value': default_modifiers['group_normalize'],
+        },
+        {
+            'id': 'group_spacing',
+            'title': 'Group spacing',
+            'kind': 'float',
+            'category': 'saved_view',
+            'server_targets': [],
+            'default_value': default_modifiers['group_spacing'],
+            'min_value': 0,
+            'max_value': 50,
+            'step': 1,
+        },
         {
             'id': 'bar_width',
             'title': 'Bar width',
@@ -236,6 +334,17 @@ def serialize_histogram(
     persisted = object_store.persist_value(asset.dataframe, 'pandas.DataFrame')
     column_definitions = dataframe_column_definitions(asset.dataframe)
     histogram_category = histogram_value_category(asset.dataframe[asset.x])
+    has_group = asset.group is not None
+    color_mapping = (
+        [
+            {'value': json_safe_value(value), 'color': color}
+            for value, color in normalize_pie_chart_color_mapping(
+                asset.dataframe, category_column=str(asset.group), color=asset.color
+            )
+        ]
+        if has_group and asset.group is not None
+        else []
+    )
     default_bin_count = (
         int(asset.bin_count) if histogram_category == 'numeric' and asset.bin_count is not None else None
     )
@@ -252,10 +361,15 @@ def serialize_histogram(
                 y_axis_label='Rows',
                 bin_count=default_bin_count,
                 time_granularity=default_time_granularity,
+                group_mode=(asset.modifier_defaults or {}).get('group_mode', 'grouped') if has_group else 'stacked',
             ),
             asset.modifier_defaults,
         ),
     }
+    default_modifiers['group_order'] = normalize_category_order_modifier_value(
+        default_modifiers['group_order'], label='Histogram modifier `group_order`'
+    )
+    default_modifiers['group_normalize'] = normalize_group_normalization(default_modifiers['group_normalize'])
     modifier_schema = [
         *dataset_modifier_schema(column_definitions, default_modifiers, filters_targets=['main', 'table']),
         *histogram_chart_modifier_schema(default_modifiers),
@@ -269,22 +383,39 @@ def serialize_histogram(
             'column': str(asset.x),
         },
     ]
+    if has_group:
+        modifier_schema.append(
+            {
+                'id': 'selected_groups',
+                'title': 'Selected groups',
+                'kind': 'value',
+                'category': 'transient_view',
+                'server_targets': ['table'],
+                'default_value': [],
+                'column': str(asset.group),
+            }
+        )
+    definition = {
+        **base_asset_definition(
+            asset_type=asset.asset_type_id,
+            interactive=True,
+            title=title,
+            description=description,
+            modifier_schema=modifier_schema,
+            default_modifiers=default_modifiers,
+        ),
+        'table_columns': [str(column) for column in asset.dataframe.columns],
+        'row_count': int(asset.dataframe.shape[0]),
+        'histogram_column': str(asset.x),
+        'histogram_color_mapping': color_mapping,
+        'histogram_default_color': DEFAULT_PIE_CHART_COLOR,
+    }
+    if has_group:
+        definition['histogram_group_column'] = str(asset.group)
     return SerializedAssetVersion(
         asset_type=asset.asset_type_id,
         interactive=True,
-        definition={
-            **base_asset_definition(
-                asset_type=asset.asset_type_id,
-                interactive=True,
-                title=title,
-                description=description,
-                modifier_schema=modifier_schema,
-                default_modifiers=default_modifiers,
-            ),
-            'table_columns': [str(column) for column in asset.dataframe.columns],
-            'row_count': int(asset.dataframe.shape[0]),
-            'histogram_column': str(asset.x),
-        },
+        definition=definition,
         modifier_schema=modifier_schema,
         default_modifiers=default_modifiers,
         objects=[SerializedAssetObject(object_role='backing_dataset', persisted=persisted)],
@@ -310,6 +441,9 @@ def prepare_histogram(
     histogram_category = dtype_category(histogram_dtype)
     if histogram_category not in {'numeric', 'date', 'datetime'}:
         raise InvalidRequestError(f'Histogram column `{histogram_column}` must be numeric, date, or datetime.')
+    group_column = definition.get('histogram_group_column')
+    if group_column is not None and group_column not in column_id_map:
+        raise InvalidRequestError('Histogram asset definition references an unknown group column.')
     resolved_page = resolve_page(default_modifiers, modifier_overrides)
     resolved_sort = resolve_sort(default_modifiers, modifier_overrides, column_id_map)
     resolved_filters = resolve_filters(default_modifiers, modifier_overrides, column_id_map, schema)
@@ -323,6 +457,12 @@ def prepare_histogram(
     table_frame = filtered_frame
     if selection_ranges:
         table_frame = apply_histogram_selections(table_frame, histogram_column, selection_ranges, column_id_map)
+    if group_column is not None:
+        selected_groups = resolve_histogram_selected_groups(
+            transient_modifiers, column=group_column, dtype=schema[column_id_map[group_column]]
+        )
+        if selected_groups:
+            table_frame = apply_histogram_group_selection(table_frame, group_column, selected_groups, column_id_map)
     table_frame = frame_with_sort(table_frame, resolved_sort, column_id_map)
     if histogram_category == 'numeric':
         resolved_bucket_modifiers = {'bin_count': resolve_histogram_bin_count(default_modifiers, modifier_overrides)}
@@ -331,6 +471,17 @@ def prepare_histogram(
             column=histogram_column,
             column_id_map=column_id_map,
             bin_count=resolved_bucket_modifiers['bin_count'],
+            group_column=group_column,
+            group_order=resolve_histogram_group_order(
+                default_modifiers,
+                modifier_overrides,
+                column=group_column,
+                dtype=schema[column_id_map[group_column]] if group_column else pl.Utf8,
+            )
+            if group_column
+            else None,
+            color_mapping_entries=definition.get('histogram_color_mapping'),
+            default_color=definition.get('histogram_default_color'),
         )
     else:
         resolved_bucket_modifiers = {
@@ -342,6 +493,17 @@ def prepare_histogram(
             column_id_map=column_id_map,
             time_granularity=resolved_bucket_modifiers['granularity'],
             histogram_category=histogram_category,
+            group_column=group_column,
+            group_order=resolve_histogram_group_order(
+                default_modifiers,
+                modifier_overrides,
+                column=group_column,
+                dtype=schema[column_id_map[group_column]] if group_column else pl.Utf8,
+            )
+            if group_column
+            else None,
+            color_mapping_entries=definition.get('histogram_color_mapping'),
+            default_color=definition.get('histogram_default_color'),
         )
     return {
         'main': main_payload,
@@ -369,6 +531,10 @@ def prepare_histogram_main_payload(
     column: str,
     column_id_map: dict[str, Any],
     bin_count: int,
+    group_column: str | None = None,
+    group_order: str | list[Any] | None = None,
+    color_mapping_entries: object = None,
+    default_color: object = None,
 ) -> dict[str, Any]:
     column_name = column_id_map[column]
     stats = frame.select(
@@ -396,6 +562,31 @@ def prepare_histogram_main_payload(
     if not math.isfinite(min_value) or not math.isfinite(max_value):
         raise InvalidRequestError(f'Histogram column `{column}` contains non-finite numeric values.')
     if min_value == max_value:
+        if group_column is not None and group_column in column_id_map:
+            group_name = column_id_map[group_column]
+            grouped_rows = (
+                frame.filter(pl.col(column_name).is_not_null() & pl.col(group_name).is_not_null())
+                .group_by(group_name)
+                .agg(pl.len().alias('count'))
+                .collect()
+                .to_dicts()
+            )
+            return grouped_histogram_payload(
+                [{'__histogram_bin_index': 0, **row} for row in grouped_rows],
+                column=column,
+                group_column=group_column,
+                group_name=group_name,
+                bin_count=1,
+                rows_total=rows_total,
+                non_null_rows=non_null_rows,
+                domain={'min': json_safe_value(min_value - 0.5), 'max': json_safe_value(max_value + 0.5)},
+                bin_values=[
+                    {'index': 0, 'start': json_safe_value(min_value - 0.5), 'end': json_safe_value(max_value + 0.5)}
+                ],
+                group_order=group_order or DEFAULT_HISTOGRAM_CATEGORY_ORDER,
+                color_mapping_entries=color_mapping_entries,
+                default_color=default_color,
+            )
         return {
             'kind': 'histogram',
             'x_column': column,
@@ -415,18 +606,49 @@ def prepare_histogram_main_payload(
     bin_width = (max_value - min_value) / bin_count
     if not math.isfinite(bin_width) or bin_width <= 0:
         raise InvalidRequestError(f'Histogram column `{column}` could not be binned safely.')
+    has_group = group_column is not None and group_column in column_id_map
+    group_name = column_id_map[group_column] if has_group else None
+    grouped = frame.filter(pl.col(column_name).is_not_null())
+    if has_group and group_name is not None:
+        grouped = grouped.filter(pl.col(group_name).is_not_null())
     grouped = (
-        frame.filter(pl.col(column_name).is_not_null())
-        .with_columns(
+        grouped.with_columns(
             (((pl.col(column_name) - min_value) / bin_width).floor().clip(0, bin_count - 1).cast(pl.Int64)).alias(
                 '__histogram_bin_index'
             )
         )
-        .group_by('__histogram_bin_index')
+        .group_by(
+            ['__histogram_bin_index', group_name] if has_group and group_name is not None else '__histogram_bin_index'
+        )
         .agg(pl.len().alias('count'))
-        .sort('__histogram_bin_index')
         .collect()
     )
+    if has_group and group_name is not None:
+        return grouped_histogram_payload(
+            grouped.to_dicts(),
+            column=column,
+            group_column=group_column,
+            group_name=group_name,
+            bin_count=bin_count,
+            rows_total=rows_total,
+            non_null_rows=non_null_rows,
+            domain=numeric_plot_domain(
+                min_value=min_value, max_value=max_value, column=column, context='Histogram column'
+            ),
+            bin_values=[
+                {
+                    'index': index,
+                    'start': json_safe_value(min_value + (bin_width * index)),
+                    'end': json_safe_value(
+                        max_value if index == bin_count - 1 else min_value + (bin_width * (index + 1))
+                    ),
+                }
+                for index in range(bin_count)
+            ],
+            group_order=group_order or DEFAULT_HISTOGRAM_CATEGORY_ORDER,
+            color_mapping_entries=color_mapping_entries,
+            default_color=default_color,
+        )
     counts_by_index = {int(row['__histogram_bin_index']): int(row['count']) for row in grouped.to_dicts()}
     bins: list[dict[str, Any]] = []
     for index in range(bin_count):
@@ -453,6 +675,76 @@ def prepare_histogram_main_payload(
     }
 
 
+def grouped_histogram_payload(
+    grouped_rows: list[dict[str, Any]],
+    *,
+    column: str,
+    group_column: str,
+    group_name: str,
+    bin_count: int,
+    rows_total: int,
+    non_null_rows: int,
+    domain: dict[str, Any],
+    bin_values: list[dict[str, Any]],
+    group_order: str | list[Any],
+    color_mapping_entries: object,
+    default_color: object,
+) -> dict[str, Any]:
+    groups_by_key: dict[str, Any] = {}
+    counts: dict[tuple[int, str], int] = {}
+    for row in grouped_rows:
+        group_value = json_safe_value(row.get(group_name))
+        if group_value is None:
+            continue
+        group_key = category_order_value_key(group_value)
+        groups_by_key[group_key] = group_value
+        counts[(int(row['__histogram_bin_index']), group_key)] = int(row['count'])
+    sorted_groups = sort_category_rows(
+        [
+            {'group': value, 'count': sum(count for (_, key), count in counts.items() if key == group_key)}
+            for group_key, value in groups_by_key.items()
+        ],
+        category_field='group',
+        value_field='count',
+        default_mode=DEFAULT_HISTOGRAM_CATEGORY_ORDER,
+        category_order=group_order,
+    )
+    colors = pie_chart_color_mapping_from_definition(color_mapping_entries)
+    resolved_default_color = (
+        default_color if isinstance(default_color, str) and default_color else DEFAULT_PIE_CHART_COLOR
+    )
+    bins: list[dict[str, Any]] = []
+    for bin_value in bin_values:
+        for group_index, group_entry in enumerate(sorted_groups):
+            group_value = group_entry['group']
+            group_key = category_order_value_key(group_value)
+            bins.append(
+                {
+                    **bin_value,
+                    'count': counts.get((bin_value['index'], group_key), 0),
+                    'group': group_value,
+                    'group_label': group_value if isinstance(group_value, str) else str(group_value),
+                    'group_index': group_index,
+                    'color': pie_chart_color_for_value(
+                        group_value,
+                        index=group_index,
+                        explicit_color_mapping=colors,
+                        default_color=resolved_default_color,
+                    ),
+                }
+            )
+    return {
+        'kind': 'histogram',
+        'x_column': column,
+        'group_column': group_column,
+        'rows_total': rows_total,
+        'non_null_rows': non_null_rows,
+        'bin_count': bin_count,
+        'domain': domain,
+        'bins': bins,
+    }
+
+
 def resolve_histogram_bin_count(default_modifiers: dict[str, Any], modifier_overrides: dict[str, Any]) -> int:
     candidate = (
         default_modifiers.get('bin_count', DEFAULT_HISTOGRAM_BIN_COUNT)
@@ -473,6 +765,19 @@ def resolve_histogram_time_granularity(default_modifiers: dict[str, Any], modifi
     if 'granularity' in modifier_overrides:
         candidate = modifier_overrides['granularity']
     return coerce_histogram_time_granularity(candidate)
+
+
+def resolve_histogram_group_order(
+    default_modifiers: dict[str, Any], modifier_overrides: dict[str, Any], *, column: str, dtype: pl.DataType
+) -> str | list[Any]:
+    return resolve_category_order(
+        default_modifiers,
+        modifier_overrides,
+        default_mode=DEFAULT_HISTOGRAM_CATEGORY_ORDER,
+        column=column,
+        dtype=dtype,
+        modifier_id='group_order',
+    )
 
 
 def resolve_histogram_selection_ranges(
@@ -518,6 +823,27 @@ def resolve_histogram_selection_ranges(
     return resolved_ranges
 
 
+def resolve_histogram_selected_groups(
+    transient_modifiers: dict[str, Any], *, column: str, dtype: pl.DataType
+) -> list[Any]:
+    candidate = transient_modifiers.get('selected_groups') if isinstance(transient_modifiers, dict) else None
+    if candidate in (None, []):
+        return []
+    if not isinstance(candidate, list):
+        raise InvalidRequestError('transient_modifiers.selected_groups must be an array.')
+    resolved: list[Any] = []
+    seen_keys: set[str] = set()
+    for value in candidate:
+        coerced = coerce_filter_value(dtype, value, column=column, kind='selected_groups')
+        if coerced is None:
+            raise InvalidRequestError('transient_modifiers.selected_groups cannot contain null values.')
+        value_key = category_order_value_key(coerced)
+        if value_key not in seen_keys:
+            seen_keys.add(value_key)
+            resolved.append(coerced)
+    return resolved
+
+
 def apply_histogram_selections(
     frame: pl.LazyFrame,
     column: str,
@@ -532,6 +858,13 @@ def apply_histogram_selections(
             upper_operator = pl.col(column_name) < selection_range['upper']
         predicate = predicate | ((pl.col(column_name) >= selection_range['lower']) & upper_operator)
     return frame.filter(pl.col(column_name).is_not_null() & predicate)
+
+
+def apply_histogram_group_selection(
+    frame: pl.LazyFrame, column: str, selected_groups: list[Any], column_id_map: dict[str, Any]
+) -> pl.LazyFrame:
+    column_name = column_id_map[column]
+    return frame.filter(pl.col(column_name).is_not_null() & pl.col(column_name).is_in(selected_groups).fill_null(False))
 
 
 def coerce_bin_count(value: object) -> int:
@@ -566,6 +899,10 @@ def prepare_temporal_histogram_main_payload(
     column_id_map: dict[str, Any],
     time_granularity: str,
     histogram_category: str,
+    group_column: str | None = None,
+    group_order: str | list[Any] | None = None,
+    color_mapping_entries: object = None,
+    default_color: object = None,
 ) -> dict[str, Any]:
     column_name = column_id_map[column]
     stats = frame.select(
@@ -598,19 +935,67 @@ def prepare_temporal_histogram_main_payload(
     bin_start = floor_temporal_value(min_value, actual_time_granularity)
     max_bin_start = floor_temporal_value(max_value, actual_time_granularity)
     final_end = advance_temporal_value(max_bin_start, actual_time_granularity)
+    has_group = group_column is not None and group_column in column_id_map
+    group_name = column_id_map[group_column] if has_group else None
+    grouped_frame = frame.filter(pl.col(column_name).is_not_null())
+    if has_group and group_name is not None:
+        grouped_frame = grouped_frame.filter(pl.col(group_name).is_not_null())
     grouped = (
-        frame.filter(pl.col(column_name).is_not_null())
-        .with_columns(
+        grouped_frame.with_columns(
             pl.col(column_name)
             .dt.truncate(polars_granularity_every(actual_time_granularity))
             .alias('__histogram_bin_start')
         )
-        .group_by('__histogram_bin_start')
+        .group_by(
+            ['__histogram_bin_start', group_name] if has_group and group_name is not None else '__histogram_bin_start'
+        )
         .agg(pl.len().alias('count'))
         .sort('__histogram_bin_start')
         .collect()
     )
-    counts_by_start = {row['__histogram_bin_start']: int(row['count']) for row in grouped.to_dicts()}
+    grouped_rows = grouped.to_dicts()
+    if has_group and group_name is not None:
+        bin_values: list[dict[str, Any]] = []
+        cursor = bin_start
+        index = 0
+        while cursor < final_end:
+            next_cursor = advance_temporal_value(cursor, actual_time_granularity)
+            bin_values.append(
+                {
+                    'index': index,
+                    'start': temporal_value_to_epoch_ms(cursor),
+                    'end': temporal_value_to_epoch_ms(next_cursor),
+                    'label': format_histogram_bin_label(cursor, next_cursor, actual_time_granularity),
+                }
+            )
+            cursor = next_cursor
+            index += 1
+        starts_to_indices = {value['start']: value['index'] for value in bin_values}
+        rows_with_indices = [
+            {
+                **row,
+                '__histogram_bin_index': starts_to_indices[temporal_value_to_epoch_ms(row['__histogram_bin_start'])],
+            }
+            for row in grouped_rows
+        ]
+        payload = grouped_histogram_payload(
+            rows_with_indices,
+            column=column,
+            group_column=group_column,
+            group_name=group_name,
+            bin_count=len(bin_values),
+            rows_total=rows_total,
+            non_null_rows=non_null_rows,
+            domain={'min': temporal_value_to_epoch_ms(bin_start), 'max': temporal_value_to_epoch_ms(final_end)},
+            bin_values=bin_values,
+            group_order=group_order or DEFAULT_HISTOGRAM_CATEGORY_ORDER,
+            color_mapping_entries=color_mapping_entries,
+            default_color=default_color,
+        )
+        payload['x_value_kind'] = 'temporal'
+        payload['time_granularity'] = actual_time_granularity
+        return payload
+    counts_by_start = {row['__histogram_bin_start']: int(row['count']) for row in grouped_rows}
     bins: list[dict[str, Any]] = []
     cursor = bin_start
     index = 0
