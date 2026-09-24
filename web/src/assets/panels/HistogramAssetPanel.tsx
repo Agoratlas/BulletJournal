@@ -497,7 +497,7 @@ export function HistogramAssetPanel({
   )
 
   return (
-    <AssetPanelFrame asset={asset} panelInfo={panelInfo} settingsTitle="Modifier overrides" settingsBody={settingsBody} settingsActive={hasSettingsOverrides} sectionId={sectionId} frameVariant={frameVariant} showExportActions={viewerMode === 'dashboard'} isPanelResized={isPanelResized}>
+    <AssetPanelFrame asset={asset} panelInfo={panelInfo} settingsTitle="Modifier overrides" settingsBody={settingsBody} settingsActive={hasSettingsOverrides} sectionId={sectionId} frameVariant={frameVariant} showExportActions isPanelResized={isPanelResized}>
       <div className="asset-dataframe-panel asset-histogram-panel">
         {overrideIncompatible ? <OverrideIncompatibleNotice onReset={onPersistedStateChange ? handleResetOverrides : undefined} /> : null}
         <PrepareErrorsNotice errors={prepareErrors} />
@@ -1002,18 +1002,14 @@ function buildHistogramVegaLiteSpec(
         },
         legend: { title: histogram.group_column },
       } } : { color: {
-        condition: [
-          {
-            test: 'data("selected_bars_store").length === 0 && data("brush_selection_store").length === 0',
-            value: '#2563eb',
-          },
-          { param: 'selected_bars', empty: false, value: '#2563eb' },
-          {
-            test: `isArray(${HISTOGRAM_BRUSH_SIGNAL_NAME}) && datum.end > ${HISTOGRAM_BRUSH_SIGNAL_NAME}[0] && datum.start < ${HISTOGRAM_BRUSH_SIGNAL_NAME}[1]`,
-            value: '#2563eb',
-          },
-        ],
-        value: '#94a3b8',
+        field: 'color',
+        type: 'nominal',
+        scale: null,
+        legend: null,
+        condition: {
+          test: `data("selected_bars_store").length > 0 || data("brush_selection_store").length > 0 ? !(datum.is_selected || (isArray(${HISTOGRAM_BRUSH_SIGNAL_NAME}) && datum.end > ${HISTOGRAM_BRUSH_SIGNAL_NAME}[0] && datum.start < ${HISTOGRAM_BRUSH_SIGNAL_NAME}[1])) : false`,
+          value: '#94a3b8',
+        },
       } }),
       opacity: hasGroups ? {
         condition: [

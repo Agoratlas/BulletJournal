@@ -8,7 +8,6 @@ export function backgroundCategoryGridLayer(gridColor: string, paddingInner: num
         type: 'nominal' as const,
         sort: { field: 'category_index', op: 'min' as const, order: 'ascending' as const },
         scale: { paddingInner, paddingOuter: 0.08 },
-        axis: null,
       },
     },
   }

@@ -175,18 +175,20 @@ x_axis={
 - `show_grid_lines`: shows grid lines when `True`.
 - `scale`: `lin` for a linear scale or `log` for a logarithmic scale. Logarithmic scaling applies to numeric axes with positive values. A bar chart's category axis and a date histogram's time axis remain non-logarithmic.
 
+`tick_size` controls the font size of the tick labels (in pixels), not the length of the tick marks.
+
 Chart title modifiers also use a shared shape:
 
 ```python
 title={
-    'size': 16,
+    'size': 20,
     'text': 'Movie duration',
     'hide_title': False,
     'position': 'top',
 }
 ```
 
-- `size`: title size, or `None` to use the chart default.
+- `size`: title font size (default: `20`), or `None` to use the chart default.
 - `text`: title text.
 - `hide_title`: hides the title when `True`. Chart titles are hidden by default.
 - `position`: `top` or `bottom`.
@@ -272,13 +274,13 @@ collection.add_asset(asset, name='child_name', title='Child title')
 
 ### Options and modifiers
 
-- `display_mode`: initial display mode. `single` shows one child at a time; `all` shows every child. The default is `single`.
+- `display_mode`: initial display mode. `single` shows one child at a time; `all` shows every child in one column; `2_columns` and `3_columns` show all children in a two- or three-column grid. The default is `single`.
 - Child `name`: optional unique name. When omitted, BulletJournal uses `asset_1`, `asset_2`, and so on.
 - Child `title`: optional display title. When omitted, BulletJournal uses `Asset 1`, `Asset 2`, and so on.
 - `selected_child`: panel setting that chooses the visible child in `single` mode.
 - Child modifiers: each child keeps the modifiers supported by its own asset type. Dashboard panels also save each child's view settings and chart height.
 
-The panel can switch between `single` and `all` while it is open. Currently, a saved `all` panel setting is not restored when the collection's constructor default is `single`; set `display_mode='all'` in the notebook when the collection should always open in that mode.
+The panel can switch between all four modes while it is open. Choose a column mode for compact side-by-side charts; each child retains its own panel settings.
 
 ### Example
 
@@ -374,7 +376,7 @@ assets.Histogram(
 - `bin_count`: number of ranges for a numeric column. The default is `20`; accepted panel values are `1` through `100`.
 - `granularity`: grouping for a date or datetime column. Accepted values are `auto`, `year`, `month`, `week`, `day`, and `hour`. Date-only columns do not support `hour`.
 - `group`: optional column that splits every numeric or temporal bin into groups.
-- `color`: optional color column or dictionary whose keys match group values. `color` requires `group`; a color column must give each group one non-empty color string.
+- `color`: optional color string for all bars when `group` is omitted. With `group`, a color column name or dictionary whose keys match group values; a color column must give each group one non-empty color string.
 
 Use `bin_count`, not `bins`. Histograms do not accept `shape` or `size` columns.
 
@@ -404,6 +406,7 @@ duration_histogram = assets.Histogram(
     movies,
     x='duration',
     bin_count=30,
+    color='#22c55e',
     bar_width=82,
     border_thickness=1,
     x_axis={'label': 'Duration in minutes', 'tick_count': 8},
@@ -419,7 +422,7 @@ assets.push(
 )
 ```
 
-This splits movie durations into 30 ranges, makes the bars slightly narrower, adds a thin border, changes both axis labels, and shows the chart title. Dragging across bars temporarily filters the table to the selected duration range. For grouped histograms, clicking a group or legend value temporarily filters the linked table; this combines with any selected ranges.
+This splits movie durations into 30 green ranges, makes the bars slightly narrower, adds a thin border, changes both axis labels, and shows the chart title. Dragging across bars temporarily filters the table to the selected duration range. For grouped histograms, clicking a group or legend value temporarily filters the linked table; this combines with any selected ranges.
 
 ### Grouped example
 

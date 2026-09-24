@@ -347,6 +347,7 @@ export function CollectionAssetPanel({
         settingsBody={settingsBody}
         settingsActive={hasSettingsOverrides}
         headerCenter={headerCenter}
+        showExportActions
         sectionId={sectionId}
         frameVariant={frameVariant}
       >

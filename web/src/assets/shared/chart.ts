@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 
 import type { AssetChartTheme, ChartAxisOverrides, ChartTitleOverrides, HistogramSelectionRange, ScatterPlotSelectionBounds } from './types'
-import { optionalIntegerFromInput, optionalNonNegativeNumberFromInput, optionalPositiveNumberFromInput } from './modifiers'
+import { optionalIntegerFromInput, optionalPositiveNumberFromInput } from './modifiers'
 
 export function buildAxisSpec(overrides: ChartAxisOverrides, defaultLabel: string, fontScale = 1) {
   const resolvedLabel = resolvedAxisLabel(overrides.label, defaultLabel)
@@ -9,7 +9,7 @@ export function buildAxisSpec(overrides: ChartAxisOverrides, defaultLabel: strin
     title: overrides.hideLabel ? null : resolvedLabel,
     titleFontSize: (optionalPositiveNumberFromInput(overrides.labelSize) ?? 12) * fontScale,
     tickCount: optionalIntegerFromInput(overrides.tickCount),
-    tickSize: optionalNonNegativeNumberFromInput(overrides.tickSize),
+    labelFontSize: (optionalPositiveNumberFromInput(overrides.tickSize) ?? 11) * fontScale,
     grid: overrides.showGridLines,
     gridZindex: 0,
     labelFlush: false,
@@ -30,7 +30,7 @@ export function buildVegaLiteChartConfig(theme: AssetChartTheme, fontScale = 1) 
       color: theme.axisTitleColor,
       offset: 18,
       font: VEGA_PANEL_FONT_FAMILY,
-      fontSize: 16 * fontScale,
+      fontSize: 20 * fontScale,
     },
     axis: {
       domainColor: theme.axisDomainColor,
@@ -54,9 +54,12 @@ export function buildVegaLiteChartConfig(theme: AssetChartTheme, fontScale = 1) 
     header: {
       labelFont: VEGA_PANEL_FONT_FAMILY,
       titleFont: VEGA_PANEL_FONT_FAMILY,
+      labelFontSize: 11 * fontScale,
+      titleFontSize: 12 * fontScale,
     },
     text: {
       font: VEGA_PANEL_FONT_FAMILY,
+      fontSize: 11 * fontScale,
     },
   }
 }
@@ -67,7 +70,7 @@ export function buildChartTitle(overrides: ChartTitleOverrides, defaultText: str
   }
   return {
     text: overrides.text.trim() || defaultText,
-    fontSize: (optionalPositiveNumberFromInput(overrides.size) ?? 16) * fontScale,
+    fontSize: (optionalPositiveNumberFromInput(overrides.size) ?? 20) * fontScale,
     orient: overrides.position,
   }
 }

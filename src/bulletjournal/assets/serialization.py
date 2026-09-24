@@ -107,7 +107,7 @@ def axis_modifier_defaults(label: str) -> dict[str, Any]:
 
 def title_modifier_defaults(text: str) -> dict[str, Any]:
     return {
-        'size': 14,
+        'size': 20,
         'text': text,
         'hide_title': True,
         'position': 'top',

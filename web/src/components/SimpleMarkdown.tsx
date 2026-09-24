@@ -1,185 +1,146 @@
 import type { ReactNode } from 'react'
 
-type SimpleMarkdownProps = {
-  text: string
-  className?: string
-}
-
+type SimpleMarkdownProps = { text: string; className?: string }
+type ListItem = { text: string; children: ListBlock[] }
+type ListBlock = { kind: 'list'; ordered: boolean; items: ListItem[] }
+type TableAlignment = 'left' | 'center' | 'right'
 type Block =
   | { kind: 'paragraph'; lines: string[] }
-  | { kind: 'unordered-list'; items: string[] }
-  | { kind: 'ordered-list'; items: string[] }
+  | ListBlock
   | { kind: 'heading'; level: number; text: string }
+  | { kind: 'rule' }
+  | { kind: 'table'; headers: string[]; alignments: TableAlignment[]; rows: string[][] }
+
+function tableCells(line: string): string[] {
+  return line.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map((cell) => cell.trim())
+}
+
+function isTableSeparator(line: string, count: number): boolean {
+  const cells = tableCells(line)
+  return cells.length === count && cells.every((cell) => /^:?-{3,}:?$/.test(cell))
+}
 
 export function SimpleMarkdown({ text, className }: SimpleMarkdownProps) {
   const lines = text.split(/\r?\n/)
   const blocks: Block[] = []
-  let paragraphLines: string[] = []
-  let unorderedListItems: string[] = []
-  let orderedListItems: string[] = []
+  let paragraph: string[] = []
+  let listStack: Array<{ indent: number; block: ListBlock }> = []
 
   function flushParagraph() {
-    if (!paragraphLines.length) {
-      return
-    }
-    blocks.push({ kind: 'paragraph', lines: [...paragraphLines] })
-    paragraphLines = []
+    if (paragraph.length) blocks.push({ kind: 'paragraph', lines: paragraph })
+    paragraph = []
   }
 
-  function flushUnorderedList() {
-    if (!unorderedListItems.length) {
-      return
-    }
-    blocks.push({ kind: 'unordered-list', items: [...unorderedListItems] })
-    unorderedListItems = []
-  }
-
-  function flushOrderedList() {
-    if (!orderedListItems.length) {
-      return
-    }
-    blocks.push({ kind: 'ordered-list', items: [...orderedListItems] })
-    orderedListItems = []
-  }
-
-  function flushOpenBlocks() {
-    flushParagraph()
-    flushUnorderedList()
-    flushOrderedList()
-  }
-
-  for (const line of lines) {
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index]
     const trimmed = line.trim()
     if (!trimmed) {
-      flushOpenBlocks()
-      continue
-    }
-
-    const headingMatch = trimmed.match(/^(#{1,6})\s+(.+)$/)
-    if (headingMatch) {
-      flushOpenBlocks()
-      blocks.push({ kind: 'heading', level: headingMatch[1].length, text: headingMatch[2].trim() })
-      continue
-    }
-
-    const unorderedListMatch = trimmed.match(/^[-*+]\s+(.+)$/)
-    if (unorderedListMatch) {
       flushParagraph()
-      flushOrderedList()
-      unorderedListItems.push(unorderedListMatch[1].trim())
+      listStack = []
       continue
     }
-
-    const orderedListMatch = trimmed.match(/^\d+\.\s+(.+)$/)
-    if (orderedListMatch) {
+    const heading = trimmed.match(/^(#{1,6})\s+(.+)$/)
+    const list = line.match(/^(\s*)([-*+]|\d+\.)\s+(.+)$/)
+    const headers = trimmed.includes('|') ? tableCells(trimmed) : []
+    if (headers.length >= 2 && index + 1 < lines.length && isTableSeparator(lines[index + 1], headers.length)) {
       flushParagraph()
-      flushUnorderedList()
-      orderedListItems.push(orderedListMatch[1].trim())
-      continue
+      listStack = []
+      const alignments = tableCells(lines[index + 1]).map((cell): TableAlignment => {
+        if (cell.startsWith(':') && cell.endsWith(':')) return 'center'
+        return cell.endsWith(':') ? 'right' : 'left'
+      })
+      index += 1
+      const rows: string[][] = []
+      while (index + 1 < lines.length && lines[index + 1].trim().includes('|')) {
+        rows.push(tableCells(lines[++index]))
+      }
+      blocks.push({ kind: 'table', headers, alignments, rows })
+    } else if (/^(?:-{3,}|\*{3,}|_{3,})$/.test(trimmed)) {
+      flushParagraph()
+      listStack = []
+      blocks.push({ kind: 'rule' })
+    } else if (heading) {
+      flushParagraph()
+      listStack = []
+      blocks.push({ kind: 'heading', level: heading[1].length, text: heading[2].trim() })
+    } else if (list) {
+      flushParagraph()
+      const indent = list[1].replace(/\t/g, '  ').length
+      const ordered = /\d/.test(list[2][0])
+      while (listStack.length && (listStack[listStack.length - 1].indent > indent
+        || (listStack[listStack.length - 1].indent === indent && listStack[listStack.length - 1].block.ordered !== ordered))) {
+        listStack.pop()
+      }
+      if (!listStack.length || listStack[listStack.length - 1].indent < indent) {
+        const block: ListBlock = { kind: 'list', ordered, items: [] }
+        if (listStack.length) {
+          const parent = listStack[listStack.length - 1].block.items.at(-1)
+          parent?.children.push(block)
+        } else {
+          blocks.push(block)
+        }
+        listStack.push({ indent, block })
+      }
+      listStack[listStack.length - 1].block.items.push({ text: list[3].trim(), children: [] })
+    } else {
+      listStack = []
+      paragraph.push(trimmed)
     }
-
-    flushUnorderedList()
-    flushOrderedList()
-    paragraphLines.push(trimmed)
   }
+  flushParagraph()
 
-  flushOpenBlocks()
-
-  return (
-    <div className={className ? `simple-markdown ${className}` : 'simple-markdown'}>
-      {blocks.map((block, index) => renderBlock(block, index))}
-    </div>
-  )
+  return <div className={className ? `simple-markdown ${className}` : 'simple-markdown'}>
+    {blocks.map((block, index) => renderBlock(block, index))}
+  </div>
 }
 
-function renderBlock(block: Block, index: number): JSX.Element {
-  if (block.kind === 'paragraph') {
-    const key = `p-${index}`
-    return (
-      <p key={key}>
-        {block.lines.map((line, lineIndex) => (
-          <InlineMarkdown key={`${key}-${lineIndex}`} text={line} withBreak={lineIndex < block.lines.length - 1} />
-        ))}
-      </p>
-    )
+function renderBlock(block: Block, key: number): JSX.Element {
+  if (block.kind === 'paragraph') return <p key={key}>{block.lines.map((line, index) =>
+    <InlineMarkdown key={index} text={line} withBreak={index < block.lines.length - 1} />)}</p>
+  if (block.kind === 'list') {
+    const items = block.items.map((item, index) => <li key={index}>
+      <InlineMarkdown text={item.text} />
+      {item.children.map((child, childIndex) => renderBlock(child, childIndex))}
+    </li>)
+    return block.ordered ? <ol key={key}>{items}</ol> : <ul key={key}>{items}</ul>
   }
-
-  if (block.kind === 'unordered-list') {
-    return (
-      <ul key={`ul-${index}`}>
-        {block.items.map((item, itemIndex) => (
-          <li key={`ul-${index}-${itemIndex}`}><InlineMarkdown text={item} /></li>
-        ))}
-      </ul>
-    )
-  }
-
-  if (block.kind === 'ordered-list') {
-    return (
-      <ol key={`ol-${index}`}>
-        {block.items.map((item, itemIndex) => (
-          <li key={`ol-${index}-${itemIndex}`}><InlineMarkdown text={item} /></li>
-        ))}
-      </ol>
-    )
-  }
-
+  if (block.kind === 'rule') return <hr key={key} />
+  if (block.kind === 'table') return <div key={key} className="simple-markdown-table-scroll"><table>
+    <thead><tr>{block.headers.map((cell, index) => <th key={index} style={{ textAlign: block.alignments[index] }}>{renderInlineMarkdown(cell)}</th>)}</tr></thead>
+    <tbody>{block.rows.map((row, index) => <tr key={index}>{block.headers.map((_, column) =>
+      <td key={column} style={{ textAlign: block.alignments[column] }}>{renderInlineMarkdown(row[column] ?? '')}</td>)}</tr>)}</tbody>
+  </table></div>
   const HeadingTag = (`h${Math.min(block.level + 1, 6)}` as keyof JSX.IntrinsicElements)
-  return <HeadingTag key={`h-${index}`}>{renderInlineMarkdown(block.text)}</HeadingTag>
+  return <HeadingTag key={key}>{renderInlineMarkdown(block.text)}</HeadingTag>
 }
 
 function InlineMarkdown({ text, withBreak = false }: { text: string; withBreak?: boolean }) {
-  return (
-    <>
-      {renderInlineMarkdown(text)}
-      {withBreak ? <br /> : null}
-    </>
-  )
+  return <>{renderInlineMarkdown(text)}{withBreak ? <br /> : null}</>
 }
 
 function renderInlineMarkdown(text: string): ReactNode[] {
   const nodes: ReactNode[] = []
-  const pattern = /(\[[^\]]+\]\((?:https?:\/\/|mailto:)[^)]+\)|`[^`]+`|\*\*[^*]+\*\*|__[^_]+__|\*[^*]+\*|_[^_]+_)/g
+  // Only this narrowly specified color span is interpreted as markup. All other HTML
+  // remains ordinary escaped React text; never inject asset HTML into the DOM.
+  const pattern = /(<span style="color:#[0-9a-fA-F]{6}">[\s\S]*?<\/span>|\[[^\]]+\]\((?:https?:\/\/|mailto:)[^)]+\)|`[^`]+`|\*\*[^*]+\*\*|__[^_]+__|\*[^*]+\*|_[^_]+_)/g
   let lastIndex = 0
-  let match: RegExpExecArray | null = pattern.exec(text)
-
-  while (match) {
-    if (match.index > lastIndex) {
-      nodes.push(text.slice(lastIndex, match.index))
-    }
+  for (const match of text.matchAll(pattern)) {
+    const start = match.index ?? 0
+    if (start > lastIndex) nodes.push(text.slice(lastIndex, start))
     nodes.push(renderInlineToken(match[0], nodes.length))
-    lastIndex = match.index + match[0].length
-    match = pattern.exec(text)
+    lastIndex = start + match[0].length
   }
-
-  if (lastIndex < text.length) {
-    nodes.push(text.slice(lastIndex))
-  }
-
+  if (lastIndex < text.length) nodes.push(text.slice(lastIndex))
   return nodes
 }
 
 function renderInlineToken(token: string, key: number): ReactNode {
-  if (token.startsWith('`') && token.endsWith('`')) {
-    return <code key={key}>{token.slice(1, -1)}</code>
-  }
-
-  if ((token.startsWith('**') && token.endsWith('**')) || (token.startsWith('__') && token.endsWith('__'))) {
-    return <strong key={key}>{renderInlineMarkdown(token.slice(2, -2))}</strong>
-  }
-
-  if ((token.startsWith('*') && token.endsWith('*')) || (token.startsWith('_') && token.endsWith('_'))) {
-    return <em key={key}>{renderInlineMarkdown(token.slice(1, -1))}</em>
-  }
-
-  const linkMatch = token.match(/^\[([^\]]+)\]\(((?:https?:\/\/|mailto:)[^)]+)\)$/)
-  if (linkMatch) {
-    return (
-      <a key={key} href={linkMatch[2]} target="_blank" rel="noreferrer">
-        {renderInlineMarkdown(linkMatch[1])}
-      </a>
-    )
-  }
-
+  const colorSpan = token.match(/^<span style="color:(#[0-9a-fA-F]{6})">([\s\S]*?)<\/span>$/)
+  if (colorSpan) return <span key={key} style={{ color: colorSpan[1] }}>{renderInlineMarkdown(colorSpan[2])}</span>
+  if (token.startsWith('`')) return <code key={key}>{token.slice(1, -1)}</code>
+  if (token.startsWith('**') || token.startsWith('__')) return <strong key={key}>{renderInlineMarkdown(token.slice(2, -2))}</strong>
+  if (token.startsWith('*') || token.startsWith('_')) return <em key={key}>{renderInlineMarkdown(token.slice(1, -1))}</em>
+  const link = token.match(/^\[([^\]]+)\]\(((?:https?:\/\/|mailto:)[^)]+)\)$/)
+  if (link) return <a key={key} href={link[2]} target="_blank" rel="noreferrer">{renderInlineMarkdown(link[1])}</a>
   return token
 }

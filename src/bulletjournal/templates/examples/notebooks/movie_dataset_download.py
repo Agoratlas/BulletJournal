@@ -55,16 +55,27 @@ def _(movie_df):
 
 @app.cell
 def _(movie_csv_url, movie_df, t0, t1):
+    memory_usage_mb = movie_df.memory_usage(deep=True).sum() / 1_000_000
+    non_empty_values = int(movie_df.count().sum())
+    empty_values = movie_df.size - non_empty_values
     md_summary = assets.Markdown(
-        f"""# Movie dataset report
+        f"""## Download
+- **Source:** [Dataset URL]({movie_csv_url})
+  - Loaded into a `pandas.DataFrame` and published downstream as the `movies` artifact
+- **Status:** <span style="color:#3aa85b">**Download complete**</span>
+- **Elapsed time:** {t1 - t0:.2f} seconds
 
-## Download
-- [Dataset URL]({movie_csv_url})
-- Download took **{t1 - t0:.2f} seconds**.
+---
 
-## Dataset
+## Dataset at a glance
 
-The dataset has {movie_df.shape[0]} rows and {movie_df.shape[1]} columns.
+| Metric | Value |
+| --- | ---: |
+| Rows | {movie_df.shape[0]} |
+| Columns | {movie_df.shape[1]} |
+| DataFrame memory usage | {memory_usage_mb:.1f} MB |
+| Non-empty values | {non_empty_values:,} |
+| Empty values | {empty_values:,} |
 """
     )
 

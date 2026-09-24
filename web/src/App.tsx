@@ -4658,7 +4658,8 @@ function App() {
                  setArtifactExplorerOpen(true)
                }}
                onOpenAssets={(nodeId) => {
-                 navigateToPath(notebookAssetsUrl(nodeId))
+                 selectSingleNode(nodeId, { openInspector: false })
+                 setRightPanelMode('assets')
                }}
               onCanvasInteract={() => setTemplatesCollapsed(true)}
                 onCanvasClear={() => {

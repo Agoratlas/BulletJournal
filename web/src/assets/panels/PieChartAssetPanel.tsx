@@ -450,7 +450,7 @@ export function PieChartAssetPanel({
   )
 
   return (
-    <AssetPanelFrame asset={asset} panelInfo={panelInfo} settingsTitle="Modifier overrides" settingsBody={settingsBody} settingsActive={hasSettingsOverrides} sectionId={sectionId} frameVariant={frameVariant} showExportActions={viewerMode === 'dashboard'} isPanelResized={isPanelResized}>
+    <AssetPanelFrame asset={asset} panelInfo={panelInfo} settingsTitle="Modifier overrides" settingsBody={settingsBody} settingsActive={hasSettingsOverrides} sectionId={sectionId} frameVariant={frameVariant} showExportActions isPanelResized={isPanelResized}>
       <div className="asset-dataframe-panel asset-pie-chart-panel">
         {overrideIncompatible ? <OverrideIncompatibleNotice onReset={onPersistedStateChange ? handleResetOverrides : undefined} /> : null}
         <PrepareErrorsNotice errors={prepareErrors} />
@@ -552,9 +552,9 @@ function PieChartChart({
   onSelectionChange: (categories: PieChartSelectionValue[]) => void
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null)
+  const [containerWidth, setContainerWidth] = useState(0)
   const [chartError, setChartError] = useState<string | null>(null)
   const viewRef = useRef<VegaEmbedResult | null>(null)
-  const initialChartHeightRef = useRef(chartHeight)
   const onSelectionChangeRef = useRef(onSelectionChange)
   const chartTheme = useAssetChartTheme()
   const displaySlices = useMemo(
@@ -564,17 +564,28 @@ function PieChartChart({
 
   onSelectionChangeRef.current = onSelectionChange
 
+  useLayoutEffect(() => {
+    const container = containerRef.current
+    if (!container) return
+    const updateWidth = () => setContainerWidth(container.clientWidth)
+    updateWidth()
+    const observer = new ResizeObserver(updateWidth)
+    observer.observe(container)
+    return () => observer.disconnect()
+  }, [displaySlices.length])
+
   const spec = useMemo(
     () => buildPieChartVegaLiteSpec(
       displaySlices,
       selectedCategories,
       chartTheme,
-      initialChartHeightRef.current,
+      chartHeight,
+      containerWidth,
       overrides,
       defaultOverrides,
       chartScale,
     ),
-    [chartScale, chartTheme, defaultOverrides, displaySlices, overrides, selectedCategories],
+    [chartHeight, chartScale, chartTheme, containerWidth, defaultOverrides, displaySlices, overrides, selectedCategories],
   )
 
   useEffect(() => {
@@ -675,24 +686,29 @@ function buildPieChartVegaLiteSpec(
   selectedCategories: PieChartSelectionValue[],
   theme: ReturnType<typeof useAssetChartTheme>,
   chartHeight: number,
+  containerWidth: number,
   overrides: PieChartChartOverrides,
   defaultOverrides: PieChartChartOverrides,
   chartScale: number,
 ): VisualizationSpec {
-  const titlePadding = overrides.title.hideTitle ? 8 : 52
-  const outerRadius = Math.max(80, Math.floor((chartHeight - titlePadding) / 2))
+  const outerRadius = Math.max(1, Math.floor(Math.min(
+    0.8 * chartHeight,
+    0.6 * (containerWidth || chartHeight),
+  ) / 2))
   const innerRadius = outerRadius * pieChartInnerRadiusValue(overrides, defaultOverrides)
   const labelPosition = pieChartLabelPositionValue(overrides, defaultOverrides)
   const labelThreshold = pieChartPercentageValue(overrides.labelThreshold, defaultOverrides.labelThreshold, 5, 0, 100)
-  const borderThickness = optionalNonNegativeNumberFromInput(overrides.borderThickness) ?? 3
-  const labelSize = optionalPositiveNumberFromInput(overrides.labelSize) ?? optionalPositiveNumberFromInput(defaultOverrides.labelSize) ?? 12
+  const borderThickness = (optionalNonNegativeNumberFromInput(overrides.borderThickness) ?? 3) * chartScale
+  const labelSize = (optionalPositiveNumberFromInput(overrides.labelSize) ?? optionalPositiveNumberFromInput(defaultOverrides.labelSize) ?? 12) * chartScale
   const opaqueLabelColor = opaqueColor(theme.axisTitleColor)
   const totalCount = displaySlices.reduce((sum, slice) => sum + slice.count, 0)
   let cumulativeCount = 0
   return {
     $schema: 'https://vega.github.io/schema/vega-lite/v6.json',
-    autosize: { type: 'fit', contains: 'padding', resize: true },
-    width: 'container',
+    // Fix the plot coordinate system so changing label bounds or hover tooltips
+    // cannot move the center of the arcs.
+    autosize: { type: 'fit', contains: 'padding', resize: false },
+    width: containerWidth || chartHeight,
     height: chartHeight,
     background: 'transparent',
     padding: buildChartPadding(overrides.title),

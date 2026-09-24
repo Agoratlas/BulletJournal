@@ -527,7 +527,7 @@ export function AxisOverridesSection({
       </label>
 
       <label className="asset-dataviz-field">
-        <span className={modifierFieldLabelClassName(!valuesEqual(overrides.tickSize, defaultOverrides.tickSize))}>Tick size</span>
+        <span className={modifierFieldLabelClassName(!valuesEqual(overrides.tickSize, defaultOverrides.tickSize))}>Tick size (font)</span>
         <DeferredModifierInput
           displayValue={overrides.tickSize}
           inputMode="decimal"

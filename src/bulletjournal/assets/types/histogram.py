@@ -117,7 +117,10 @@ class Histogram(BaseAsset):
             if self.group not in self.dataframe.columns:
                 raise ValueError(f'Histogram group column `{self.group}` was not found in the provided DataFrame.')
         if self.color is not None and self.group is None:
-            raise TypeError('Histogram assets require `group` when `color` is provided.')
+            if not isinstance(self.color, str):
+                raise TypeError('Histogram assets require `group` when `color` is a mapping.')
+            if not self.color.strip():
+                raise TypeError('Histogram `color` must be a non-empty color string without `group`.')
         if self.group is not None:
             validate_pie_chart_color(self.dataframe, category_column=self.group, color=self.color, label='Histogram')
         series = self.dataframe[self.x]
@@ -408,7 +411,9 @@ def serialize_histogram(
         'row_count': int(asset.dataframe.shape[0]),
         'histogram_column': str(asset.x),
         'histogram_color_mapping': color_mapping,
-        'histogram_default_color': DEFAULT_PIE_CHART_COLOR,
+        'histogram_default_color': asset.color
+        if not has_group and isinstance(asset.color, str)
+        else DEFAULT_PIE_CHART_COLOR,
     }
     if has_group:
         definition['histogram_group_column'] = str(asset.group)
@@ -600,6 +605,7 @@ def prepare_histogram_main_payload(
                     'start': json_safe_value(min_value - 0.5),
                     'end': json_safe_value(max_value + 0.5),
                     'count': non_null_rows,
+                    'color': default_color if isinstance(default_color, str) else DEFAULT_PIE_CHART_COLOR,
                 }
             ],
         }
@@ -660,6 +666,7 @@ def prepare_histogram_main_payload(
                 'start': json_safe_value(start),
                 'end': json_safe_value(end),
                 'count': counts_by_index.get(index, 0),
+                'color': default_color if isinstance(default_color, str) else DEFAULT_PIE_CHART_COLOR,
             }
         )
     return {
@@ -1007,6 +1014,7 @@ def prepare_temporal_histogram_main_payload(
                 'start': temporal_value_to_epoch_ms(cursor),
                 'end': temporal_value_to_epoch_ms(next_cursor),
                 'count': counts_by_start.get(cursor, 0),
+                'color': default_color if isinstance(default_color, str) else DEFAULT_PIE_CHART_COLOR,
                 'label': format_histogram_bin_label(cursor, next_cursor, actual_time_granularity),
             }
         )

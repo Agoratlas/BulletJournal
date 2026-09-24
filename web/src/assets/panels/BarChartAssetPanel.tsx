@@ -431,7 +431,7 @@ export function BarChartAssetPanel({
   )
 
   return (
-    <AssetPanelFrame asset={asset} panelInfo={panelInfo} settingsTitle="Modifier overrides" settingsBody={settingsBody} settingsActive={hasSettingsOverrides} sectionId={sectionId} frameVariant={frameVariant} showExportActions={viewerMode === 'dashboard'} isPanelResized={isPanelResized}>
+    <AssetPanelFrame asset={asset} panelInfo={panelInfo} settingsTitle="Modifier overrides" settingsBody={settingsBody} settingsActive={hasSettingsOverrides} sectionId={sectionId} frameVariant={frameVariant} showExportActions isPanelResized={isPanelResized}>
       <div className="asset-dataframe-panel asset-histogram-panel">
         {overrideIncompatible ? <OverrideIncompatibleNotice onReset={onPersistedStateChange ? handleResetOverrides : undefined} /> : null}
         <PrepareErrorsNotice errors={prepareErrors} />

@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import date, datetime
 from types import SimpleNamespace
 
 import pandas as pd
@@ -154,6 +154,32 @@ def test_histogram_color_requires_group() -> None:
         raise AssertionError('Expected Histogram color to require a group column.')
 
 
+def test_ungrouped_histogram_uses_explicit_color_in_numeric_and_temporal_payloads() -> None:
+    numeric = Histogram(pd.DataFrame({'value': [1, 2]}), x='value', color='#00ff00')
+    temporal = Histogram(pd.DataFrame({'value': [date(2020, 1, 1)]}), x='value', color='#ff0000')
+    store = SimpleNamespace(persist_value=lambda *_args: {})
+    for asset, expected in ((numeric, '#00ff00'), (temporal, '#ff0000')):
+        definition = serialize_histogram(asset, object_store=store, title='Histogram', description=None).definition
+        assert definition['histogram_default_color'] == expected
+    numeric_payload = prepare_histogram_main_payload(
+        pl.DataFrame({'value': [1, 2]}).lazy(),
+        column='value',
+        column_id_map={'value': 'value'},
+        bin_count=2,
+        default_color='#00ff00',
+    )
+    temporal_payload = prepare_temporal_histogram_main_payload(
+        pl.DataFrame({'value': [date(2020, 1, 1)]}).lazy(),
+        column='value',
+        column_id_map={'value': 'value'},
+        time_granularity='day',
+        histogram_category='date',
+        default_color='#ff0000',
+    )
+    assert {entry['color'] for entry in numeric_payload['bins']} == {'#00ff00'}
+    assert {entry['color'] for entry in temporal_payload['bins']} == {'#ff0000'}
+
+
 @pytest.mark.parametrize('normalization', ['none', 'max', 'sum', True, False])
 def test_grouped_charts_accept_normalization_modes_and_legacy_booleans(normalization) -> None:
     frame = pd.DataFrame({'value': [1, 2], 'category': ['a', 'b'], 'group': ['x', 'y']})
@@ -213,6 +239,7 @@ def test_grouped_chart_serialization_resolves_bar_width_and_legacy_normalization
         assert asset.default_modifiers['bar_width'] == expected_width
         assert asset.default_modifiers['group_normalize'] == 'sum'
         assert asset.default_modifiers['group_spacing'] == 20
+        assert asset.default_modifiers['title']['size'] == 20
 
 
 @pytest.mark.parametrize('value', ['none', 'max', 'sum', True, False])

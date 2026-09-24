@@ -4435,6 +4435,37 @@ input.invalid {
   padding-left: 18px;
 }
 
+.simple-markdown li > ul,
+.simple-markdown li > ol {
+  margin-top: 4px;
+}
+
+.simple-markdown hr {
+  width: 100%;
+  border: 0;
+  border-top: 1px solid var(--line);
+}
+
+.simple-markdown-table-scroll {
+  overflow-x: auto;
+}
+
+.simple-markdown table {
+  border-collapse: collapse;
+  width: 100%;
+}
+
+.simple-markdown th,
+.simple-markdown td {
+  border: 1px solid var(--line);
+  padding: 6px 10px;
+  text-align: left;
+}
+
+.simple-markdown thead {
+  background: color-mix(in srgb, var(--muted) 8%, transparent);
+}
+
 .simple-markdown li + li {
   margin-top: 4px;
 }

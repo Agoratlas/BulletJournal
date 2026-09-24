@@ -25,6 +25,7 @@ test('the categorical grid renders before the bars instead of as a foreground x-
   }).spec
   assert.deepEqual(spec.marks.map((mark) => mark.type), ['rule', 'rect'])
   assert.equal(spec.axes.some((axis) => axis.scale === 'x' && axis.grid), false)
+  assert.equal(spec.axes.some((axis) => axis.scale === 'x' && axis.orient === 'bottom' && axis.labels !== false && axis.ticks !== false), true)
   assert.equal(spec.axes.some((axis) => axis.scale === 'y' && axis.grid), true)
 })
 

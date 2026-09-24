@@ -101,6 +101,7 @@ def _(movies_df_cleaned_date):
         assets.Histogram(
             movies_df_cleaned_date[movies_df_cleaned_date['duration'] < 90],
             x='date_published',
+            color='#22c55e',
         ),
         name='short_movies',
         title='Short movies (<90 minutes)',
@@ -111,6 +112,7 @@ def _(movies_df_cleaned_date):
                 (movies_df_cleaned_date['duration'] >= 90) & (movies_df_cleaned_date['duration'] < 120)
             ],
             x='date_published',
+            color='#eab308',
         ),
         name='medium_movies',
         title='Medium movies (90-120 minutes)',
@@ -119,6 +121,7 @@ def _(movies_df_cleaned_date):
         assets.Histogram(
             movies_df_cleaned_date[movies_df_cleaned_date['duration'] >= 120],
             x='date_published',
+            color='#ef4444',
         ),
         name='long_movies',
         title='Long movies (120+ minutes)',
