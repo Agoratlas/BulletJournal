@@ -80,6 +80,7 @@ const NON_RUNNABLE_NODE_KINDS = new Set(['constant', 'organizer', 'area', 'dashb
 const GRAPH_MIN_ZOOM = 0.10
 const GRAPH_MAX_ZOOM = 1.35
 const GRAPH_DEFAULT_ZOOM = 0.78
+const GRAPH_CONNECTION_RADIUS = 26
 const GRAPH_FIT_PADDING = 0.12
 const CONNECTION_DRAG_ACTIVATION_DISTANCE = 4
 
@@ -331,30 +332,12 @@ function PortRow({
 
 function organizerGhostRows(
   node: NodeRecord,
-  ghostInsertIndex: number | null,
-  connecting: boolean,
 ): Array<{ kind: 'port'; port: Port } | { kind: 'ghost'; insertIndex: number }> {
   const ports = outputsForNode(node)
-  if (!ports.length && !connecting) {
+  if (!ports.length) {
     return [{ kind: 'ghost', insertIndex: 0 }]
   }
-  if (ghostInsertIndex === null) {
-    return ports.map((port) => ({ kind: 'port', port }))
-  }
-  const rows: Array<{ kind: 'port'; port: Port } | { kind: 'ghost'; insertIndex: number }> = []
-  ports.forEach((port, index) => {
-    if (index === ghostInsertIndex) {
-      rows.push({ kind: 'ghost', insertIndex: ghostInsertIndex })
-    }
-    rows.push({ kind: 'port', port })
-  })
-  if (ghostInsertIndex >= ports.length) {
-    rows.push({ kind: 'ghost', insertIndex: ghostInsertIndex })
-  }
-  if (!rows.length) {
-    rows.push({ kind: 'ghost', insertIndex: ghostInsertIndex })
-  }
-  return rows
+  return ports.map((port) => ({ kind: 'port', port }))
 }
 
 function OrganizerLaneRow({
@@ -462,21 +445,23 @@ function OrganizerGhostHandleLayer({
         <div
           key={`slot:${insertIndex}`}
           className={`rf-organizer-slot-row ${visibleInsertIndex === insertIndex ? 'visible-slot-row' : ''}`}
-          style={{ top: insertIndex * 40 }}
+          style={{ top: slotCount === 1 ? 0 : insertIndex * PORT_ROW_HEIGHT - PORT_ROW_HEIGHT / 2 }}
         >
           <Handle
             type="target"
             id={`ghost-in:${insertIndex}`}
             position={Position.Left}
+            isConnectable={visibleInsertIndex === insertIndex}
             className={`rf-handle ghost-handle organizer-slot-handle ${connecting ? 'connecting' : ''} ${visibleInsertIndex === insertIndex ? 'visible-slot-handle' : ''}`}
-            isValidConnection={(connection) => Boolean(connection.source && connection.source !== connection.target)}
+            isValidConnection={(connection) => Boolean(connection.source && connection.source !== connection.target && (!connecting || visibleInsertIndex === insertIndex))}
           />
           <Handle
             type="source"
             id={`ghost-out:${insertIndex}`}
             position={Position.Right}
+            isConnectable={visibleInsertIndex === insertIndex}
             className={`rf-handle ghost-handle organizer-slot-handle ${connecting ? 'connecting' : ''} ${visibleInsertIndex === insertIndex ? 'visible-slot-handle' : ''}`}
-            isValidConnection={(connection) => Boolean(connection.target && connection.source !== connection.target)}
+            isValidConnection={(connection) => Boolean(connection.target && connection.source !== connection.target && (!connecting || visibleInsertIndex === insertIndex))}
           />
         </div>
       ))}
@@ -689,7 +674,7 @@ const BulletJournalNodeCard = memo(({ data, selected }: NodeProps<BulletJournalN
   }
 
   if (node.kind === 'organizer') {
-    const organizerRows = organizerGhostRows(node, data.organizerGhostInsertIndex, Boolean(connectionIntent))
+    const organizerRows = organizerGhostRows(node)
     const organizerSlotCount = Math.max(1, outputsForNode(node).length + 1)
     const visibleGhostInsertIndex = data.organizerGhostInsertIndex ?? (outputs.length === 0 ? 0 : null)
     return (
@@ -1163,16 +1148,25 @@ export function GraphCanvas({ snapshot, serverNowMs = Date.now(), serverNowClien
       if (!layout) {
         continue
       }
+      const portCount = outputsForNode(node).length
       const width = nodeDimensions[node.id]?.width ?? layout.w ?? 160
-      const height = nodeDimensions[node.id]?.height ?? layout.h ?? 140
+      const height = nodeDimensions[node.id]?.height ?? Math.max(PORT_ROW_HEIGHT, portCount * PORT_ROW_HEIGHT)
+      const insertIndex = portCount === 0 ? 0 : Math.max(0, Math.min(portCount, Math.round((pointerFlowPosition.y - layout.y) / PORT_ROW_HEIGHT)))
+      const slotY = layout.y + (portCount === 0 ? ORGANIZER_NODE_PORT_CENTER_OFFSET : insertIndex * PORT_ROW_HEIGHT)
+      const outsideEnd = portCount > 0 && (
+        (insertIndex === 0 && pointerFlowPosition.y < layout.y)
+        || (insertIndex === portCount && pointerFlowPosition.y > layout.y + portCount * PORT_ROW_HEIGHT)
+      )
+      const snapTolerance = (GRAPH_CONNECTION_RADIUS + 9) / (transform[2] || 1)
       const dx = Math.max(layout.x - pointerFlowPosition.x, 0, pointerFlowPosition.x - (layout.x + width))
       const dy = Math.max(layout.y - pointerFlowPosition.y, 0, pointerFlowPosition.y - (layout.y + height))
       const distance = Math.hypot(dx, dy)
-      if (distance > 80) {
+      if (distance > (outsideEnd ? snapTolerance : 30)) {
         continue
       }
-      const portCount = outputsForNode(node).length
-      const insertIndex = Math.max(0, Math.min(portCount, Math.round((pointerFlowPosition.y - layout.y - ORGANIZER_NODE_PORT_CENTER_OFFSET) / PORT_ROW_HEIGHT)))
+      if (Math.abs(pointerFlowPosition.y - slotY) > (outsideEnd ? snapTolerance : 9)) {
+        continue
+      }
       if (!nearest || distance < nearest.distance) {
         nearest = { nodeId: node.id, insertIndex, distance }
       }
@@ -1181,7 +1175,7 @@ export function GraphCanvas({ snapshot, serverNowMs = Date.now(), serverNowClien
       previews[nearest.nodeId] = nearest.insertIndex
     }
     return previews
-  }, [connectionIntent, nodeDimensions, pointerFlowPosition, snapshot.graph.layout, snapshot.graph.nodes])
+  }, [connectionIntent, nodeDimensions, pointerFlowPosition, snapshot.graph.layout, snapshot.graph.nodes, transform])
   const organizerGhostSignature = useMemo(
     () => JSON.stringify(Object.entries(organizerGhostByNodeId).sort(([left], [right]) => left.localeCompare(right))),
     [organizerGhostByNodeId],
@@ -1579,7 +1573,7 @@ export function GraphCanvas({ snapshot, serverNowMs = Date.now(), serverNowClien
         defaultViewport={{ x: 0, y: 0, zoom: GRAPH_DEFAULT_ZOOM }}
         zoomOnDoubleClick={false}
         connectionMode={ConnectionMode.Strict}
-        connectionRadius={26}
+        connectionRadius={GRAPH_CONNECTION_RADIUS}
         snapToGrid
         snapGrid={[20, 20]}
         nodesDraggable

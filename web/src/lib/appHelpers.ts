@@ -1,5 +1,5 @@
 import { appUrl } from './api'
-import { GRID_SIZE, inputBindingSource } from './helpers'
+import { GRID_SIZE, artifactsForRenamedNodes, inputBindingSource } from './helpers'
 import type { ArtifactRecord, DashboardRecord, GraphPatchOperation, GraphPatchResponse, LayoutRecord, NodeRecord, ProjectSnapshot, TemplateRecord } from './types'
 import type { AppNotice, ConstantValueType, GraphMutationPlan, OptimisticGraphState, PaletteEntry, PortActionMenuState, SnapshotLike } from '../appTypes'
 
@@ -445,6 +445,7 @@ export function applyGraphPatchResponse(
     return snapshot
   }
   const next = { ...mergeGraphIntoSnapshot(snapshot, response.graph), server_time: response.server_time }
+  next.artifacts = artifactsForRenamedNodes(next.artifacts, operations)
   for (const operation of operations) {
     if (
       operation.type !== 'add_constant_node'

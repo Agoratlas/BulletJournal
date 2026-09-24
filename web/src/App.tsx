@@ -15,7 +15,7 @@ import { BlockPalette } from './components/BlockPalette'
 import { ActionButtons } from './components/ActionButtons'
 import { ConfirmDialog, CreateNotebookDialog, CreateOrganizerPortDialog, CreatePipelineDialog, EditAreaDialog, EditConstantDialog, EditOrganizerDialog, Modal } from './components/Dialogs'
 import { GraphCanvas } from './components/GraphCanvas'
-import { Info, Palette, Play, Plus, Redo, Stop, Undo, X } from './components/Icons'
+import { Info, Play, Plus, Redo, Stop, Undo, X } from './components/Icons'
 import { NodeInspector } from './components/NodeInspector'
 import { NoticeOverlay } from './components/NoticeOverlay'
 import { SessionLoadingScreen } from './components/SessionLoadingScreen'
@@ -263,7 +263,6 @@ function App() {
   const [artifactExplorerColumns, setArtifactExplorerColumns] = useState<1 | 2 | 3>(1)
   const [paletteInfoEntry, setPaletteInfoEntry] = useState<PaletteEntry | null>(null)
   const [showProjectInfo, setShowProjectInfo] = useState(false)
-  const [showSettings, setShowSettings] = useState(false)
   const [templatesCollapsed, setTemplatesCollapsed] = useState(true)
   const [showHiddenTemplates, setShowHiddenTemplates] = useState(false)
   const [paletteSearch, setPaletteSearch] = useState('')
@@ -281,6 +280,7 @@ function App() {
   const [optimisticGraph, setOptimisticGraph] = useState<OptimisticGraphState | null>(null)
   const [optimisticDashboards, setOptimisticDashboards] = useState<Record<string, OptimisticDashboardEntry>>({})
   const [inspectorOpen, setInspectorOpen] = useState(false)
+  const [explicitInspectorNodeId, setExplicitInspectorNodeId] = useState<string | null>(null)
   const [confirmationState, setConfirmationState] = useState<ConfirmationState | null>(null)
   const [clipboardGraph, setClipboardGraph] = useState<ClipboardGraph | null>(null)
   const [graphHistoryPast, setGraphHistoryPast] = useState<GraphHistoryEntry[]>([])
@@ -473,7 +473,7 @@ function App() {
       return false
     }
     const node = liveSnapshot.graph.nodes.find((entry) => entry.id === nodeId)
-    return Boolean(node && node.kind !== 'area')
+    return node?.kind === 'notebook'
   }
 
   function applySelection(nodeIds: string[], edgeIds: string[], options: { openInspector?: boolean } = {}) {
@@ -526,6 +526,7 @@ function App() {
   }
 
   function handleNodeSelection(nodeId: string, options: { additive?: boolean } = {}) {
+    setExplicitInspectorNodeId(null)
     if (options.additive) {
       const nextNodeIds = toggleSelectionItem(selectedNodeIds, nodeId)
       rememberPendingClickSelection(nextNodeIds, selectedEdgeIds)
@@ -537,6 +538,7 @@ function App() {
   }
 
   function handleEdgeSelection(edgeId: string, options: { additive?: boolean } = {}) {
+    setExplicitInspectorNodeId(null)
     if (options.additive) {
       const nextEdgeIds = toggleSelectionItem(selectedEdgeIds, edgeId)
       rememberPendingClickSelection(selectedNodeIds, nextEdgeIds)
@@ -704,12 +706,6 @@ function App() {
       return null
     })
   }, [serverSnapshot])
-
-  useEffect(() => {
-    if (rightPanelMode !== 'assets') {
-      setInspectorOpen(Boolean(selectedNodeId))
-    }
-  }, [selectedNodeId])
 
   useEffect(() => {
     const root = document.documentElement
@@ -893,6 +889,12 @@ function App() {
   const selectedNode = useMemo(
     () => liveSnapshot?.graph.nodes.find((node) => node.id === selectedNodeId) ?? null,
     [liveSnapshot, selectedNodeId],
+  )
+  const inspectedNode = useMemo(
+    () => explicitInspectorNodeId
+      ? liveSnapshot?.graph.nodes.find((node) => node.id === explicitInspectorNodeId) ?? null
+      : selectedNode,
+    [explicitInspectorNodeId, liveSnapshot, selectedNode],
   )
   const selectedDashboardId = selectedNode?.kind === 'dashboard' ? selectedNode.id : null
   const selectedDashboardQuery = useQuery({
@@ -1696,7 +1698,21 @@ function App() {
       .map((nodeId) => liveSnapshot?.graph.nodes.find((node) => node.id === nodeId) ?? null)
       .filter((node): node is NodeRecord => node !== null)
     if (menuNodes.length === 1 && !nodeActionMenu?.grouped) {
-      return nodeActionsForNode(menuNodes[0], options)
+      const node = menuNodes[0]
+      const actions = nodeActionsForNode(node, options)
+      if (node.kind === 'notebook') {
+        return actions
+      }
+      return [{
+        key: 'open-inspector',
+        label: 'Open inspector',
+        onClick: () => {
+          dismissMenu()
+          setExplicitInspectorNodeId(node.id)
+          setInspectorOpen(true)
+          setRightPanelMode('inspector')
+        },
+      }, ...actions]
     }
     if (!menuNodes.length) {
       return []
@@ -4044,6 +4060,8 @@ function App() {
     if (!renameChangesId && !titleChanged) {
       return
     }
+    const keepInspectorOpen = rightPanelMode === 'inspector' && inspectedNode?.id === currentNodeId
+      && (inspectorOpen || explicitInspectorNodeId === currentNodeId)
     const redo = renameChangesId
       ? {
           operations: [
@@ -4068,6 +4086,11 @@ function App() {
       history: simpleHistoryEntryForPlan(liveSnapshot, redo),
       onSuccess: () => {
         selectSingleNode(nextNodeId)
+        if (keepInspectorOpen) {
+          if (node.kind !== 'notebook') setExplicitInspectorNodeId(nextNodeId)
+          setInspectorOpen(true)
+          setRightPanelMode('inspector')
+        }
         setArtifactNodeId((current) => current === currentNodeId ? nextNodeId : current)
         const session = sessionsForNodeIds([currentNodeId])[0]
         if (session) {
@@ -4509,17 +4532,6 @@ function App() {
       <div className="canvas-underlay" />
       <div className="floating-actions floating-panel">
         <div className="topbar-actions">
-          <div className="topbar-icon-actions">
-            <button className="topbar-control" onClick={() => void handleUndo()} disabled={!graphHistoryPast.length} aria-label="Undo" title="Undo"><Undo /></button>
-            <button className="topbar-control" onClick={() => void handleRedo()} disabled={!graphHistoryFuture.length} aria-label="Redo" title="Redo"><Redo /></button>
-            <button className="topbar-control" onClick={() => setShowSettings(true)} aria-label="Editor settings" title="Editor settings"><Palette /></button>
-            <button className="topbar-control" onClick={() => setShowProjectInfo(true)} disabled={!projectId} aria-label="Project info" title="Project info"><Info /></button>
-            {activeRun ? (
-              <button className="topbar-control stop-action" onClick={handleCancelRun} aria-label="Stop run" title="Stop run"><Stop /></button>
-            ) : (
-              <button className="topbar-control play-action" onClick={handleRunAll} disabled={!projectId} aria-label="Run pipeline" title="Run pipeline"><Play /></button>
-            )}
-          </div>
           <div className="topbar-status-summaries">
             <button
               type="button"
@@ -4536,7 +4548,10 @@ function App() {
             <button
               type="button"
               className={`node-status-summary ${assetsAreReady ? 'is-ready' : 'needs-attention'} ${rightPanelMode === 'assets' ? 'is-active' : ''}`}
-              onClick={() => setRightPanelMode('assets')}
+              onClick={() => {
+                setExplicitInspectorNodeId(null)
+                setRightPanelMode('assets')
+              }}
               aria-expanded={rightPanelMode === 'assets'}
               aria-controls="right-side-panel"
               disabled={!projectId}
@@ -4544,6 +4559,16 @@ function App() {
               <span className="node-status-summary-label">Assets</span>
               <ArtifactCounts counts={assetCounts} segmented />
             </button>
+          </div>
+          <div className="topbar-icon-actions">
+            <button className="topbar-control" onClick={() => void handleUndo()} disabled={!graphHistoryPast.length} aria-label="Undo" title="Undo"><Undo /></button>
+            <button className="topbar-control" onClick={() => void handleRedo()} disabled={!graphHistoryFuture.length} aria-label="Redo" title="Redo"><Redo /></button>
+            <button className="topbar-control" onClick={() => setShowProjectInfo(true)} disabled={!projectId} aria-label="Project info" title="Project info"><Info /></button>
+            {activeRun ? (
+              <button className="topbar-control stop-action" onClick={handleCancelRun} aria-label="Stop run" title="Stop run"><Stop /></button>
+            ) : (
+              <button className="topbar-control play-action" onClick={handleRunAll} disabled={!projectId} aria-label="Run pipeline" title="Run pipeline"><Play /></button>
+            )}
           </div>
         </div>
       </div>
@@ -4657,12 +4682,14 @@ function App() {
                  setArtifactNodeId(nodeId)
                  setArtifactExplorerOpen(true)
                }}
-               onOpenAssets={(nodeId) => {
-                 selectSingleNode(nodeId, { openInspector: false })
-                 setRightPanelMode('assets')
-               }}
+                onOpenAssets={(nodeId) => {
+                  setExplicitInspectorNodeId(null)
+                  selectSingleNode(nodeId, { openInspector: false })
+                  setRightPanelMode('assets')
+                }}
               onCanvasInteract={() => setTemplatesCollapsed(true)}
                 onCanvasClear={() => {
+                  setExplicitInspectorNodeId(null)
                   applySelection([], [], { openInspector: false })
                   setNodeActionMenu(null)
                   setPortActionMenu(null)
@@ -4689,17 +4716,18 @@ function App() {
           )}
         </main>
 
-        <aside id="right-side-panel" className={`sidebar right floating-panel ${rightPanelMode === 'assets' ? 'assets-viewer' : ''} ${rightPanelMode === 'assets' || selectedNode && inspectorOpen ? 'open' : 'closed'}`}>
-          <div className={`panel inspector-panel ${rightPanelMode === 'assets' ? 'assets-viewer-panel' : ''} ${rightPanelMode === 'assets' || selectedNode && inspectorOpen ? 'open' : 'closed'}`}>
+        <aside id="right-side-panel" className={`sidebar right floating-panel ${rightPanelMode === 'assets' ? 'assets-viewer' : ''} ${rightPanelMode === 'assets' || inspectedNode && (inspectorOpen || explicitInspectorNodeId !== null) ? 'open' : 'closed'}`}>
+          <div className={`panel inspector-panel ${rightPanelMode === 'assets' ? 'assets-viewer-panel' : ''} ${rightPanelMode === 'assets' || inspectedNode && (inspectorOpen || explicitInspectorNodeId !== null) ? 'open' : 'closed'}`}>
             {rightPanelMode === 'assets' ? (
               <>
                 <header className="assets-side-panel-header">
-                  <h2>Notebook assets</h2>
+                  <h2>Asset explorer</h2>
                   <button
                     type="button"
                     className="ghost-button modal-close-button"
-                    aria-label="Close Assets panel"
+                    aria-label="Close Asset explorer"
                     onClick={() => {
+                      setExplicitInspectorNodeId(null)
                       setRightPanelMode(null)
                       setInspectorOpen(false)
                     }}
@@ -4711,22 +4739,22 @@ function App() {
                   {selectedNode?.kind === 'notebook' ? <NotebookAssetPanels nodeId={selectedNode.id} /> : <div className="assets-empty-state"><p>Click on a notebook to view its assets</p></div>}
                 </div>
               </>
-            ) : selectedNode ? (
+            ) : inspectedNode && (inspectorOpen || explicitInspectorNodeId !== null) ? (
               <NodeInspector
                 snapshot={liveSnapshot as ProjectSnapshot}
-                node={selectedNode}
+                node={inspectedNode}
                 serverNowMs={serverNowMs}
                 serverNowClientAnchorMs={clientNowAnchorMs}
-                nodeActions={nodeActionsForNode(selectedNode)}
-                assetCounts={notebookAssetCountsByNodeId[selectedNode.id] ?? { pending: 0, stale: 0, ready: 0 }}
-                existingNodeIds={existingNodeIds.filter((nodeId) => nodeId !== selectedNode.id)}
+                nodeActions={nodeActionsForNode(inspectedNode)}
+                assetCounts={notebookAssetCountsByNodeId[inspectedNode.id] ?? { pending: 0, stale: 0, ready: 0 }}
+                existingNodeIds={existingNodeIds.filter((nodeId) => nodeId !== inspectedNode.id)}
                 onRenameNode={handleRenameNode}
-                nodeIdEditDisabledReason={selectedNode.kind === 'notebook'
-                  ? activeEditorNodeIds.includes(selectedNode.id)
+                nodeIdEditDisabledReason={inspectedNode.kind === 'notebook'
+                  ? activeEditorNodeIds.includes(inspectedNode.id)
                     ? 'Close the open editor before changing this notebook ID.'
-                    : selectedNode.orchestrator_state?.status === 'running' || runningNodeId === selectedNode.id
+                    : inspectedNode.orchestrator_state?.status === 'running' || runningNodeId === inspectedNode.id
                       ? 'Wait for this running notebook to finish before changing its ID.'
-                    : queuedNodeIds.includes(selectedNode.id)
+                    : queuedNodeIds.includes(inspectedNode.id)
                       ? 'Wait for this queued notebook to start or finish before changing its ID.'
                       : null
                   : null}
@@ -4950,6 +4978,7 @@ function App() {
       {pendingOrganizerConnection ? (
         <CreateOrganizerPortDialog
           suggestedName={pendingOrganizerConnection.suggestedName}
+          existingNames={liveSnapshot?.graph.nodes.find((node) => node.id === pendingOrganizerConnection.organizerNodeId)?.ui?.organizer_ports?.map((port) => port.name) ?? []}
           onClose={() => setPendingOrganizerConnection(null)}
           onCreate={handleConfirmCreateOrganizerLane}
         />
@@ -5038,7 +5067,18 @@ function App() {
       ) : null}
 
       {showProjectInfo && liveSnapshot ? (
-        <Modal title="Project info" onClose={() => setShowProjectInfo(false)}>
+        <Modal title="Project info" onClose={() => setShowProjectInfo(false)} contentClassName="project-info-dialog-card">
+          <div className="project-info-section form-grid compact">
+            <h3>Editor settings</h3>
+            <label>
+              <span>Theme</span>
+              <select value={themeMode} onChange={(event) => setThemeMode(event.target.value as ThemeMode)}>
+                <option value="system">Same as system</option>
+                <option value="light">Light</option>
+                <option value="dark">Dark</option>
+              </select>
+            </label>
+          </div>
           <div className="stack-list subtle">
             <div><span>ID</span><strong>{liveSnapshot.project.project_id}</strong></div>
             <div><span>Root</span><strong>{liveSnapshot.project.project_root}</strong></div>
@@ -5047,7 +5087,7 @@ function App() {
             <div><span>Checkpoints</span><strong>{liveSnapshot.checkpoints.length}</strong></div>
             <div><span>Recent run</span><strong>{liveSnapshot.runs[0]?.status ?? 'None'}</strong></div>
           </div>
-          <div className="inspector-block">
+          <div className="project-info-section">
             <div className="panel-header-row">
               <h3>Checkpoints</h3>
               <button className="secondary" onClick={handleCreateCheckpoint}>Create</button>
@@ -5063,21 +5103,6 @@ function App() {
                 </div>
               ))}
             </div>
-          </div>
-        </Modal>
-      ) : null}
-
-      {showSettings ? (
-        <Modal title="Editor settings" onClose={() => setShowSettings(false)}>
-          <div className="form-grid compact">
-            <label>
-              <span>Theme</span>
-              <select value={themeMode} onChange={(event) => setThemeMode(event.target.value as ThemeMode)}>
-                <option value="system">Same as system</option>
-                <option value="light">Light</option>
-                <option value="dark">Dark</option>
-              </select>
-            </label>
           </div>
         </Modal>
       ) : null}

@@ -2169,25 +2169,25 @@ def test_graph_patch_can_add_pipeline_template(tmp_path) -> None:
     assert {
         'area',
         'analysis_dashboard',
-        'constant',
-        'constant_2',
+        'movie_dataset_url',
+        'ratings_dataset_url',
         'movie_dataset_download',
         'duration_and_date_analysis',
         'advanced_rating_analysis',
         'movie_genre_analysis',
         'movie_recommendation',
     } <= node_ids
-    constant_node = next(node for node in snapshot['graph']['nodes'] if node['id'] == 'constant')
-    constant_2_node = next(node for node in snapshot['graph']['nodes'] if node['id'] == 'constant_2')
+    constant_node = next(node for node in snapshot['graph']['nodes'] if node['id'] == 'movie_dataset_url')
+    ratings_node = next(node for node in snapshot['graph']['nodes'] if node['id'] == 'ratings_dataset_url')
     assert constant_node['interface']['outputs'][0]['name'] == 'url'
-    assert constant_2_node['interface']['outputs'][0]['name'] == 'ratings_url'
+    assert ratings_node['interface']['outputs'][0]['name'] == 'ratings_url'
     edge_ids = {edge['id'] for edge in snapshot['graph']['edges']}
-    assert 'constant.url__movie_dataset_download.url' in edge_ids
-    assert 'constant_2.ratings_url__advanced_rating_analysis.ratings_url' in edge_ids
+    assert 'movie_dataset_url.url__movie_dataset_download.url' in edge_ids
+    assert 'ratings_dataset_url.ratings_url__advanced_rating_analysis.ratings_url' in edge_ids
     layout_by_node = {entry['node_id']: entry for entry in snapshot['graph']['layout']}
     assert layout_by_node['area']['x'] == 200
     assert layout_by_node['area']['y'] == 240
-    assert layout_by_node['constant']['x'] == 280
+    assert layout_by_node['movie_dataset_url']['x'] == 280
     assert layout_by_node['analysis_dashboard']['y'] == 320
 
 
@@ -2272,8 +2272,8 @@ def test_graph_patch_accepts_suffixed_pipeline_template(tmp_path) -> None:
     snapshot = client.get('/api/v1/project/snapshot').json()
     node_ids = {node['id'] for node in snapshot['graph']['nodes']}
     assert {
-        'constant_copy',
-        'constant_copy_2',
+        'movie_dataset_url_copy',
+        'ratings_dataset_url_copy',
         'movie_dataset_download_copy',
         'duration_and_date_analysis_copy',
         'advanced_rating_analysis_copy',
@@ -2284,7 +2284,7 @@ def test_graph_patch_accepts_suffixed_pipeline_template(tmp_path) -> None:
     } <= node_ids
 
 
-def test_pipeline_constants_do_not_force_suffix_collisions(tmp_path, monkeypatch) -> None:
+def test_pipeline_constants_preserve_ids_and_require_suffix_on_collision(tmp_path, monkeypatch) -> None:
     pipeline_source = json.dumps(
         {
             'title': 'Constant Only',
@@ -2344,6 +2344,7 @@ def test_pipeline_constants_do_not_force_suffix_collisions(tmp_path, monkeypatch
         },
     )
     assert first.status_code == 200
+    assert 'source' in {node['id'] for node in first.json()['graph']['nodes']}
 
     second = client.patch(
         '/api/v1/graph',
@@ -2352,11 +2353,23 @@ def test_pipeline_constants_do_not_force_suffix_collisions(tmp_path, monkeypatch
             'operations': [{'type': 'add_pipeline_template', 'template_ref': 'acme/constant_only'}],
         },
     )
-    assert second.status_code == 200
+    assert second.status_code == 409
+    assert 'Use a suffix to instantiate it' in second.json()['detail']
+
+    suffixed = client.patch(
+        '/api/v1/graph',
+        json={
+            'graph_version': first.json()['graph']['meta']['graph_version'],
+            'operations': [
+                {'type': 'add_pipeline_template', 'template_ref': 'acme/constant_only', 'node_id_suffix': 'copy'}
+            ],
+        },
+    )
+    assert suffixed.status_code == 200
 
     snapshot = client.get('/api/v1/project/snapshot').json()
     node_ids = {node['id'] for node in snapshot['graph']['nodes']}
-    assert {'constant', 'constant_2'} <= node_ids
+    assert {'source', 'source_copy'} <= node_ids
 
 
 def test_pipeline_template_constant_value_is_ready_immediately(tmp_path, monkeypatch) -> None:
@@ -2436,7 +2449,7 @@ def test_pipeline_template_constant_value_is_ready_immediately(tmp_path, monkeyp
     )
     assert created.status_code == 200
 
-    artifact = client.get('/api/v1/artifacts/constant/sample_count')
+    artifact = client.get('/api/v1/artifacts/threshold_source/sample_count')
     assert artifact.status_code == 200
     assert artifact.json()['state'] == 'ready'
     assert artifact.json()['preview']['repr'] == '7'
@@ -2473,8 +2486,8 @@ def test_example_movie_pipeline_constants_are_ready_and_local_dataset_run_succee
     )
     assert created.status_code == 200
 
-    movie_url = client.get('/api/v1/artifacts/constant/url')
-    ratings_url = client.get('/api/v1/artifacts/constant_2/ratings_url')
+    movie_url = client.get('/api/v1/artifacts/movie_dataset_url/url')
+    ratings_url = client.get('/api/v1/artifacts/ratings_dataset_url/ratings_url')
     assert movie_url.status_code == 200
     assert ratings_url.status_code == 200
     assert movie_url.json()['state'] == 'ready'
@@ -2489,7 +2502,7 @@ def test_example_movie_pipeline_constants_are_ready_and_local_dataset_run_succee
         / 'movie_dataset'
         / 'movies.csv'
     )
-    updated = client.post('/api/v1/constants/constant/value', json={'value': str(movies_path)})
+    updated = client.post('/api/v1/constants/movie_dataset_url/value', json={'value': str(movies_path)})
     assert updated.status_code == 200
     assert updated.json()['artifact_name'] == 'url'
     assert updated.json()['state'] == 'ready'

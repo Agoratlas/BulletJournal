@@ -727,16 +727,8 @@ class GraphService:
                     f'Pipeline template `{template_ref}` is missing layout for `{template_node_id}`.'
                 )
             kind = str(raw_node.get('kind') or '')
-            resolved_node_id = (
-                _next_available_node_id(graph, f'constant{node_id_suffix}' if node_id_suffix else 'constant')
-                if kind == NodeKind.CONSTANT.value
-                else f'{template_node_id}{node_id_suffix}'
-                if node_id_suffix
-                else template_node_id
-            )
-            if kind != NodeKind.CONSTANT.value and (
-                any(node.id == resolved_node_id for node in graph.nodes) or resolved_node_id in node_id_map.values()
-            ):
+            resolved_node_id = f'{template_node_id}{node_id_suffix}' if node_id_suffix else template_node_id
+            if any(node.id == resolved_node_id for node in graph.nodes) or resolved_node_id in node_id_map.values():
                 raise GraphValidationError(
                     f'Pipeline template `{template_ref}` would create duplicate node `{resolved_node_id}`. '
                     'Use a suffix to instantiate it.'
@@ -1556,18 +1548,6 @@ def _constant_value_json(operation: dict[str, Any]) -> str | None:
     if isinstance(raw_value_json, str):
         return raw_value_json
     return None
-
-
-def _next_available_node_id(graph: GraphData, base: str) -> str:
-    normalized_base = re.sub(r'[^a-z0-9_]+', '_', str(base).strip().lower())
-    normalized_base = re.sub(r'_+', '_', normalized_base).strip('_') or 'node'
-    existing_ids = {node.id for node in graph.nodes}
-    if normalized_base not in existing_ids:
-        return normalized_base
-    index = 2
-    while f'{normalized_base}_{index}' in existing_ids:
-        index += 1
-    return f'{normalized_base}_{index}'
 
 
 def _coerce_organizer_ports(raw_ports: Any) -> list[dict[str, str]]:

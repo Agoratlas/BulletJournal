@@ -1,4 +1,4 @@
-import type { ArtifactRecord, ArtifactState, NodeRecord, Port, ProjectSnapshot, TemplateRecord } from './types'
+import type { ArtifactRecord, ArtifactState, GraphPatchOperation, NodeRecord, Port, ProjectSnapshot, TemplateRecord } from './types'
 
 export const GRID_SIZE = 20
 export const PORT_ROW_HEIGHT = GRID_SIZE * 2
@@ -76,6 +76,17 @@ export function artifactFor(snapshot: ProjectSnapshot, nodeId: string, artifactN
   return snapshot.artifacts.find(
     (artifact) => artifact.node_id === nodeId && artifact.artifact_name === artifactName,
   )
+}
+
+export function artifactsForRenamedNodes(artifacts: ArtifactRecord[], operations: GraphPatchOperation[]): ArtifactRecord[] {
+  return operations.reduce((current, operation) => {
+    if (operation.type !== 'rename_node') {
+      return current
+    }
+    return current.map((artifact) => artifact.node_id === operation.node_id
+      ? { ...artifact, node_id: operation.new_node_id }
+      : artifact)
+  }, artifacts)
 }
 
 export function artifactIsEmpty(artifact: ArtifactRecord | null | undefined): boolean {

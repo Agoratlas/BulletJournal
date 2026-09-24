@@ -422,11 +422,12 @@ export function CreatePipelineDialog({
 
 type CreateOrganizerPortDialogProps = {
   suggestedName: string
+  existingNames: string[]
   onClose: () => void
   onCreate: (payload: { name: string }) => Promise<void>
 }
 
-export function CreateOrganizerPortDialog({ suggestedName, onClose, onCreate }: CreateOrganizerPortDialogProps) {
+export function CreateOrganizerPortDialog({ suggestedName, existingNames, onClose, onCreate }: CreateOrganizerPortDialogProps) {
   const [name, setName] = useState(suggestedName)
   const [busy, setBusy] = useState(false)
 
@@ -437,9 +438,10 @@ export function CreateOrganizerPortDialog({ suggestedName, onClose, onCreate }: 
 
   const resolvedName = normalizeFreeformSnakeCase(name)
   const invalidName = !resolvedName
+  const duplicateName = Boolean(resolvedName && existingNames.some((existing) => normalizeFreeformSnakeCase(existing) === resolvedName))
 
   async function submit() {
-    if (invalidName) {
+    if (invalidName || duplicateName || busy) {
       return
     }
     setBusy(true)
@@ -473,7 +475,7 @@ export function CreateOrganizerPortDialog({ suggestedName, onClose, onCreate }: 
         <label>
           <span>Port name</span>
           <input
-            className={invalidName ? 'invalid' : ''}
+            className={invalidName || duplicateName ? 'invalid' : ''}
             value={name}
             onChange={(event) => setName(event.target.value)}
             placeholder="value"
@@ -481,11 +483,13 @@ export function CreateOrganizerPortDialog({ suggestedName, onClose, onCreate }: 
           />
           {invalidName
             ? <span className="field-note error">Port name is required.</span>
+            : duplicateName
+              ? <span className="field-note error">This organizer already has a lane with that name.</span>
             : <span className="field-note">Shown on both sides of the organizer.</span>}
         </label>
         <div className="dialog-actions">
           <button type="button" className="secondary" onClick={onClose}>Cancel</button>
-          <button type="submit" disabled={busy || invalidName}>{busy ? 'Creating...' : 'Create lane'}</button>
+          <button type="submit" disabled={busy || invalidName || duplicateName}>{busy ? 'Creating...' : 'Create lane'}</button>
         </div>
       </form>
     </Modal>
