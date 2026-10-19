@@ -1,5 +1,6 @@
 import time
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -18,6 +19,25 @@ def wait_for_run_status(client: TestClient, run_id: str, expected: str, *, timeo
             return snapshot
         time.sleep(0.05)
     raise AssertionError(f'Run `{run_id}` did not reach status `{expected}` within {timeout} seconds.')
+
+
+def test_checkpoint_excludes_marimo_cache_directories(tmp_path) -> None:
+    paths = init_project_root(tmp_path / 'project')
+    with TestClient(create_app(project_path=paths.root)) as client:
+        client.get('/api/v1/project/snapshot')
+        for parent in (paths.notebooks_dir, paths.notebooks_dir / 'nested'):
+            cache = parent / '__marimo__'
+            cache.mkdir(parents=True)
+            (cache / 'session.json').write_text('cached session')
+        source = paths.notebooks_dir / 'nested' / 'source.txt'
+        source.write_text('keep this source')
+
+        response = client.post('/api/v1/checkpoints')
+        assert response.status_code == 200
+        saved_notebooks = Path(response.json()['path']) / 'notebooks'
+        assert not list(saved_notebooks.rglob('__marimo__'))
+        assert (saved_notebooks / 'nested' / 'source.txt').read_text() == 'keep this source'
+        assert (paths.notebooks_dir / '__marimo__' / 'session.json').exists()
 
 
 def test_checkpoint_restore_recovers_graph_state(tmp_path) -> None:

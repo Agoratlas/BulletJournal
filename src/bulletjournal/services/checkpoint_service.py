@@ -38,7 +38,11 @@ class CheckpointService:
                 graph_version = int(graph.meta['graph_version'])
                 manifest = self._capture_heads(checkpoint_id, graph_version, graph.nodes)
                 copy_tree(project.paths.graph_dir, staging_dir / 'graph')
-                copy_tree(project.paths.notebooks_dir, staging_dir / 'notebooks')
+                shutil.copytree(
+                    project.paths.notebooks_dir,
+                    staging_dir / 'notebooks',
+                    ignore=shutil.ignore_patterns('__marimo__'),
+                )
                 copy_tree(project.paths.dashboards_dir, staging_dir / 'dashboards')
                 atomic_write_text(staging_dir / 'heads.json', json_dumps(manifest, pretty=True) + '\n')
                 os.replace(staging_dir, checkpoint_dir)

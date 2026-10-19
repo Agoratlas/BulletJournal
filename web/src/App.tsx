@@ -3,7 +3,8 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import type { Connection, EdgeChange, Node } from 'reactflow'
 
 import { appBasePath, appUrl, cancelRun, clearConstantValue, createCheckpoint, currentProject, dashboardUrl, dismissNotice, downloadNotebookSource, getConstantValue, getDashboard, getSnapshot, listNodeAssets, listSessions, notebookAssetsUrl, notebookDownloadUrl, patchDashboard, patchGraph, redoGraphTombstone, restoreCheckpoint, restoreGraphTombstone, runAll, runNode, runSelection, setArtifactState, setConstantValue, setNodeOutputsState, stopSession, uploadConstantFile } from './lib/api'
-import { CONSTANT_NODE_HEIGHT, CONSTANT_NODE_PORT_CENTER_OFFSET, CONSTANT_NODE_WIDTH, GRID_SIZE, PORT_ROW_HEIGHT, STANDARD_NODE_PORT_CENTER_OFFSET, activeRunNodeId, artifactFor, artifactsForDisplay, currentRun, formatTimestamp, globalArtifactCounts, inputState, inputsForNode, outputsForNode, queuedRunNodeIds, templateByRef } from './lib/helpers'
+import { parseStrictJson } from './lib/strictJson'
+import { CONSTANT_NODE_HEIGHT, CONSTANT_NODE_PORT_CENTER_OFFSET, CONSTANT_NODE_WIDTH, GRID_SIZE, PORT_ROW_HEIGHT, STANDARD_NODE_PORT_CENTER_OFFSET, activeRunNodeId, artifactFor, artifactsForDisplay, currentRun, dependencyNodeIds, formatTimestamp, globalArtifactCounts, inputState, inputsForNode, outputsForNode, queuedRunNodeIds, templateByRef } from './lib/helpers'
 import { areaSettings, type AreaColorKey, type AreaTitlePosition } from './lib/area'
 import { useDocumentMetadata } from './lib/documentMetadata'
 import type { ArtifactRecord, DashboardRecord, GraphPatchOperation, LayoutRecord, NodeRecord, ProjectSnapshot, SessionRecord, TemplateRecord } from './lib/types'
@@ -21,6 +22,7 @@ import { NoticeOverlay } from './components/NoticeOverlay'
 import { SessionLoadingScreen } from './components/SessionLoadingScreen'
 import { SimpleMarkdown } from './components/SimpleMarkdown'
 import { NotebookAssetPanels } from './assets/NotebookAssetPanels'
+import { copyText } from './assets/shared/exports'
 
 const NotebookAssetsPage = lazy(async () => {
   const module = await import('./assets/NotebookAssetsPage')
@@ -253,6 +255,7 @@ function setSnapshotData(
 function App() {
   const queryClient = useQueryClient()
   const [clientNotices, setClientNotices] = useState<AppNotice[]>([])
+  const [dismissedNoticeIds, setDismissedNoticeIds] = useState<Set<string>>(new Set())
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null)
   const [selectedNodeIds, setSelectedNodeIds] = useState<string[]>([])
   const [selectedEdgeIds, setSelectedEdgeIds] = useState<string[]>([])
@@ -311,6 +314,7 @@ function App() {
   const latestGraphVersionRef = useRef<number | null>(null)
   const pendingClickSelectionRef = useRef<{ nodeIds: string[]; edgeIds: string[]; token: number } | null>(null)
   const pendingClickSelectionTokenRef = useRef(0)
+  const dismissingAssetExplorerRef = useRef(false)
   const dashboardUpdateQueueRef = useRef(new Map<string, Promise<boolean>>())
   const dashboardMutationIdRef = useRef(0)
   const graphMutationQueueRef = useRef<QueuedGraphMutation[]>([])
@@ -480,7 +484,7 @@ function App() {
     setSelectedNodeIds(nodeIds)
     setSelectedEdgeIds(edgeIds)
     const singleNodeId = nodeIds.length === 1 && edgeIds.length === 0 ? nodeIds[0] : null
-    const canOpenInspector = canOpenInspectorForNode(singleNodeId)
+    const canOpenInspector = !dismissingAssetExplorerRef.current && canOpenInspectorForNode(singleNodeId)
     setSelectedNodeId(singleNodeId)
     if (options.openInspector !== undefined) {
       setInspectorOpen(options.openInspector && canOpenInspector)
@@ -652,7 +656,10 @@ function App() {
       ...notice,
       origin: 'snapshot',
     }))
-    return [...persisted, ...clientNotices].sort((left, right) => {
+    const nodeIds = new Set(liveSnapshot?.graph.nodes.map((node) => node.id) ?? [])
+    return [...persisted, ...clientNotices]
+      .filter((notice) => !dismissedNoticeIds.has(notice.issue_id) && (!notice.node_id || nodeIds.has(notice.node_id)))
+      .sort((left, right) => {
       const leftRank = left.severity === 'error' ? 0 : 1
       const rightRank = right.severity === 'error' ? 0 : 1
       if (leftRank !== rightRank) {
@@ -664,7 +671,7 @@ function App() {
       }
       return left.issue_id.localeCompare(right.issue_id)
     })
-  }, [clientNotices, liveSnapshot])
+  }, [clientNotices, dismissedNoticeIds, liveSnapshot])
 
   const nodeNoticeSeverityById = useMemo<Record<string, 'error' | 'warning'>>(() => {
     const severityByNodeId: Record<string, 'error' | 'warning'> = {}
@@ -1299,35 +1306,8 @@ function App() {
     if (!liveSnapshot || !nodeIds.length) {
       return []
     }
-    const nodeById = new Map(liveSnapshot.graph.nodes.map((node) => [node.id, node]))
-    const adjacency = new Map<string, string[]>()
-    for (const edge of liveSnapshot.graph.edges) {
-      const key = direction === 'upstream' ? edge.target_node : edge.source_node
-      const connected = adjacency.get(key) ?? []
-      connected.push(direction === 'upstream' ? edge.source_node : edge.target_node)
-      adjacency.set(key, connected)
-    }
-    const planned = new Set<string>()
-    const queue = [...nodeIds]
-    const visited = new Set<string>()
-    while (queue.length) {
-      const currentNodeId = queue.shift() as string
-      if (visited.has(currentNodeId)) {
-        continue
-      }
-      visited.add(currentNodeId)
-      const node = nodeById.get(currentNodeId)
-      if (!node) {
-        continue
-      }
-      if (node.kind === 'notebook') {
-        planned.add(currentNodeId)
-      }
-      for (const relatedNodeId of adjacency.get(currentNodeId) ?? []) {
-        queue.push(relatedNodeId)
-      }
-    }
-    return Array.from(planned)
+    const related = dependencyNodeIds(liveSnapshot, nodeIds, direction)
+    return liveSnapshot.graph.nodes.filter((node) => node.kind === 'notebook' && related.has(node.id)).map((node) => node.id)
   }
 
   function plannedNotebookIdsForRun(nodeId: string, scope: NotebookRunScope, action: 'use_stale' | 'run_upstream' | null = null): string[] {
@@ -1546,6 +1526,19 @@ function App() {
     const canMarkOutputsStale = node.kind !== 'constant' && (artifactHeads.some((artifact) => artifact.state !== 'stale') || assetCounts.ready > 0)
     const canMarkOutputsReady = node.kind !== 'constant' && (artifactHeads.some((artifact) => artifact.state === 'stale') || assetCounts.stale > 0) && nodeInputsAreReady(node)
     const actions: NodeActionItem[] = []
+
+    actions.push({
+      key: 'copy-link',
+      label: 'Copy link',
+      onClick: () => {
+        dismissMenu()
+        const url = new URL(window.location.href)
+        url.hash = encodeURIComponent(node.id)
+        void copyText(url.href).catch((error) => {
+          reportClientError('copy-block-link-failed', 'copy_block_link_failed', `Could not copy block link: ${String(error)}`, { nodeId: node.id })
+        })
+      },
+    })
 
     if (node.kind === 'notebook') {
       actions.push({
@@ -1866,6 +1859,21 @@ function App() {
     window.addEventListener('pointerdown', handlePointerDown)
     return () => window.removeEventListener('pointerdown', handlePointerDown)
   }, [nodeActionMenu])
+
+  useEffect(() => {
+    function handlePointerDown(event: PointerEvent) {
+      dismissingAssetExplorerRef.current = false
+      if (rightPanelMode !== 'assets') return
+      const target = event.target
+      if (target instanceof Element && (target.closest('#right-side-panel') || target.closest('[aria-controls="right-side-panel"]'))) return
+      dismissingAssetExplorerRef.current = true
+      setExplicitInspectorNodeId(null)
+      setRightPanelMode(null)
+      setInspectorOpen(false)
+    }
+    window.addEventListener('pointerdown', handlePointerDown, true)
+    return () => window.removeEventListener('pointerdown', handlePointerDown, true)
+  }, [rightPanelMode])
 
   useEffect(() => {
     if (!portActionMenu) {
@@ -2615,6 +2623,8 @@ function App() {
             batch.flatMap((mutation) => mutation.operations),
           )
           const operations = batch.flatMap((mutation) => mutation.operations)
+          const deletedNodeIds = new Set(operations.filter((operation) => operation.type === 'delete_node').map((operation) => operation.node_id))
+          setClientNotices((current) => current.filter((notice) => !notice.node_id || !deletedNodeIds.has(notice.node_id)))
           setSnapshotData(queryClient, committedSnapshot, (current) => applyGraphPatchResponse(current, response, operations))
           graphMutationInFlightRef.current = []
           syncGraphMutationOptimisticState(currentCommittedSnapshot(committedSnapshot))
@@ -3152,7 +3162,6 @@ function App() {
 
   function pipelineTemplateNodeIds(template: TemplateRecord): string[] {
     return (template.definition?.nodes ?? [])
-      .filter((node) => node.kind !== 'constant')
       .map((node) => node.id)
   }
 
@@ -3345,7 +3354,7 @@ function App() {
   }
 
   function parseConstantJsonValue(dataType: ConstantValueType, jsonText: string): unknown {
-    const parsed = JSON.parse(jsonText)
+    const parsed = parseStrictJson(jsonText)
     if (dataType === 'int') {
       if (typeof parsed !== 'number' || !Number.isInteger(parsed)) {
         throw new Error('Constant value must be a JSON integer.')
@@ -4175,8 +4184,23 @@ function App() {
       dismissClientNotice(notice.issue_id)
       return
     }
-    await dismissNotice(notice.issue_id)
-    await refreshSnapshot()
+    setDismissedNoticeIds((current) => new Set(current).add(notice.issue_id))
+    try {
+      await dismissNotice(notice.issue_id)
+      await refreshSnapshot()
+      setDismissedNoticeIds((current) => {
+        const next = new Set(current)
+        next.delete(notice.issue_id)
+        return next
+      })
+    } catch (error) {
+      setDismissedNoticeIds((current) => {
+        const next = new Set(current)
+        next.delete(notice.issue_id)
+        return next
+      })
+      reportClientError('notice-dismiss', 'notice_dismiss_failed', error instanceof Error ? error.message : 'Notice dismissal failed.')
+    }
   }
 
   function handleFocusNotice(notice: AppNotice) {

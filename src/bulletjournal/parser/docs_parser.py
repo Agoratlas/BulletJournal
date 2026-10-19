@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ast
 from pathlib import Path
+from textwrap import dedent
 
 from bulletjournal.parser.marimo_loader import iter_app_cells, load_module_ast
 
@@ -18,7 +19,7 @@ def extract_notebook_docs_from_module(module: ast.Module) -> str | None:
     for cell in iter_app_cells(module):
         docs = _extract_docs_from_cell(cell)
         if docs:
-            return docs.strip()
+            return dedent(docs).strip()
         return None
     return None
 

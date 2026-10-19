@@ -79,3 +79,29 @@ def resolve_output_binding(graph: GraphData, *, source_node: str, source_port: s
             return None
         current_node = passthrough.source_node
         current_port = passthrough.source_port
+
+
+def dependency_closure(graph: GraphData, node_id: str, *, upstream: bool) -> set[str]:
+    """Traverse dependencies without crossing organizer passthrough lanes."""
+    node_by_id = {node.id: node for node in graph.nodes}
+    pending: list[tuple[str, str | None]] = [(node_id, None)]
+    visited: set[tuple[str, str | None]] = set()
+    related: set[str] = set()
+    while pending:
+        current, lane = pending.pop()
+        if (current, lane) in visited:
+            continue
+        visited.add((current, lane))
+        for edge in graph.edges:
+            endpoint = edge.target_node if upstream else edge.source_node
+            port = edge.target_port if upstream else edge.source_port
+            if endpoint != current or (lane is not None and port != lane):
+                continue
+            neighbor = edge.source_node if upstream else edge.target_node
+            neighbor_port = edge.source_port if upstream else edge.target_port
+            node = node_by_id.get(neighbor)
+            if node is None or neighbor == node_id:
+                continue
+            related.add(neighbor)
+            pending.append((neighbor, neighbor_port if node.kind == NodeKind.ORGANIZER else None))
+    return related

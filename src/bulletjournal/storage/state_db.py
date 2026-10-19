@@ -659,6 +659,9 @@ class StateDB:
                     f'DELETE FROM {table} WHERE incarnation_id = ?',  # noqa: S608 - fixed table allowlist.
                     (incarnation_id,),
                 )
+            connection.execute('DELETE FROM validation_issues WHERE node_id = ?', (node_id,))
+            connection.execute('DELETE FROM persistent_notices WHERE node_id = ?', (node_id,))
+            self._prune_stale_validation_issue_dismissals(connection)
             connection.commit()
         if execution_meta is not None:
             for column in ('stdout_path', 'stderr_path'):

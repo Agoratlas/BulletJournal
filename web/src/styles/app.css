@@ -577,6 +577,11 @@ label span,
   z-index: 8;
   display: flex;
   justify-content: flex-end;
+  pointer-events: none;
+}
+
+.floating-actions > * {
+  pointer-events: auto;
 }
 
 :root[data-theme='dark'] .react-flow__background pattern circle {
@@ -967,6 +972,7 @@ label span,
   left: 18px;
   width: 360px;
   transition: width 220ms ease;
+  z-index: 9;
 }
 
 .sidebar.left:not(.collapsed) {
@@ -4524,6 +4530,22 @@ input.invalid {
   color: var(--accent-strong);
   text-decoration: underline;
   text-underline-offset: 0.16em;
+}
+
+.simple-markdown pre {
+  margin: 0;
+  padding: 10px 12px;
+  overflow-x: auto;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--muted) 10%, transparent);
+  white-space: pre;
+}
+
+.simple-markdown pre code,
+:root[data-theme='dark'] .simple-markdown pre code {
+  padding: 0;
+  background: transparent;
+  border-radius: 0;
 }
 
 .warning-chip-message {

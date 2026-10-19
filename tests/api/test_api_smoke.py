@@ -3279,7 +3279,7 @@ def test_constant_file_artifact_content_endpoint_renders_inline_image(tmp_path) 
     assert content.content == png_bytes
 
 
-def test_artifact_download_uses_artifact_name_and_extension(tmp_path) -> None:
+def test_artifact_download_uses_node_and_artifact_name_and_extension(tmp_path) -> None:
     project_root = init_project_root(tmp_path / 'project').root
     app = create_app(project_path=project_root)
     client = TestClient(app)
@@ -3315,7 +3315,7 @@ def test_artifact_download_uses_artifact_name_and_extension(tmp_path) -> None:
 
     assert response.status_code == 200
     assert response.headers['content-disposition'].startswith('attachment;')
-    assert 'filename="sample_df.parquet"' in response.headers['content-disposition']
+    assert 'filename="sample_node_sample_df.parquet"' in response.headers['content-disposition']
     assert response.headers['content-type']
 
 
@@ -3355,7 +3355,7 @@ def test_dataframe_csv_download_returns_attachment(tmp_path) -> None:
 
     assert response.status_code == 200
     assert response.headers['content-type'].startswith('text/csv')
-    assert 'filename="sample_df.csv"' in response.headers['content-disposition']
+    assert 'filename="sample_node_sample_df.csv"' in response.headers['content-disposition']
     assert b'value\n' in response.content
 
 
@@ -3449,7 +3449,7 @@ def test_dataframe_xlsx_download_preserves_unicode(tmp_path) -> None:
     assert response.headers['content-type'].startswith(
         'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
     )
-    assert 'filename="emoji_frame.xlsx"' in response.headers['content-disposition']
+    assert 'filename="emoji_frame_emoji_frame.xlsx"' in response.headers['content-disposition']
     frame = pd.read_excel(io.BytesIO(response.content))
     assert frame.iloc[0]['emoji'] == '😀'
 

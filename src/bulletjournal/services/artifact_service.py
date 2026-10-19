@@ -389,7 +389,12 @@ class ArtifactService:
             raise InvalidRequestError(
                 f'Node `{node_id}` has stale or pending inputs. Its outputs cannot be marked ready.'
             )
-        interface = self.project_service.latest_interface(node_id)
+        node = self.project_service.get_node(node_id)
+        interface = (
+            {'outputs': []}
+            if node.kind in {NodeKind.DASHBOARD, NodeKind.AREA, NodeKind.ORGANIZER}
+            else self.project_service.latest_interface(node_id)
+        )
         if interface is None:
             raise InvalidRequestError(f'Node `{node_id}` does not have a parsed interface yet.')
         project = self.project_service.require_project()
@@ -599,7 +604,7 @@ class ArtifactService:
         return {
             'kind': 'bytes',
             'content': csv_bytes,
-            'filename': f'{self._sanitize_filename_stem(str(head.get("artifact_name") or "artifact"))}.csv',
+            'filename': f'{self._download_stem(head)}.csv',
             'mime_type': 'text/csv; charset=utf-8',
         }
 
@@ -613,7 +618,7 @@ class ArtifactService:
         return {
             'kind': 'bytes',
             'content': buffer.getvalue(),
-            'filename': f'{self._sanitize_filename_stem(str(head.get("artifact_name") or "artifact"))}.xlsx',
+            'filename': f'{self._download_stem(head)}.xlsx',
             'mime_type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
         }
 
@@ -625,11 +630,17 @@ class ArtifactService:
 
     @staticmethod
     def _download_filename(head: dict[str, Any]) -> str:
-        stem = ArtifactService._sanitize_filename_stem(str(head.get('artifact_name') or 'artifact'))
+        stem = ArtifactService._download_stem(head)
         extension = ArtifactService._download_extension(head)
         if extension and stem.lower().endswith(extension.lower()):
             return stem
         return f'{stem}{extension}'
+
+    @staticmethod
+    def _download_stem(head: dict[str, Any]) -> str:
+        node_id = str(head.get('node_id') or 'notebook')
+        artifact_name = str(head.get('artifact_name') or 'artifact')
+        return ArtifactService._sanitize_filename_stem(f'{node_id}_{artifact_name}')
 
     @staticmethod
     def _sanitize_filename_stem(value: str) -> str:
@@ -670,12 +681,21 @@ class ArtifactService:
 def _resolve_constant_value(*, data_type: str, value: Any, value_json: str | None) -> Any:
     if value_json is not None:
         try:
-            value = json.loads(value_json)
+            value = json.loads(value_json, object_pairs_hook=_unique_json_object)
         except json.JSONDecodeError as exc:
             raise InvalidRequestError(f'Constant value must be valid JSON: {exc.msg}.') from exc
     if data_type == 'float' and isinstance(value, int) and not isinstance(value, bool):
         return float(value)
     return value
+
+
+def _unique_json_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise InvalidRequestError(f'Constant value has duplicate object key `{key}`.')
+        result[key] = value
+    return result
 
 
 def _xlsx_rows(content: bytes, sheet_name: str | int) -> list[list[Any]]:

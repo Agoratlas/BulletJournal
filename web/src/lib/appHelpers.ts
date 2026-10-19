@@ -1,5 +1,5 @@
 import { appUrl } from './api'
-import { GRID_SIZE, artifactsForRenamedNodes, inputBindingSource } from './helpers'
+import { GRID_SIZE, artifactsForRenamedNodes, dependencyNodeIds, inputBindingSource } from './helpers'
 import type { ArtifactRecord, DashboardRecord, GraphPatchOperation, GraphPatchResponse, LayoutRecord, NodeRecord, ProjectSnapshot, TemplateRecord } from './types'
 import type { AppNotice, ConstantValueType, GraphMutationPlan, OptimisticGraphState, PaletteEntry, PortActionMenuState, SnapshotLike } from '../appTypes'
 
@@ -65,21 +65,6 @@ export function isEditableTarget(target: EventTarget | null): boolean {
 function suffixedNodeId(nodeIdSuffix: string | null | undefined, templateNodeId: string): string {
   const normalizedSuffix = normalizeNodeId(nodeIdSuffix ?? '')
   return normalizedSuffix ? `${templateNodeId}_${normalizedSuffix}` : templateNodeId
-}
-
-function nextAvailableNodeIdForSet(existingNodeIds: Set<string>, base: string): string {
-  const normalizedBase = normalizeNodeId(base) || 'node'
-  if (!existingNodeIds.has(normalizedBase)) {
-    existingNodeIds.add(normalizedBase)
-    return normalizedBase
-  }
-  let index = 2
-  while (existingNodeIds.has(`${normalizedBase}_${index}`)) {
-    index += 1
-  }
-  const resolved = `${normalizedBase}_${index}`
-  existingNodeIds.add(resolved)
-  return resolved
 }
 
 export function artifactEndpoint(artifact: ArtifactRecord, action: 'download' | 'content'): string {
@@ -254,46 +239,12 @@ export function edgeIdsForPort(snapshot: ProjectSnapshot, menu: PortActionMenuSt
 }
 
 function downstreamNodeIds(snapshot: ProjectSnapshot, rootNodeIds: string[]): Set<string> {
-  const queue = [...rootNodeIds]
-  const visited = new Set(rootNodeIds)
-  const downstreamByNodeId = new Map<string, string[]>()
-  for (const edge of snapshot.graph.edges) {
-    const targets = downstreamByNodeId.get(edge.source_node) ?? []
-    targets.push(edge.target_node)
-    downstreamByNodeId.set(edge.source_node, targets)
-  }
-  while (queue.length) {
-    const nodeId = queue.shift() as string
-    for (const targetNodeId of downstreamByNodeId.get(nodeId) ?? []) {
-      if (visited.has(targetNodeId)) {
-        continue
-      }
-      visited.add(targetNodeId)
-      queue.push(targetNodeId)
-    }
-  }
-  return visited
+  return dependencyNodeIds(snapshot, rootNodeIds, 'downstream')
 }
 
 export function upstreamNodeIds(snapshot: ProjectSnapshot, nodeIds: string[]): string[] {
-  const upstreamByNodeId = new Map<string, string[]>()
-  for (const edge of snapshot.graph.edges) {
-    const sources = upstreamByNodeId.get(edge.target_node) ?? []
-    sources.push(edge.source_node)
-    upstreamByNodeId.set(edge.target_node, sources)
-  }
-  const ancestors = new Set<string>()
-  const queue = [...nodeIds]
-  while (queue.length) {
-    const nodeId = queue.shift() as string
-    for (const sourceNodeId of upstreamByNodeId.get(nodeId) ?? []) {
-      if (ancestors.has(sourceNodeId)) {
-        continue
-      }
-      ancestors.add(sourceNodeId)
-      queue.push(sourceNodeId)
-    }
-  }
+  const ancestors = dependencyNodeIds(snapshot, nodeIds, 'upstream')
+  nodeIds.forEach((nodeId) => ancestors.delete(nodeId))
   return snapshot.graph.nodes.filter((node) => ancestors.has(node.id)).map((node) => node.id)
 }
 
@@ -445,6 +396,9 @@ export function applyGraphPatchResponse(
     return snapshot
   }
   const next = { ...mergeGraphIntoSnapshot(snapshot, response.graph), server_time: response.server_time }
+  const deletedNodeIds = new Set(operations.filter((operation) => operation.type === 'delete_node').map((operation) => operation.node_id))
+  next.notices = next.notices.filter((notice) => !notice.node_id || !deletedNodeIds.has(notice.node_id))
+  next.validation_issues = next.validation_issues.filter((issue) => !issue.node_id || !deletedNodeIds.has(issue.node_id))
   next.artifacts = artifactsForRenamedNodes(next.artifacts, operations)
   for (const operation of operations) {
     if (
@@ -508,14 +462,8 @@ export function pipelineTemplateNodeRecords(
   nodeIdSuffix?: string | null,
 ): Array<{ nodeId: string; title: string }> {
   const template = snapshot.templates.find((entry) => entry.ref === templateRef && entry.kind === 'pipeline')
-  const existingNodeIds = new Set(snapshot.graph.nodes.map((node) => node.id))
-  const normalizedSuffix = normalizeNodeId(nodeIdSuffix ?? '')
   return (template?.definition?.nodes ?? []).map((node) => {
-    const kind = String(node.kind ?? '')
-    const nodeId = kind === 'constant'
-      ? nextAvailableNodeIdForSet(existingNodeIds, normalizedSuffix ? `constant_${normalizedSuffix}` : 'constant')
-      : suffixedNodeId(nodeIdSuffix, node.id)
-    existingNodeIds.add(nodeId)
+    const nodeId = suffixedNodeId(nodeIdSuffix, node.id)
     return {
       nodeId,
       title: node.title,

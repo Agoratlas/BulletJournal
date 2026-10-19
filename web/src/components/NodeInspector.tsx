@@ -363,6 +363,7 @@ export function NodeInspector({
                   <span className="inspector-port-type">{formatType(port.data_type)}</span>
                 </div>
                 {port.description ? <p className="inspector-port-description">{port.description}</p> : null}
+                {port.has_default ? <p className="inspector-port-description">Default: <code>{JSON.stringify(port.default) ?? String(port.default)}</code></p> : null}
               </div>
             )
           })}

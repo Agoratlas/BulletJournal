@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import type { ConstantValueType, DataFrameUploadFormat } from '../appTypes'
 import { AREA_COLOR_KEYS, AREA_TITLE_POSITIONS, type AreaColorKey, type AreaTitlePosition } from '../lib/area'
 import { formatType } from '../lib/helpers'
+import { parseStrictJson } from '../lib/strictJson'
 import { X } from './Icons'
 
 type ModalProps = {
@@ -1001,13 +1002,13 @@ async function validateConstantInput(payload: { dataType: ConstantValueType; jso
   }
   let parsed: unknown
   try {
-    parsed = JSON.parse(trimmed)
+    parsed = parseStrictJson(trimmed)
   } catch (error) {
     if (error instanceof SyntaxError) {
       const position = error.message.match(/position (\d+)/)?.[1]
       return position ? `Invalid JSON at character ${position}: ${error.message}` : `Invalid JSON: ${error.message}`
     }
-    return 'Value must be valid JSON for the selected type.'
+    return error instanceof Error ? error.message : 'Value must be valid JSON for the selected type.'
   }
   switch (payload.dataType) {
     case 'bool':

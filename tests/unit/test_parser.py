@@ -1,10 +1,33 @@
 from pathlib import Path
 
 from bulletjournal.domain.enums import ValidationSeverity
-from bulletjournal.parser.docs_parser import extract_notebook_docs
+from bulletjournal.parser.docs_parser import extract_notebook_docs, extract_notebook_docs_from_source_text
 from bulletjournal.parser.interface_parser import parse_notebook_contract, parse_notebook_interface
 
 FIXTURES = Path(__file__).resolve().parents[1] / 'fixtures'
+
+
+def test_docs_remove_marimo_indentation_and_preserve_code_indentation() -> None:
+    source = '''import marimo
+app = marimo.App()
+@app.cell
+def _():
+    mo.md(r"""
+    # Documentation
+
+    This notebook
+    processes data.
+
+    ```
+    for item in items:
+        print(item)
+    ```
+    """)
+    return
+'''
+    assert extract_notebook_docs_from_source_text(source) == (
+        '# Documentation\n\nThis notebook\nprocesses data.\n\n```\nfor item in items:\n    print(item)\n```'
+    )
 
 
 def test_parser_extracts_interface_and_docs() -> None:

@@ -26,6 +26,13 @@ export function organizerPorts(node: NodeRecord): Array<{ key: string; name: str
 }
 
 export function outputsForNode(node: NodeRecord): Port[] {
+  if (!node.interface && node.kind === 'constant') {
+    return [{
+      name: node.ui?.artifact_name ?? 'value', data_type: node.ui?.data_type ?? 'object',
+      role: 'output', description: null, default: null, has_default: false,
+      kind: 'artifact', direction: 'output',
+    }]
+  }
   return node.interface?.outputs ?? []
 }
 
@@ -127,6 +134,32 @@ export function resolveOutputBinding(snapshot: ProjectSnapshot, nodeId: string, 
     currentNodeId = upstream.source_node
     currentPortName = upstream.source_port
   }
+}
+
+export function dependencyNodeIds(snapshot: ProjectSnapshot, roots: string[], direction: 'upstream' | 'downstream'): Set<string> {
+  const nodeById = new Map(snapshot.graph.nodes.map((node) => [node.id, node]))
+  const pending: Array<{ nodeId: string; lane: string | null }> = roots.map((nodeId) => ({ nodeId, lane: null }))
+  const visited = new Set<string>()
+  const related = new Set(roots)
+  while (pending.length) {
+    const { nodeId, lane } = pending.pop()!
+    const signature = JSON.stringify([nodeId, lane])
+    if (visited.has(signature)) continue
+    visited.add(signature)
+    for (const edge of snapshot.graph.edges) {
+      const upstream = direction === 'upstream'
+      const endpoint = upstream ? edge.target_node : edge.source_node
+      const port = upstream ? edge.target_port : edge.source_port
+      if (endpoint !== nodeId || (lane !== null && port !== lane)) continue
+      const neighbor = upstream ? edge.source_node : edge.target_node
+      const neighborPort = upstream ? edge.source_port : edge.target_port
+      const node = nodeById.get(neighbor)
+      if (!node) continue
+      related.add(neighbor)
+      pending.push({ nodeId: neighbor, lane: node.kind === 'organizer' ? neighborPort : null })
+    }
+  }
+  return related
 }
 
 export function inputState(snapshot: ProjectSnapshot, nodeId: string, port: Port): ArtifactState {

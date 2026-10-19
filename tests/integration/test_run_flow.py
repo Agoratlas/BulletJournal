@@ -1706,7 +1706,10 @@ if __name__ == '__main__':
     node = next(node for node in snapshot['graph']['nodes'] if node['id'] == 'broken_node')
 
     assert all(entry['issue_id'] != notice['issue_id'] for entry in snapshot['notices'])
-    assert node['state'] == 'pending'
+    assert node['state'] == 'ready'
+    artifact = next(entry for entry in snapshot['artifacts'] if entry['node_id'] == 'broken_node')
+    assert artifact['artifact_name'] == 'value'
+    assert artifact['current_version_id'] is not None
 
 
 def test_run_all_is_blocked_by_pending_file_constant(tmp_path) -> None:

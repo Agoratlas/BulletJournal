@@ -23,6 +23,7 @@ import ReactFlow, {
   type NodeProps,
   type Viewport,
   useReactFlow,
+  useNodesInitialized,
 } from 'reactflow'
 
 import { areaSettings } from '../lib/area'
@@ -1086,7 +1087,8 @@ function fixedNodeHeight(node: NodeRecord, layoutHeight: number | undefined): nu
 }
 
 export function GraphCanvas({ snapshot, serverNowMs = Date.now(), serverNowClientAnchorMs = Date.now(), selectedNodeIds, selectedEdgeIds, activeRunNodeId = null, queuedRunNodeIds = [], completedRunNodeIds = [], activeEditorNodeIds = [], onConnect, onEdgesChange, onSelectionChange, onNodeSelect, onEdgeSelect, onNodeContextMenu, onSelectionContextMenu, onPortContextMenu, onEditConstantNode, onEditOrganizerNode, onEditAreaNode, onOpenEditor, onOpenDashboard, onKillEditor, onRunNode, onOpenArtifacts, onOpenAssets, onCanvasInteract, onCanvasClear, onNodesMove, onNodeResize, onNodesDelete, draggedBlock, onBlockDrop, onViewportChange, dashboardPseudoLinks = [], selectedDashboardId = null, selectedDashboardSourceNodeIds = [], onToggleDashboardSource = () => undefined, nodeNoticeSeverityById = {}, hoveredNoticeNodeId = null, focusedNotice = null }: GraphCanvasProps) {
-  const { screenToFlowPosition, setCenter, setViewport } = useReactFlow()
+  const { screenToFlowPosition, setCenter, setViewport, getNode } = useReactFlow()
+  const nodesInitialized = useNodesInitialized()
   const store = useStoreApi()
   const updateNodeInternals = useUpdateNodeInternals()
   const shellRef = useRef<HTMLDivElement | null>(null)
@@ -1106,7 +1108,46 @@ export function GraphCanvas({ snapshot, serverNowMs = Date.now(), serverNowClien
   const [menuOpenNodeId, setMenuOpenNodeId] = useState<string | null>(null)
   const lastHandleSignatureRef = useRef<Record<string, string>>({})
   const lastFocusedNoticeTokenRef = useRef<number | null>(null)
+  const [blockAnchor, setBlockAnchor] = useState(() => ({ hash: window.location.hash, token: 0 }))
+  const lastBlockAnchorRef = useRef<string | null>(null)
   const connectionIntent = connectionDragActive ? rawConnectionIntent : null
+
+  useEffect(() => {
+    function handleHashChange() {
+      setBlockAnchor((current) => ({ hash: window.location.hash, token: current.token + 1 }))
+    }
+    window.addEventListener('hashchange', handleHashChange)
+    return () => window.removeEventListener('hashchange', handleHashChange)
+  }, [])
+
+  useEffect(() => {
+    if (!blockAnchor.hash || !nodesInitialized) return
+    const requestKey = `${snapshot.project.project_id}:${blockAnchor.token}:${blockAnchor.hash}`
+    if (lastBlockAnchorRef.current === requestKey) return
+    let nodeId: string
+    try {
+      nodeId = decodeURIComponent(blockAnchor.hash.slice(1))
+    } catch {
+      return
+    }
+    const node = snapshot.graph.nodes.find((entry) => entry.id === nodeId)
+    if (!node) return
+    const layout = snapshot.graph.layout.find((entry) => entry.node_id === nodeId)
+    const flowNode = getNode(nodeId)
+    const width = flowNode?.width ?? nodeDimensions[nodeId]?.width ?? layout?.w ?? 360
+    const height = flowNode?.height ?? nodeDimensions[nodeId]?.height ?? layout?.h ?? 220
+    const frame = window.requestAnimationFrame(() => {
+      if (initializedViewportProjectIdRef.current !== snapshot.project.project_id) return
+      lastBlockAnchorRef.current = requestKey
+      onNodeSelect(nodeId)
+      const rect = shellRef.current?.getBoundingClientRect()
+      const zoom = rect
+        ? Math.min(GRAPH_DEFAULT_ZOOM, rect.width * 0.8 / width, rect.height * 0.8 / height)
+        : GRAPH_DEFAULT_ZOOM
+      void setCenter((layout?.x ?? 80) + width / 2, (layout?.y ?? 80) + height / 2, { zoom: Math.max(GRAPH_MIN_ZOOM, zoom), duration: 220 })
+    })
+    return () => window.cancelAnimationFrame(frame)
+  }, [blockAnchor, getNode, nodeDimensions, nodesInitialized, onNodeSelect, setCenter, snapshot.graph.layout, snapshot.graph.nodes, snapshot.project.project_id])
 
   function handleMenuOpenChange(nodeId: string, open: boolean) {
     setMenuOpenNodeId((current) => {
@@ -1331,8 +1372,8 @@ export function GraphCanvas({ snapshot, serverNowMs = Date.now(), serverNowClien
       snapshot.graph.nodes.map((node) => [
         node.id,
         JSON.stringify({
-          inputs: (node.interface?.inputs ?? []).map((port) => [port.name, port.data_type, port.declaration_index ?? null]),
-          outputs: (node.interface?.outputs ?? []).map((port) => [port.name, port.data_type, port.declaration_index ?? null]),
+          inputs: inputsForNode(node).map((port) => [port.name, port.data_type, port.declaration_index ?? null]),
+          outputs: outputsForNode(node).map((port) => [port.name, port.data_type, port.declaration_index ?? null]),
           organizerGhostInsertIndex: node.kind === 'organizer' ? (organizerGhostByNodeId[node.id] ?? null) : null,
           dashboardSourcePort: node.kind === 'notebook' && (selectedDashboardId !== null || selectedDashboardPseudoEdgeNotebookIds.includes(node.id)),
           dashboardSourceSelected: selectedDashboardSourceNodeIds.includes(node.id),
@@ -1343,12 +1384,15 @@ export function GraphCanvas({ snapshot, serverNowMs = Date.now(), serverNowClien
     const changedNodeIds = Object.entries(nextSignatureById)
       .filter(([nodeId, signature]) => lastHandleSignatureRef.current[nodeId] !== signature)
       .map(([nodeId]) => nodeId)
-    lastHandleSignatureRef.current = nextSignatureById
-    if (!changedNodeIds.length) {
+    if (!nodesInitialized || !changedNodeIds.length) {
       return
     }
-    updateNodeInternals(changedNodeIds)
-  }, [snapshot.graph.nodes, organizerGhostByNodeId, organizerGhostSignature, selectedDashboardId, selectedDashboardSourceNodeIds, selectedDashboardPseudoEdgeNotebookIds, selectedDashboardPseudoEdgeDashboardIds, updateNodeInternals])
+    const frame = window.requestAnimationFrame(() => {
+      lastHandleSignatureRef.current = nextSignatureById
+      updateNodeInternals(changedNodeIds)
+    })
+    return () => window.cancelAnimationFrame(frame)
+  }, [snapshot.graph.nodes, nodesInitialized, organizerGhostByNodeId, organizerGhostSignature, selectedDashboardId, selectedDashboardSourceNodeIds, selectedDashboardPseudoEdgeNotebookIds, selectedDashboardPseudoEdgeDashboardIds, updateNodeInternals])
 
   const nodes = useMemo(() => {
     let changed = false

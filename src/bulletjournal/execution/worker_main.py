@@ -225,7 +225,7 @@ def main(argv: list[str] | None = None) -> int:
             bindings=bindings,
             outputs=outputs,
             asset_declarations=asset_declarations,
-            defer_publication=True,
+            defer_publication=False,
         )
         progress_path = Path(manifest.progress_path) if manifest.progress_path else None
         if progress_path is not None:

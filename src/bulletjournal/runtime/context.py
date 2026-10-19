@@ -684,16 +684,9 @@ def _live_bindings_for_node(
 
 
 def _downstream_node_ids(graph: GraphData, node_id: str) -> list[str]:
-    pending = [node_id]
-    seen: set[str] = set()
-    while pending:
-        source = pending.pop()
-        for edge in graph.edges:
-            if edge.source_node != source or edge.target_node in seen or edge.target_node == node_id:
-                continue
-            seen.add(edge.target_node)
-            pending.append(edge.target_node)
-    return sorted(seen)
+    from bulletjournal.domain.graph_bindings import dependency_closure
+
+    return sorted(dependency_closure(graph, node_id, upstream=False))
 
 
 _RUNTIME_CONTEXT: contextvars.ContextVar[RuntimeContext | None] = contextvars.ContextVar(

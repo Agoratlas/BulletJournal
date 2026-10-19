@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections import defaultdict, deque
 
 from bulletjournal.domain.enums import ArtifactState, NodeKind
+from bulletjournal.domain.graph_bindings import dependency_closure
 from bulletjournal.domain.models import Edge, GraphData
 
 
@@ -32,29 +33,13 @@ def topological_nodes(graph: GraphData) -> list[str]:
 
 
 def upstream_closure(graph: GraphData, node_id: str) -> list[str]:
-    upstream, _ = dependency_maps(graph)
-    visited: set[str] = set()
-    stack = [node_id]
-    while stack:
-        current = stack.pop()
-        for parent in upstream.get(current, set()):
-            if parent not in visited:
-                visited.add(parent)
-                stack.append(parent)
+    visited = dependency_closure(graph, node_id, upstream=True)
     ordered = topological_nodes(graph)
     return [candidate for candidate in ordered if candidate in visited]
 
 
 def downstream_closure(graph: GraphData, node_id: str) -> list[str]:
-    _, downstream = dependency_maps(graph)
-    visited: set[str] = set()
-    stack = [node_id]
-    while stack:
-        current = stack.pop()
-        for child in downstream.get(current, set()):
-            if child not in visited:
-                visited.add(child)
-                stack.append(child)
+    visited = dependency_closure(graph, node_id, upstream=False)
     ordered = topological_nodes(graph)
     return [candidate for candidate in ordered if candidate in visited]
 

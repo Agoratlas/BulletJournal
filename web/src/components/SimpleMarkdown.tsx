@@ -6,6 +6,7 @@ type ListBlock = { kind: 'list'; ordered: boolean; items: ListItem[] }
 type TableAlignment = 'left' | 'center' | 'right'
 type Block =
   | { kind: 'paragraph'; lines: string[] }
+  | { kind: 'code'; text: string }
   | ListBlock
   | { kind: 'heading'; level: number; text: string }
   | { kind: 'rule' }
@@ -21,7 +22,10 @@ function isTableSeparator(line: string, count: number): boolean {
 }
 
 export function SimpleMarkdown({ text, className }: SimpleMarkdownProps) {
-  const lines = text.split(/\r?\n/)
+  const rawLines = text.split(/\r?\n/)
+  const indents = rawLines.filter((line) => line.trim()).map((line) => line.match(/^\s*/)?.[0].length ?? 0)
+  const indent = indents.length ? Math.min(...indents) : 0
+  const lines = rawLines.map((line) => line.slice(indent))
   const blocks: Block[] = []
   let paragraph: string[] = []
   let listStack: Array<{ indent: number; block: ListBlock }> = []
@@ -34,6 +38,19 @@ export function SimpleMarkdown({ text, className }: SimpleMarkdownProps) {
   for (let index = 0; index < lines.length; index += 1) {
     const line = lines[index]
     const trimmed = line.trim()
+    const fence = trimmed.match(/^(`{3,})([^`]*)$/)
+    if (fence) {
+      flushParagraph()
+      listStack = []
+      const codeLines: string[] = []
+      const closingFence = new RegExp('^\\s*`{' + fence[1].length + ',}\\s*$')
+      while (index + 1 < lines.length && !closingFence.test(lines[index + 1])) {
+        codeLines.push(lines[++index])
+      }
+      if (index + 1 < lines.length) index += 1
+      blocks.push({ kind: 'code', text: codeLines.join('\n') })
+      continue
+    }
     if (!trimmed) {
       flushParagraph()
       listStack = []
@@ -83,8 +100,15 @@ export function SimpleMarkdown({ text, className }: SimpleMarkdownProps) {
       }
       listStack[listStack.length - 1].block.items.push({ text: list[3].trim(), children: [] })
     } else {
-      listStack = []
-      paragraph.push(trimmed)
+      const currentList = listStack.at(-1)
+      const lineIndent = line.match(/^\s*/)?.[0].length ?? 0
+      if (currentList && lineIndent > currentList.indent) {
+        const item = currentList.block.items.at(-1)
+        if (item) item.text += ` ${trimmed}`
+      } else {
+        listStack = []
+        paragraph.push(line.trimStart())
+      }
     }
   }
   flushParagraph()
@@ -96,7 +120,8 @@ export function SimpleMarkdown({ text, className }: SimpleMarkdownProps) {
 
 function renderBlock(block: Block, key: number): JSX.Element {
   if (block.kind === 'paragraph') return <p key={key}>{block.lines.map((line, index) =>
-    <InlineMarkdown key={index} text={line} withBreak={index < block.lines.length - 1} />)}</p>
+    <InlineMarkdown key={index} text={line.replace(/(?: {2,}|\\)$/, '')} withBreak={index < block.lines.length - 1 && /(?: {2,}|\\)$/.test(line)} withSpace={index < block.lines.length - 1} />)}</p>
+  if (block.kind === 'code') return <pre key={key}><code>{block.text}</code></pre>
   if (block.kind === 'list') {
     const items = block.items.map((item, index) => <li key={index}>
       <InlineMarkdown text={item.text} />
@@ -114,8 +139,8 @@ function renderBlock(block: Block, key: number): JSX.Element {
   return <HeadingTag key={key}>{renderInlineMarkdown(block.text)}</HeadingTag>
 }
 
-function InlineMarkdown({ text, withBreak = false }: { text: string; withBreak?: boolean }) {
-  return <>{renderInlineMarkdown(text)}{withBreak ? <br /> : null}</>
+function InlineMarkdown({ text, withBreak = false, withSpace = false }: { text: string; withBreak?: boolean; withSpace?: boolean }) {
+  return <>{renderInlineMarkdown(text)}{withBreak ? <br /> : withSpace ? ' ' : null}</>
 }
 
 function renderInlineMarkdown(text: string): ReactNode[] {
