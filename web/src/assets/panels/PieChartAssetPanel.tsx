@@ -24,6 +24,7 @@ import {
   PrepareErrorsNotice,
   PreparedAssetTableSection,
   ResizableDatavizContent,
+  SettingsOverrideActions,
   TitleOverridesSection,
 } from '../shared/layout'
 import {
@@ -232,10 +233,12 @@ export function PieChartAssetPanel({
     () => preparePieChartDisplaySlices(pieChart, chartOverrides, chartOverrideDefaults),
     [chartOverrideDefaults, chartOverrides, pieChart],
   )
-  const hasSettingsOverrides = Object.keys(buildModifierOverridesRecord(
-    serializePieChartModifierValues(chartOverrides),
+  const settingsValues = serializePieChartModifierValues(chartOverrides)
+  const settingsOverrides = buildModifierOverridesRecord(
+    settingsValues,
     asset.default_modifiers,
-  )).length > 0
+  )
+  const hasSettingsOverrides = Object.keys(settingsOverrides).length > 0 || Boolean(isPanelResized)
 
   useEffect(() => {
     setPageInput(String(resolvedPage.index + 1))
@@ -314,11 +317,9 @@ export function PieChartAssetPanel({
 
   const settingsBody = (
     <>
-      <div className="asset-dataviz-settings-actions">
-        <button type="button" className="secondary asset-dataviz-settings-reset" onClick={handleResetSettingsOverrides} disabled={!hasSettingsOverrides}>
-          Reset to default
-        </button>
-      </div>
+      <SettingsOverrideActions schema={asset.modifier_schema} values={settingsValues} overrides={settingsOverrides} panelHeight={resolvedPanelHeight} isPanelResized={Boolean(isPanelResized)} onPanelHeightChange={onPanelHeightChange} minPanelHeight={minPanelHeight} onReset={handleResetSettingsOverrides} hasOverrides={hasSettingsOverrides} onImport={(overrides) => {
+        setChartOverrides(pieChartOverridesFromModifiers(asset.default_modifiers, overrides, asset.modifier_schema))
+      }} />
 
       <PanelSettingsSection title="Pie chart">
         <label className="asset-dataviz-field">
@@ -651,22 +652,6 @@ function PieChartChart({
     }
   }, [selectedCategories, spec])
 
-  useLayoutEffect(() => {
-    const result = viewRef.current
-    if (result !== null) {
-      result.view.height(chartHeight).run()
-    }
-  }, [chartHeight])
-
-  useEffect(() => {
-    const result = viewRef.current
-    if (result === null) {
-      return
-    }
-    result.view.height(chartHeight)
-    void result.view.runAsync()
-  }, [chartHeight])
-
   if (!displaySlices.length) {
     return <LoadingPlaceholder message="No non-null rows match the current pie chart filters." />
   }
@@ -684,7 +669,7 @@ function PieChartChart({
   )
 }
 
-function buildPieChartVegaLiteSpec(
+export function buildPieChartVegaLiteSpec(
   displaySlices: PieChartDisplaySlice[],
   selectedCategories: PieChartSelectionValue[],
   theme: ReturnType<typeof useAssetChartTheme>,
@@ -694,15 +679,17 @@ function buildPieChartVegaLiteSpec(
   defaultOverrides: PieChartChartOverrides,
   chartScale: number,
 ): VisualizationSpec {
-  const outerRadius = Math.max(1, Math.floor(Math.min(
-    0.8 * chartHeight,
-    0.6 * (containerWidth || chartHeight),
-  ) / 2))
-  const innerRadius = outerRadius * pieChartInnerRadiusValue(overrides, defaultOverrides)
+  // Vega's fitted width/height already exclude title and padding space.
+  const outerRadius = 'max(1, floor(min(0.8 * height, 0.6 * width) / 2))'
+  const innerRadiusFraction = pieChartInnerRadiusValue(overrides, defaultOverrides)
   const labelPosition = pieChartLabelPositionValue(overrides, defaultOverrides)
   const labelThreshold = pieChartPercentageValue(overrides.labelThreshold, defaultOverrides.labelThreshold, 5, 0, 100)
   const borderThickness = (optionalNonNegativeNumberFromInput(overrides.borderThickness) ?? 3) * chartScale
   const labelSize = (optionalPositiveNumberFromInput(overrides.labelSize) ?? optionalPositiveNumberFromInput(defaultOverrides.labelSize) ?? 12) * chartScale
+  const labelHalfWidth = 'min(datum.label_half_width, max(0, width - 8) / 2)'
+  const labelExtent = `((${labelHalfWidth}) * abs(sin(datum.mid_angle)) + datum.label_half_height * abs(cos(datum.mid_angle)))`
+  const requestedLabelRadius = `max(0, (${outerRadius}) * ${labelPosition / 100} ${labelPosition >= 100 ? `+ ${labelExtent}` : labelPosition < innerRadiusFraction * 100 ? `- ${labelExtent}` : ''})`
+  const labelRadius = `max(0, min(${requestedLabelRadius}, (width / 2 - (${labelHalfWidth}) - 4) / max(1e-6, abs(sin(datum.mid_angle))), (height / 2 - datum.label_half_height - 4) / max(1e-6, abs(cos(datum.mid_angle)))))`
   const opaqueLabelColor = opaqueColor(theme.axisTitleColor)
   const totalCount = displaySlices.reduce((sum, slice) => sum + slice.count, 0)
   let cumulativeCount = 0
@@ -721,7 +708,7 @@ function buildPieChartVegaLiteSpec(
       values: displaySlices.map((slice, index) => {
         const labelText = pieChartLabelText(slice.label, slice.share, overrides.showPercentages)
         const midAngle = totalCount > 0 ? (((cumulativeCount + (slice.count / 2)) / totalCount) * Math.PI * 2) : 0
-        const labelRadius = pieChartLabelRadius(labelPosition, innerRadius, outerRadius, labelText, labelSize, midAngle)
+        const labelLines = labelText.split(/\r?\n/)
         cumulativeCount += slice.count
         return {
           label: slice.label,
@@ -735,7 +722,8 @@ function buildPieChartVegaLiteSpec(
           is_selected: pieChartSelectionIncludes(selectedCategories, slice.rawValues),
           show_label: (slice.share * 100) >= labelThreshold,
           label_text: labelText,
-          label_radius: labelRadius,
+          label_half_width: Math.max(...labelLines.map((line) => line.length)) * labelSize * 0.4,
+          label_half_height: labelLines.length * labelSize * 0.55,
         }
       }),
     },
@@ -743,8 +731,8 @@ function buildPieChartVegaLiteSpec(
       {
         mark: {
           type: 'arc',
-          innerRadius,
-          outerRadius,
+          innerRadius: { expr: `(${outerRadius}) * ${innerRadiusFraction}` },
+          outerRadius: { expr: outerRadius },
           stroke: opaqueLabelColor,
           strokeWidth: borderThickness,
         },
@@ -780,10 +768,15 @@ function buildPieChartVegaLiteSpec(
           fontWeight: 600,
           align: 'center',
           baseline: 'middle',
+          limit: { expr: 'max(0, width - 8)' },
         },
         encoding: {
           theta: { field: 'mid_angle', type: 'quantitative', scale: null },
-          radius: { field: 'label_radius', type: 'quantitative', scale: null },
+          radius: {
+            value: {
+              expr: labelRadius,
+            },
+          },
           text: { field: 'label_text', type: 'nominal' },
         },
       },
@@ -966,32 +959,4 @@ function pieChartLabelText(label: string, share: number, showPercentages: boolea
     return label
   }
   return `${label} (${(share * 100).toFixed(1)}%)`
-}
-
-function pieChartLabelRadius(
-  labelPosition: number,
-  innerRadius: number,
-  outerRadius: number,
-  labelText: string,
-  labelSize: number,
-  theta: number,
-): number {
-  const requestedRadius = outerRadius * (labelPosition / 100)
-  const innerRadiusPercentage = outerRadius > 0 ? (innerRadius / outerRadius) * 100 : 0
-  const labelExtent = estimatedPieChartLabelRadialExtent(labelText, labelSize, theta)
-  if (labelPosition >= 100) {
-    return requestedRadius + labelExtent
-  }
-  if (labelPosition < innerRadiusPercentage) {
-    return Math.max(0, requestedRadius - labelExtent)
-  }
-  return requestedRadius
-}
-
-function estimatedPieChartLabelRadialExtent(labelText: string, labelSize: number, theta: number): number {
-  const lines = labelText.split(/\r?\n/)
-  const longestLineLength = lines.reduce((maxLength, line) => Math.max(maxLength, line.length), 0)
-  const halfWidth = longestLineLength * labelSize * 0.31
-  const halfHeight = Math.max(lines.length, 1) * labelSize * 0.55
-  return (halfWidth * Math.abs(Math.sin(theta))) + (halfHeight * Math.abs(Math.cos(theta)))
 }

@@ -61,9 +61,21 @@ def prepared_table_payload(
         ],
         'page': resolved_page,
         'sort': resolved_sort,
-        'rows': [{str(key): json_safe_value(value) for key, value in row.items()} for row in rows],
+        'rows': [{str(key): browser_safe_value(value) for key, value in row.items()} for row in rows],
         'cell_highlights': cell_highlights,
     }
+
+
+def browser_safe_value(value: Any) -> Any:
+    """Keep integers outside JavaScript's exact range as decimal strings in JSON."""
+    normalized = json_safe_value(value)
+    if isinstance(normalized, int) and not isinstance(normalized, bool) and abs(normalized) > 2**53 - 1:
+        return str(normalized)
+    if isinstance(normalized, dict):
+        return {key: browser_safe_value(item) for key, item in normalized.items()}
+    if isinstance(normalized, list):
+        return [browser_safe_value(item) for item in normalized]
+    return normalized
 
 
 def frame_with_filters(
@@ -222,8 +234,8 @@ def resolve_filter_entry(
             'kind': 'range',
             'column': column,
             'value_type': category,
-            'lower': json_safe_value(lower),
-            'upper': json_safe_value(upper),
+            'lower': browser_safe_value(lower),
+            'upper': browser_safe_value(upper),
         }
     if kind == 'value':
         raw_values = entry.get('values')
@@ -241,7 +253,7 @@ def resolve_filter_entry(
             'kind': 'value',
             'column': column,
             'value_type': category,
-            'values': [json_safe_value(item) for item in resolved_values],
+            'values': [browser_safe_value(item) for item in resolved_values],
             'include_null': include_null,
         }
     if category != 'text':
@@ -450,7 +462,9 @@ def coerce_bool_filter_value(value: object, *, column: str, kind: str) -> bool:
 
 
 def restore_filter_value(value: object, *, value_type: str) -> Any:
-    if value is None or value_type in {'numeric', 'bool', ''} or not isinstance(value, str):
+    if value_type == 'numeric' and isinstance(value, str):
+        return coerce_numeric_filter_value(value, column='numeric', kind='value')
+    if value is None or value_type in {'bool', ''} or not isinstance(value, str):
         return value
     parsers = {
         'date': date.fromisoformat,

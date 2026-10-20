@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 
-import { prepareAsset } from '../../lib/api'
+import { downloadDataFramePreview, prepareAsset } from '../../lib/api'
+import { assetExportFilename, downloadBlob } from '../shared/exports'
 import type { AssetFilter, AssetHighlight, AssetSort } from '../../lib/types'
 import {
   AssetPanelFrame,
@@ -10,12 +11,15 @@ import {
   OverrideIncompatibleNotice,
   PrepareErrorsNotice,
   PreparedAssetTableSection,
+  PanelSettingsSection,
+  SettingsOverrideActions,
 } from '../shared/layout'
 import {
   buildModifierOverridesRecord,
   filterKindsForDataType,
   initialTableStateFromModifiers,
   modifierColumnsFromSchema,
+  modifierFieldLabelClassName,
   nextSortForColumn,
   removeFilter,
   replaceHighlightsForColumn,
@@ -38,6 +42,18 @@ export function DataFrameAssetPanel({
   frameVariant,
   prepare,
 }: InteractiveAssetPanelProps) {
+  const defaultMaxTextLines = Number(asset.default_modifiers.max_text_lines ?? asset.definition?.max_text_lines ?? 1)
+  const initialMaxTextLines = Number(persistedState?.modifier_overrides.max_text_lines ?? defaultMaxTextLines)
+  const [maxTextLines, setMaxTextLines] = useState(initialMaxTextLines)
+  const settingsValues = { max_text_lines: maxTextLines }
+  const settingsOverrides = buildModifierOverridesRecord(settingsValues, { max_text_lines: defaultMaxTextLines })
+  const hasSettingsOverrides = Object.keys(settingsOverrides).length > 0
+  const settingsSchema = asset.modifier_schema.some((entry) => entry.id === 'max_text_lines')
+    ? asset.modifier_schema
+    : [...asset.modifier_schema, {
+      id: 'max_text_lines', title: 'Max text lines', kind: 'int', category: 'saved_view',
+      server_targets: [], default_value: defaultMaxTextLines, min_value: 1, max_value: 10, step: 1,
+    }]
   const prepareNodeId = prepareTarget?.nodeId ?? nodeId
   const prepareAssetName = prepareTarget?.assetName ?? asset.asset_name
   const preparePanelContext = prepareTarget?.panelContext ?? null
@@ -81,8 +97,9 @@ export function DataFrameAssetPanel({
       sort: sort ? [sort] : [],
       filters,
       highlights,
-    }, asset.default_modifiers),
-    [asset.default_modifiers, filters, highlights, pageIndex, pageSize, sort],
+      max_text_lines: maxTextLines,
+    }, { ...asset.default_modifiers, max_text_lines: defaultMaxTextLines }),
+    [asset.default_modifiers, defaultMaxTextLines, filters, highlights, maxTextLines, pageIndex, pageSize, sort],
   )
   const overrideValidationKey = requiresOverrideValidation ? stableValueKey(modifierOverrides) : null
 
@@ -100,10 +117,17 @@ export function DataFrameAssetPanel({
   }, [asset.current_asset_version_id, externalStateKey])
 
   useEffect(() => {
-    if (localStateKey === externalStateKey) {
+    if (maxTextLines !== initialMaxTextLines) {
+      isApplyingPersistedStateRef.current = true
+      setMaxTextLines(initialMaxTextLines)
+    }
+  }, [asset.current_asset_version_id, initialMaxTextLines])
+
+  useEffect(() => {
+    if (localStateKey === externalStateKey && maxTextLines === initialMaxTextLines) {
       isApplyingPersistedStateRef.current = false
     }
-  }, [externalStateKey, localStateKey])
+  }, [externalStateKey, localStateKey, maxTextLines, initialMaxTextLines])
 
   const prepareQuery = useQuery({
     queryKey: [
@@ -117,6 +141,7 @@ export function DataFrameAssetPanel({
       sort?.direction ?? null,
       filtersKey,
       highlightsKey,
+      maxTextLines,
       persistedState?.override_schema_hash ?? null,
       overrideValidationKey,
       stableValueKey(preparePanelContext),
@@ -204,6 +229,7 @@ export function DataFrameAssetPanel({
     setSort(resetState.sort)
     setFilters(resetState.filters)
     setHighlights(resetState.highlights ?? [])
+    setMaxTextLines(defaultMaxTextLines)
     setPageInput(String(resetState.page.index + 1))
     onPersistedStateChange?.({
       modifier_overrides: {},
@@ -218,8 +244,37 @@ export function DataFrameAssetPanel({
     setPageInput('1')
   }
 
+  const settingsBody = <>
+    <SettingsOverrideActions
+      schema={settingsSchema}
+      values={settingsValues}
+      overrides={settingsOverrides}
+      panelHeight={0}
+      isPanelResized={false}
+      hasOverrides={hasSettingsOverrides}
+      onReset={() => setMaxTextLines(defaultMaxTextLines)}
+      onImport={(overrides) => setMaxTextLines(Number(overrides.max_text_lines ?? defaultMaxTextLines))}
+    />
+    <PanelSettingsSection title="DataFrame">
+      <label className="asset-dataviz-field">
+        <span className={modifierFieldLabelClassName(hasSettingsOverrides)}>Max text lines</span>
+        <div className="asset-dataviz-slider-field">
+          <input type="range" min={1} max={10} step={1} value={maxTextLines} onChange={(event) => setMaxTextLines(Number(event.target.value))} />
+          <strong>{maxTextLines}</strong>
+        </div>
+      </label>
+    </PanelSettingsSection>
+  </>
+
   return (
-    <AssetPanelFrame asset={asset} panelInfo={panelInfo} sectionId={sectionId} frameVariant={frameVariant} showExportActions dataFramePreview={table}>
+    <AssetPanelFrame asset={asset} panelInfo={panelInfo} settingsTitle="Modifier overrides" settingsBody={settingsBody} settingsActive={hasSettingsOverrides} sectionId={sectionId} frameVariant={frameVariant} showExportActions dataFramePreview={table} onDownloadParquet={async () => {
+      const blob = await downloadDataFramePreview(prepareNodeId, prepareAssetName, {
+        asset_version_id: response?.asset_version_id ?? asset.current_asset_version_id,
+        modifier_overrides: response?.resolved_modifiers ?? modifierOverrides,
+        panel_context: preparePanelContext,
+      }, Boolean(prepare))
+      downloadBlob(blob, assetExportFilename(asset.asset_name, 'parquet'))
+    }}>
       <div className="asset-dataframe-panel">
         {overrideIncompatible ? <OverrideIncompatibleNotice onReset={onPersistedStateChange ? handleResetOverrides : undefined} /> : null}
         <PrepareErrorsNotice errors={prepareErrors} />
@@ -230,6 +285,7 @@ export function DataFrameAssetPanel({
         {table ? (
           <PreparedAssetTableSection
             table={table}
+            maxTextLines={maxTextLines}
             columns={availableColumns}
             activeSort={resolvedSort}
             activeFilters={resolvedFilters}

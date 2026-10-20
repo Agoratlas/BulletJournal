@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query'
 
 import { saveNotebookDashboard, listNodeAssets } from '../lib/api'
 import { useDocumentMetadata } from '../lib/documentMetadata'
+import { filterDashboardPanels } from '../lib/dashboardSearch'
 import { SaveDashboardDialog } from '../components/Dialogs'
 import { DashboardSidebar, normalizeDashboardPanels } from '../dashboard/DashboardSidebar'
 import type { DashboardPanelRecord } from '../lib/types'
@@ -23,6 +24,7 @@ export function NotebookAssetsPage({
 }) {
   useDocumentMetadata(nodeTitle || nodeId, 'dashboard')
   const [panels, setPanels] = useState<DashboardPanelRecord[]>([])
+  const [search, setSearch] = useState('')
   const initializedNodeIdRef = useRef<string | null>(null)
   const [saveBusy, setSaveBusy] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
@@ -36,7 +38,7 @@ export function NotebookAssetsPage({
   const readyCount = assets.filter((asset) => asset.current_asset_version_id !== null).length
   const assetsByLogicalId = useMemo(() => new Map(assets.map((asset) => [`${asset.node_id}/${asset.asset_name}`, asset] as const)), [assets])
   const orderedPanels = useMemo(() => normalizeDashboardPanels(panels), [panels])
-  const visiblePanels = orderedPanels.filter((panel) => panel.visible)
+  const visiblePanels = filterDashboardPanels(orderedPanels, assetsByLogicalId, search).filter((panel) => panel.visible)
 
   useEffect(() => {
     if (!assetsQuery.data || initializedNodeIdRef.current === nodeId) return
@@ -83,7 +85,7 @@ export function NotebookAssetsPage({
   return (
     <div className="assets-page-shell dashboard-page-shell">
       <div className="canvas-underlay" />
-      <DashboardSidebar panels={panels} assetsByLogicalId={assetsByLogicalId} panelHref={(panelId) => `#${dashboardPanelDomId(panelId)}`} onPanelNavigate={handlePanelNavigate} onPanelsChange={(updater) => setPanels((current) => normalizeDashboardPanels(updater(current)))} />
+      <DashboardSidebar panels={panels} assetsByLogicalId={assetsByLogicalId} panelHref={(panelId) => `#${dashboardPanelDomId(panelId)}`} onPanelNavigate={handlePanelNavigate} onPanelsChange={(updater) => setPanels((current) => normalizeDashboardPanels(updater(current)))} search={search} onSearchChange={setSearch} />
       <div className="assets-page dashboard-page">
         <header className="panel assets-page-header">
           <div>
@@ -141,8 +143,8 @@ export function NotebookAssetsPage({
         <div className="assets-panel-list">
           {!assetsQuery.isLoading && !assetsQuery.isError && assets.length > 0 && visiblePanels.length === 0 ? (
             <div className="panel assets-empty-state">
-              <h2>No visible panels</h2>
-              <p>This dashboard does not currently expose any visible asset panels.</p>
+              <h2>{search ? 'No visible assets match this search' : 'No visible panels'}</h2>
+              <p>{search ? 'Try another title or notebook/asset id.' : 'This dashboard does not currently expose any visible asset panels.'}</p>
             </div>
           ) : null}
           {visiblePanels.map((panel) => {

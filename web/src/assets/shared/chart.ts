@@ -3,14 +3,32 @@ import { useEffect, useMemo, useState } from 'react'
 import type { AssetChartTheme, ChartAxisOverrides, ChartTitleOverrides, HistogramSelectionRange, ScatterPlotSelectionBounds } from './types'
 import { optionalIntegerFromInput, optionalPositiveNumberFromInput } from './modifiers'
 import { VEGA_PANEL_FONT_FAMILY } from './fonts'
+export { enforceTickLabelBounds } from './tickOverlap'
 
-export function buildAxisSpec(overrides: ChartAxisOverrides, defaultLabel: string, fontScale = 1) {
+export function buildAxisSpec(overrides: ChartAxisOverrides, defaultLabel: string, fontScale = 1, axis: 'x' | 'y' = 'y') {
   const resolvedLabel = resolvedAxisLabel(overrides.label, defaultLabel)
+  const fontSize = (optionalPositiveNumberFromInput(overrides.tickSize) ?? 11) * fontScale
+  // Vega accepts arrays of lines; wrap at whitespace and split long words.
+  const lineLength = Math.max(1, Math.floor(140 * fontScale / (fontSize * 0.6)))
+  const pattern = `(.{1,${lineLength}})(?:\\s+|$)|(.{${lineLength}})`
+  const wrappedLabel = `replace(datum.label, regexp(${JSON.stringify(pattern)}, 'g'), '$1$2\\n')`
   return {
     title: overrides.hideLabel ? null : resolvedLabel,
     titleFontSize: (optionalPositiveNumberFromInput(overrides.labelSize) ?? 12) * fontScale,
     tickCount: optionalIntegerFromInput(overrides.tickCount),
-    labelFontSize: (optionalPositiveNumberFromInput(overrides.tickSize) ?? 11) * fontScale,
+    labelFontSize: fontSize,
+    labelAngle: -overrides.tickAngle,
+    ...(axis === 'x' && overrides.tickAngle === 0
+      ? { labelAlign: 'center' as const, labelBaseline: 'top' as const }
+      : {}),
+    labelColor: '#ffffff',
+    labelLimit: 0,
+    // Use rendered (rotated, multiline) text bounds to hide colliding labels.
+    // Greedy detection also handles unequal label lengths on categorical axes.
+    labelOverlap: 'greedy' as const,
+    labelSeparation: (axis === 'x' && overrides.tickAngle === 0 || axis === 'y' && overrides.tickAngle === 90 ? 4 : 0.5) * fontScale,
+    labelLineHeight: fontSize * 1.2,
+    labelExpr: `split(replace(${wrappedLabel}, /\\n$/, ''), '\\n')`,
     grid: overrides.showGridLines,
     gridZindex: 0,
     labelFlush: false,
@@ -33,8 +51,8 @@ export function buildVegaLiteChartConfig(theme: AssetChartTheme, fontScale = 1) 
     },
     axis: {
       domainColor: theme.axisDomainColor,
-      tickColor: theme.axisDomainColor,
-      labelColor: theme.axisLabelColor,
+      tickColor: '#ffffff',
+      labelColor: '#ffffff',
       labelFont: VEGA_PANEL_FONT_FAMILY,
       titleColor: theme.axisTitleColor,
       titleFont: VEGA_PANEL_FONT_FAMILY,
@@ -71,6 +89,10 @@ export function buildChartTitle(overrides: ChartTitleOverrides, defaultText: str
     text: overrides.text.trim() || defaultText,
     fontSize: (optionalPositiveNumberFromInput(overrides.size) ?? 20) * fontScale,
     orient: overrides.position,
+    // A title must not enlarge the scene bounds beyond the fitted plot width.
+    limit: { expr: 'max(0, width)' },
+    offset: 18 * fontScale,
+    frame: 'group' as const,
   }
 }
 

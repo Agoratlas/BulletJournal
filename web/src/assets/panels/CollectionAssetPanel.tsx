@@ -205,6 +205,7 @@ export function CollectionAssetPanel({
   ])
 
   function persistChildPanels(nextChildPanels: Record<string, CollectionChildPanelState>) {
+    persistedChildPanelsRef.current = nextChildPanels
     const nextState = buildCollectionPersistedState(
       asset,
       defaultState,
@@ -378,7 +379,7 @@ export function CollectionAssetPanel({
                     persistChildPanels({
                       ...persistedChildPanelsRef.current,
                       [child.name]: normalizeCollectionChildPanelState({
-                        ...(childPanelState ?? {}),
+                        ...(persistedChildPanelsRef.current[child.name] ?? {}),
                         modifier_overrides: state.modifier_overrides,
                         override_schema_hash: state.override_schema_hash,
                       }),
@@ -391,9 +392,9 @@ export function CollectionAssetPanel({
                     persistChildPanels({
                       ...persistedChildPanelsRef.current,
                       [child.name]: normalizeCollectionChildPanelState({
-                        ...childPanelState,
-                        modifier_overrides: childPanelState?.modifier_overrides ?? {},
-                        override_schema_hash: childPanelState?.override_schema_hash ?? child.overrideSchemaHash,
+                        ...persistedChildPanelsRef.current[child.name],
+                        modifier_overrides: persistedChildPanelsRef.current[child.name]?.modifier_overrides ?? {},
+                        override_schema_hash: persistedChildPanelsRef.current[child.name]?.override_schema_hash ?? child.overrideSchemaHash,
                         panel_height: height === null ? null : unscaledCollectionPanelHeight(height, displayModeRef.current),
                       }),
                     })

@@ -90,6 +90,18 @@ async def upload_file(node_id: str, request: Request):
     }
 
 
+@router.post('/artifacts/{node_id}/{artifact_name}/preview/download')
+def download_dataframe_preview(node_id: str, artifact_name: str, payload: AssetPrepareRequest, request: Request):
+    content = request.app.state.container.asset_prepare_service.download_dataframe_preview(
+        node_id,
+        artifact_name,
+        version_id=payload.asset_version_id,
+        modifier_overrides=payload.modifier_overrides,
+        artifact=True,
+    )
+    return Response(content=content, media_type='application/vnd.apache.parquet')
+
+
 @router.post('/constants/{node_id}/upload')
 async def upload_constant(node_id: str, request: Request, dataframe_format: str = 'csv_comma'):
     container = request.app.state.container

@@ -376,6 +376,33 @@ export async function prepareAsset(
   })
 }
 
+export async function downloadDataFramePreview(
+  nodeId: string,
+  assetName: string,
+  payload: {
+    asset_version_id: number | null
+    modifier_overrides: Record<string, unknown>
+    panel_context: Record<string, unknown> | null
+  },
+  artifact = false,
+): Promise<Blob> {
+  const path = `${artifact ? 'artifacts' : 'assets'}/${encodeURIComponent(nodeId)}/${encodeURIComponent(assetName)}/${artifact ? 'preview/download' : 'download'}`
+  const response = await fetch(appUrl(`/api/v1/${path}`), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+  if (!response.ok) {
+    const text = await response.text()
+    let message = text
+    try {
+      message = formatErrorDetail(JSON.parse(text).detail)
+    } catch { /* Keep the server response. */ }
+    throw new Error(message || `HTTP ${response.status}`)
+  }
+  return response.blob()
+}
+
 export async function prepareArtifactDataFrame(
   nodeId: string,
   artifactName: string,

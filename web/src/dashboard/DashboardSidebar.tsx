@@ -2,7 +2,8 @@ import { useEffect, useRef, useState, type DragEvent, type MouseEvent } from 're
 
 import type { AssetRecord, DashboardPanelRecord } from '../lib/types'
 import { AssetFavoriteButton, openAssetPanelNote } from '../assets/shared/annotations'
-import { NotePen } from '../components/Icons'
+import { NotePen, Search } from '../components/Icons'
+import { filterDashboardPanels } from '../lib/dashboardSearch'
 
 type DropIndicator = {
   panelId: string
@@ -15,15 +16,21 @@ export function DashboardSidebar({
   panelHref,
   onPanelNavigate,
   onPanelsChange,
+  search,
+  onSearchChange,
 }: {
   panels: DashboardPanelRecord[]
   assetsByLogicalId: Map<string, AssetRecord>
   panelHref: (panelId: string) => string
   onPanelNavigate?: (event: MouseEvent<HTMLAnchorElement>, panelId: string) => void
   onPanelsChange: (updater: (panels: DashboardPanelRecord[]) => DashboardPanelRecord[]) => void
+  search: string
+  onSearchChange: (search: string) => void
 }) {
   const orderedPanels = normalizeDashboardPanels(panels)
   const visibleCount = orderedPanels.filter((panel) => panel.visible).length
+  const matchingPanels = filterDashboardPanels(orderedPanels, assetsByLogicalId, search)
+  const [isSearching, setIsSearching] = useState(false)
   const [draggedPanelId, setDraggedPanelId] = useState<string | null>(null)
   const [hiddenDragSourcePanelId, setHiddenDragSourcePanelId] = useState<string | null>(null)
   const [dropIndicator, setDropIndicator] = useState<DropIndicator | null>(null)
@@ -78,7 +85,19 @@ export function DashboardSidebar({
 
   return (
     <aside className="panel dashboard-sidebar">
-      <div className="dashboard-sidebar-head"><div><strong>Panels</strong><p>{visibleCount} visible of {orderedPanels.length}</p></div></div>
+      <div className="dashboard-sidebar-head">
+        <div><strong>Panels</strong><p>{visibleCount} visible of {orderedPanels.length}{search ? ` · ${matchingPanels.length} matching` : ''}</p></div>
+        <button type="button" className={`dashboard-sidebar-search-button${isSearching ? ' is-active' : ''}`} aria-label="Search assets" title="Search assets" aria-expanded={isSearching} onClick={() => {
+          setIsSearching((current) => !current)
+          if (isSearching) onSearchChange('')
+        }}><Search width={18} height={18} /></button>
+      </div>
+      {isSearching ? <input autoFocus type="search" className="dashboard-sidebar-search-input" aria-label="Search assets by title or id" placeholder="Search title or notebook/asset id" value={search} onChange={(event) => onSearchChange(event.target.value)} onKeyDown={(event) => {
+        if (event.key === 'Escape') {
+          onSearchChange('')
+          setIsSearching(false)
+        }
+      }} /> : null}
       {orderedPanels.length ? (
         <div
           className={`dashboard-sidebar-list${draggedPanelId ? ' is-reordering' : ''}`}
@@ -97,7 +116,7 @@ export function DashboardSidebar({
             handlePanelDrop(dropIndicator.panelId, dropIndicator.position, event.dataTransfer.getData('application/x-bulletjournal-dashboard-panel') || event.dataTransfer.getData('text/plain') || null)
           }}
         >
-          {orderedPanels.map((panel) => {
+          {matchingPanels.map((panel) => {
             const asset = assetsByLogicalId.get(`${panel.node_id}/${panel.asset_name}`) ?? null
             const assetState = asset?.state ?? 'pending'
             const label = asset?.title || panel.asset_name
@@ -150,6 +169,7 @@ export function DashboardSidebar({
               </div>
             )
           })}
+          {!matchingPanels.length ? <p className="dashboard-sidebar-empty">No assets match this search.</p> : null}
         </div>
       ) : <p className="dashboard-sidebar-empty">This dashboard does not define any panels yet.</p>}
     </aside>

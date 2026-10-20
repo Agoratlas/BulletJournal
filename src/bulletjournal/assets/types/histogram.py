@@ -215,7 +215,7 @@ def histogram_chart_modifier_defaults(
         'group_mode': 'grouped',
         'group_normalize': 'none',
         'group_spacing': 20,
-        'x_axis': axis_modifier_defaults(x_column),
+        'x_axis': axis_modifier_defaults(x_column, tick_angle=45),
         'y_axis': axis_modifier_defaults(y_axis_label),
         'title': title_modifier_defaults(title),
     }

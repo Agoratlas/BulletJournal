@@ -49,13 +49,14 @@ export function initialHistogramStateFromModifiers(
   }
 }
 
-export function emptyChartAxisOverrides(): ChartAxisOverrides {
+export function emptyChartAxisOverrides(tickAngle: ChartAxisOverrides['tickAngle'] = 0): ChartAxisOverrides {
   return {
     labelSize: '',
     label: '',
     hideLabel: false,
     tickCount: '',
     tickSize: '',
+    tickAngle,
     showGridLines: true,
     scale: 'lin',
   }
@@ -129,7 +130,7 @@ export function defaultHistogramChartOverrides(
 ): HistogramChartOverrides {
   const groupMode = resolveGroupMode(modifierDefaultValue(defaultModifiers, modifierSchema, 'group_mode'))
   return {
-    xAxis: chartAxisOverridesFromValue(modifierDefaultValue(defaultModifiers, modifierSchema, 'x_axis'), emptyChartAxisOverrides()),
+    xAxis: chartAxisOverridesFromValue(modifierDefaultValue(defaultModifiers, modifierSchema, 'x_axis'), emptyChartAxisOverrides(45)),
     yAxis: chartAxisOverridesFromValue(modifierDefaultValue(defaultModifiers, modifierSchema, 'y_axis'), emptyChartAxisOverrides()),
     title: chartTitleOverridesFromValue(modifierDefaultValue(defaultModifiers, modifierSchema, 'title'), emptyChartTitleOverrides()),
     barWidth: defaultBarWidthForGroupMode(defaultModifiers, groupMode, hasGroup),
@@ -146,7 +147,7 @@ export function defaultScatterPlotChartOverrides(
 ): ScatterPlotChartOverrides {
   const defaultSizeScalingValue = modifierDefaultValue(defaultModifiers, modifierSchema, 'size_scaling')
   return {
-    xAxis: chartAxisOverridesFromValue(modifierDefaultValue(defaultModifiers, modifierSchema, 'x_axis'), emptyChartAxisOverrides()),
+    xAxis: chartAxisOverridesFromValue(modifierDefaultValue(defaultModifiers, modifierSchema, 'x_axis'), emptyChartAxisOverrides(45)),
     yAxis: chartAxisOverridesFromValue(modifierDefaultValue(defaultModifiers, modifierSchema, 'y_axis'), emptyChartAxisOverrides()),
     title: chartTitleOverridesFromValue(modifierDefaultValue(defaultModifiers, modifierSchema, 'title'), emptyChartTitleOverrides()),
     minPointSize: numericInputString(modifierDefaultValue(defaultModifiers, modifierSchema, 'min_point_size'), ''),
@@ -264,6 +265,9 @@ export function chartAxisOverridesFromValue(value: unknown, defaults: ChartAxisO
     hideLabel: typeof (record.hide_label ?? record.hideLabel) === 'boolean' ? Boolean(record.hide_label ?? record.hideLabel) : defaults.hideLabel,
     tickCount: integerInputString(record.tick_count ?? record.tickCount, defaults.tickCount),
     tickSize: numericInputString(record.tick_size ?? record.tickSize, defaults.tickSize),
+    tickAngle: [0, 45, 90].includes(Number(record.tick_angle ?? record.tickAngle))
+      ? Number(record.tick_angle ?? record.tickAngle) as ChartAxisOverrides['tickAngle']
+      : defaults.tickAngle,
     showGridLines: typeof (record.show_grid_lines ?? record.showGridLines) === 'boolean'
       ? Boolean(record.show_grid_lines ?? record.showGridLines)
       : defaults.showGridLines,
@@ -332,6 +336,7 @@ export function serializeChartAxisModifierValue(overrides: ChartAxisOverrides): 
     hide_label: overrides.hideLabel,
     tick_count: optionalIntegerFromInput(overrides.tickCount),
     tick_size: optionalNumberFromInput(overrides.tickSize),
+    tick_angle: overrides.tickAngle,
     show_grid_lines: overrides.showGridLines,
     scale: overrides.scale,
   }
@@ -845,6 +850,11 @@ export function coerceDraftValue(value: string, category: ReturnType<typeof data
     const parsed = Number(value)
     if (!Number.isFinite(parsed)) {
       throw new Error(`\`${value}\` is not a valid number.`)
+    }
+    // Keep the original decimal spelling when Number would lose integer precision.
+    // The backend parses these strings exactly before evaluating the predicate.
+    if (Math.abs(parsed) > Number.MAX_SAFE_INTEGER) {
+      return value
     }
     return parsed
   }

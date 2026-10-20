@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import embed, { type Result as VegaEmbedResult, type VisualizationSpec } from 'vega-embed'
 
@@ -9,6 +9,7 @@ import { barChartCategoryPadding, normalizeGroupedValues, stackStarts, topStackS
 import type { AssetFilter, AssetHighlight, AssetSort, PreparedBarChartPayload } from '../../lib/types'
 import {
   buildAxisSpec,
+  enforceTickLabelBounds,
   buildChartPadding,
   buildChartTitle,
   buildScaleType,
@@ -28,6 +29,7 @@ import {
   PrepareErrorsNotice,
   PreparedAssetTableSection,
   ResizableDatavizContent,
+  SettingsOverrideActions,
   TitleOverridesSection,
 } from '../shared/layout'
 import {
@@ -237,10 +239,12 @@ export function BarChartAssetPanel({
   const canGoPrevious = resolvedPage.index > 0
   const canGoNext = resolvedPage.index + 1 < pageCount
   const resolvedPanelHeight = normalizePanelHeight(panelHeight) ?? DEFAULT_HISTOGRAM_CHART_HEIGHT
-  const hasSettingsOverrides = Object.keys(buildModifierOverridesRecord(
-    serializeBarChartModifierValues(chartOverrides),
+  const settingsValues = serializeBarChartModifierValues(chartOverrides)
+  const settingsOverrides = buildModifierOverridesRecord(
+    settingsValues,
     groupedChartDefaultsForDiff(asset.default_modifiers, chartOverrides, Boolean(asset.definition?.bar_group_column)),
-  )).length > 0
+  )
+  const hasSettingsOverrides = Object.keys(settingsOverrides).length > 0 || Boolean(isPanelResized)
 
   useEffect(() => {
     setPageInput(String(resolvedPage.index + 1))
@@ -319,11 +323,9 @@ export function BarChartAssetPanel({
 
   const settingsBody = (
     <>
-      <div className="asset-dataviz-settings-actions">
-        <button type="button" className="secondary asset-dataviz-settings-reset" onClick={handleResetSettingsOverrides} disabled={!hasSettingsOverrides}>
-          Reset to default
-        </button>
-      </div>
+      <SettingsOverrideActions schema={asset.modifier_schema} values={settingsValues} overrides={settingsOverrides} panelHeight={resolvedPanelHeight} isPanelResized={Boolean(isPanelResized)} onPanelHeightChange={onPanelHeightChange} minPanelHeight={minPanelHeight} onReset={handleResetSettingsOverrides} hasOverrides={hasSettingsOverrides} onImport={(overrides) => {
+        setChartOverrides(barChartChartOverridesFromModifiers(asset.default_modifiers, overrides, asset.modifier_schema, Boolean(asset.definition?.bar_group_column)))
+      }} />
 
       <PanelSettingsSection title="Bar chart">
         <label className="asset-dataviz-field">
@@ -536,7 +538,6 @@ function BarChartChart({
   const containerRef = useRef<HTMLDivElement | null>(null)
   const [chartError, setChartError] = useState<string | null>(null)
   const viewRef = useRef<VegaEmbedResult | null>(null)
-  const initialChartHeightRef = useRef(chartHeight)
   const onSelectionChangeRef = useRef(onSelectionChange)
   const selectedGroupsRef = useRef(selectedGroups)
   const shiftHeldRef = useRef(false)
@@ -547,8 +548,8 @@ function BarChartChart({
   selectedGroupsRef.current = selectedGroups
 
   const spec = useMemo(
-    () => buildBarChartVegaLiteSpec(barChart, selectedGroups, chartTheme, initialChartHeightRef.current, overrides, defaultOverrides, chartScale),
-    [barChart, chartScale, chartTheme, defaultOverrides, overrides, selectedGroups],
+    () => buildBarChartVegaLiteSpec(barChart, selectedGroups, chartTheme, chartHeight, overrides, defaultOverrides, chartScale),
+    [barChart, chartHeight, chartScale, chartTheme, defaultOverrides, overrides, selectedGroups],
   )
 
   useEffect(() => {
@@ -575,6 +576,7 @@ function BarChartChart({
           defaultStyle: false,
           renderer: 'svg',
           tooltip: true,
+          patch: enforceTickLabelBounds,
         })
         if (disposed) {
           result.finalize()
@@ -642,22 +644,6 @@ function BarChartChart({
     }
   }, [selectedGroups, spec, hasGroup])
 
-  useLayoutEffect(() => {
-    const result = viewRef.current
-    if (result !== null) {
-      result.view.height(chartHeight).run()
-    }
-  }, [chartHeight])
-
-  useEffect(() => {
-    const result = viewRef.current
-    if (result === null) {
-      return
-    }
-    result.view.height(chartHeight)
-    void result.view.runAsync()
-  }, [chartHeight])
-
   if (!barChart.bars.length) {
     return <LoadingPlaceholder message="No non-null rows match the current bar chart filters." />
   }
@@ -675,7 +661,7 @@ function BarChartChart({
   )
 }
 
-function buildBarChartVegaLiteSpec(
+export function buildBarChartVegaLiteSpec(
   barChart: PreparedBarChartPayload,
   selectedGroups: BarChartSelectionValue[],
   theme: ReturnType<typeof useAssetChartTheme>,
@@ -724,7 +710,7 @@ function buildBarChartVegaLiteSpec(
 
   const spec: VisualizationSpec = {
     $schema: 'https://vega.github.io/schema/vega-lite/v6.json',
-    autosize: { type: 'fit', contains: 'padding', resize: true },
+    autosize: { type: 'fit', contains: 'padding', resize: false },
     width: 'container',
     height: chartHeight,
     background: 'transparent',
@@ -785,9 +771,8 @@ function buildBarChartVegaLiteSpec(
           paddingOuter: 0.08,
         },
         axis: {
-          ...buildAxisSpec(overrides.xAxis, defaultOverrides.xAxis.label, chartScale),
+          ...buildAxisSpec(overrides.xAxis, defaultOverrides.xAxis.label, chartScale, 'x'),
           grid: false,
-          labelAngle: -30,
         },
       },
       y: {

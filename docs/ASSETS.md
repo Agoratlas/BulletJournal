@@ -172,6 +172,7 @@ x_axis={
     'hide_label': False,
     'tick_count': 10,
     'tick_size': 11,
+    'tick_angle': 45,
     'show_grid_lines': True,
     'scale': 'lin',
 }
@@ -182,6 +183,7 @@ x_axis={
 - `hide_label`: hides the axis label when `True`.
 - `tick_count`: requested number of tick marks, or `None` for automatic ticks.
 - `tick_size`: tick label size, or `None` to use the chart default.
+- `tick_angle`: `0` (horizontal), `45`, or `90` (vertical). Defaults to `45` on X and `0` on Y.
 - `show_grid_lines`: shows grid lines when `True`.
 - `scale`: `lin` for a linear scale or `log` for a logarithmic scale. Logarithmic scaling applies to numeric axes with positive values. A bar chart's category axis and a date histogram's time axis remain non-logarithmic.
 
@@ -338,6 +340,9 @@ assets.DataFrame(dataframe)
 ### Options and modifiers
 
 - `dataframe`: a `pandas.DataFrame`.
+- `max_text_lines`: constructor argument from `1` (default) to `10`. Above `1`, cells preserve
+  line breaks and wrap text wider than the column, displaying at most this many lines.
+  For example, `assets.DataFrame(dataframe, max_text_lines=3)` allows three lines per cell.
 - `page`: table page and page size. Default: `{'index': 0, 'size': 25}`.
 - `sort`: one table sort. Default: `[]`.
 - `filters`: table filters. Default: `[]`.

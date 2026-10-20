@@ -30,11 +30,11 @@ export function assetExportFilename(title: string, extension: string): string {
 }
 
 export async function downloadSvg(svg: SVGSVGElement, filename: string): Promise<void> {
-  downloadBlob(new Blob([await serializeSvg(svg, chartBackgroundColor(svg))], { type: 'image/svg+xml;charset=utf-8' }), filename)
+  downloadBlob(new Blob([await serializeSvg(svg, chartBackgroundColor())], { type: 'image/svg+xml;charset=utf-8' }), filename)
 }
 
 export async function downloadPng(svg: SVGSVGElement, filename: string): Promise<void> {
-  downloadBlob(await svgToPng(svg, chartBackgroundColor(svg)), filename)
+  downloadBlob(await svgToPng(svg, chartBackgroundColor()), filename)
 }
 
 export async function copyPng(svg: SVGSVGElement): Promise<void> {
@@ -42,7 +42,7 @@ export async function copyPng(svg: SVGSVGElement): Promise<void> {
     throw new Error('Copying images is not supported by this browser.')
   }
   // Pass the promise immediately to preserve the click's user activation in Safari.
-  const blob = svgToPng(svg, chartBackgroundColor(svg))
+  const blob = svgToPng(svg, chartBackgroundColor())
   await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })])
 }
 
@@ -104,6 +104,8 @@ async function svgToPng(svg: SVGSVGElement, background: string): Promise<Blob> {
     if (!context) {
       throw new Error('Could not create an image canvas.')
     }
+    context.fillStyle = background
+    context.fillRect(0, 0, width, height)
     context.drawImage(image, 0, 0, width, height)
     return await new Promise<Blob>((resolve, reject) => {
       canvas.toBlob((blob) => blob ? resolve(blob) : reject(new Error('Could not render the PNG.')), 'image/png')
@@ -113,15 +115,8 @@ async function svgToPng(svg: SVGSVGElement, background: string): Promise<Blob> {
   }
 }
 
-function chartBackgroundColor(svg: SVGSVGElement): string {
-  const frame = svg.closest('.asset-panel-card, .asset-panel-frame-inline') ?? svg
-  const styles = getComputedStyle(frame)
-  const background = styles.backgroundColor
-  if (background !== 'transparent' && background !== 'rgba(0, 0, 0, 0)') {
-    return background
-  }
-  const panelBackground = styles.getPropertyValue('--panel').trim()
-  return panelBackground || '#ffffff'
+export function chartBackgroundColor(): string {
+  return document.documentElement.dataset.theme === 'dark' ? '#000000' : '#ffffff'
 }
 
 function loadImage(url: string): Promise<HTMLImageElement> {
@@ -133,7 +128,7 @@ function loadImage(url: string): Promise<HTMLImageElement> {
   })
 }
 
-function downloadBlob(blob: Blob, filename: string): void {
+export function downloadBlob(blob: Blob, filename: string): void {
   const url = URL.createObjectURL(blob)
   const link = document.createElement('a')
   link.href = url

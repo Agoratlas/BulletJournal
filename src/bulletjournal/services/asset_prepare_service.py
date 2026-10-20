@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import io
 import json
 import re
 import uuid
@@ -17,6 +18,81 @@ MAX_PREPARED_RESPONSE_BYTES = 1_000_000
 class AssetPrepareService:
     def __init__(self, project_service) -> None:
         self.project_service = project_service
+
+    def download_dataframe_preview(
+        self,
+        node_id: str,
+        name: str,
+        *,
+        version_id: int | None,
+        modifier_overrides: dict[str, Any],
+        panel_context: dict[str, Any] | None = None,
+        artifact: bool = False,
+    ) -> bytes:
+        import pyarrow.parquet as pq
+
+        from bulletjournal.assets.types.dataframe import dataframe_view
+
+        self.project_service.get_node(node_id)
+        project = self.project_service.require_project()
+        head = (
+            project.state_db.get_artifact_head(node_id, name)
+            if artifact
+            else project.state_db.get_asset_head(node_id, name)
+        )
+        if head is None:
+            raise NotFoundError(f'Unknown DataFrame `{node_id}/{name}`.')
+        current_version_id = head.get('current_version_id' if artifact else 'current_asset_version_id')
+        if current_version_id is None:
+            raise InvalidRequestError(f'DataFrame `{node_id}/{name}` has not been produced yet.')
+        if version_id is not None and version_id != current_version_id:
+            raise InvalidRequestError('The DataFrame changed. Refresh the preview before downloading.')
+        dataset_path = None
+        if artifact:
+            if head.get('data_type') != 'pandas.DataFrame':
+                raise InvalidRequestError('Parquet preview export requires a DataFrame.')
+            default_modifiers = {'page': {'index': 0, 'size': 10}, 'sort': [], 'filters': []}
+            artifact_hash = str(head['artifact_hash'])
+            preview = head.get('preview')
+            is_empty = isinstance(preview, dict) and preview.get('kind') == 'empty'
+        else:
+            definition = head.get('definition') or {}
+            default_modifiers = head.get('default_modifiers') or {}
+            objects = head.get('objects')
+            asset_type = head.get('asset_type')
+            if asset_type == 'collection':
+                registration, _, default_modifiers, _, objects, _ = self._collection_child_prepare_target(
+                    node_id=node_id,
+                    asset_name=name,
+                    definition=definition,
+                    objects=objects,
+                    panel_context=panel_context,
+                )
+                asset_type = registration.asset_type_id if registration else None
+            if asset_type != 'dataframe':
+                raise InvalidRequestError('Parquet preview export requires a DataFrame asset.')
+            artifact_hash = str(backing_dataset_object(objects)['artifact_hash'])
+            is_empty = False
+        project.state_db.touch_artifact_object(artifact_hash)
+        lease_id = project.state_db.acquire_object_lease(
+            artifact_hash,
+            'asset_export',
+            str(uuid.uuid4()),
+            expires_at=(datetime.now(tz=UTC) + timedelta(hours=1)).isoformat().replace('+00:00', 'Z'),
+        )
+        try:
+            if not is_empty:
+                dataset_path = project.object_store.load_file_path(artifact_hash)
+            frame, resolved_modifiers = dataframe_view(dataset_path, default_modifiers, modifier_overrides)
+            page = resolved_modifiers['page']
+            buffer = io.BytesIO()
+            table = frame.slice(page['index'] * page['size'], page['size']).collect().to_arrow()
+            if dataset_path is not None:
+                table = table.replace_schema_metadata(pq.read_schema(dataset_path).metadata)
+            pq.write_table(table, buffer)
+            return buffer.getvalue()
+        finally:
+            project.state_db.release_object_lease(lease_id)
 
     def prepare_asset(
         self,
@@ -62,6 +138,18 @@ class AssetPrepareService:
                 'Asset prepare is only supported for interactive dataframe, histogram, '
                 'pie chart, and scatter plot assets in this release.'
             )
+
+        if registration.asset_type_id == 'dataframe' and not any(
+            entry.get('id') == 'max_text_lines' for entry in modifier_schema
+        ):
+            from bulletjournal.assets.types.dataframe import dataframe_text_lines_modifier
+
+            modifier_schema = [
+                *modifier_schema,
+                dataframe_text_lines_modifier(
+                    default_modifiers.get('max_text_lines', definition.get('max_text_lines', 1))
+                ),
+            ]
 
         errors: list[dict[str, str]] = []
         if asset_version_id is not None and asset_version_id != current_asset_version_id:
@@ -301,6 +389,8 @@ class AssetPrepareService:
 
     @classmethod
     def _validate_modifier_override_value(cls, *, key: str, value: Any, schema_entry: dict[str, Any]) -> None:
+        if key == 'max_text_lines' and (isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= 10):
+            raise InvalidRequestError('modifier_overrides.max_text_lines must be an integer from 1 to 10.')
         kind = schema_entry.get('kind')
         if kind == 'sort':
             cls._validate_sort_override(key=key, value=value, schema_entry=schema_entry)

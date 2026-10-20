@@ -44,6 +44,10 @@ export function Download(props: SVGProps<SVGSVGElement>) {
   )
 }
 
+export function Search(props: SVGProps<SVGSVGElement>) {
+  return <IconBase {...props}><circle cx="10.5" cy="10.5" r="6.5" /><path d="m16 16 5 5" /></IconBase>
+}
+
 export function Star(props: SVGProps<SVGSVGElement>) {
   return <IconBase {...props}><path d="m12 3 2.8 5.7 6.2.9-4.5 4.4 1.1 6.2-5.6-3-5.6 3 1.1-6.2L3 9.6l6.2-.9Z" /></IconBase>
 }

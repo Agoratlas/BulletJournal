@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import embed, { type Result as VegaEmbedResult, type VisualizationSpec } from 'vega-embed'
 
@@ -7,6 +7,7 @@ import { ensureChartFontsLoaded } from '../shared/fonts'
 import type { AssetFilter, AssetHighlight, AssetSort, PreparedScatterPlotPayload } from '../../lib/types'
 import {
   buildAxisSpec,
+  enforceTickLabelBounds,
   buildChartPadding,
   buildChartTitle,
   buildScaleType,
@@ -28,6 +29,7 @@ import {
   PrepareErrorsNotice,
   PreparedAssetTableSection,
   ResizableDatavizContent,
+  SettingsOverrideActions,
   TitleOverridesSection,
 } from '../shared/layout'
 import {
@@ -251,10 +253,12 @@ export function ScatterPlotAssetPanel({
     ? `${scatterPlot?.x_column ?? 'x'} ${formatHistogramBound(selectedPoint.x)}, ${scatterPlot?.y_column ?? 'y'} ${formatHistogramBound(selectedPoint.y)}`
     : null
   const resolvedPanelHeight = normalizePanelHeight(panelHeight) ?? DEFAULT_SCATTER_PLOT_CHART_HEIGHT
-  const hasSettingsOverrides = Object.keys(buildModifierOverridesRecord(
-    serializeScatterPlotChartModifierValues(chartOverrides),
+  const settingsValues = serializeScatterPlotChartModifierValues(chartOverrides)
+  const settingsOverrides = buildModifierOverridesRecord(
+    settingsValues,
     asset.default_modifiers,
-  )).length > 0
+  )
+  const hasSettingsOverrides = Object.keys(settingsOverrides).length > 0 || Boolean(isPanelResized)
 
   useEffect(() => {
     setPageInput(String(resolvedPage.index + 1))
@@ -345,11 +349,9 @@ export function ScatterPlotAssetPanel({
 
   const settingsBody = (
     <>
-      <div className="asset-dataviz-settings-actions">
-        <button type="button" className="secondary asset-dataviz-settings-reset" onClick={handleResetSettingsOverrides} disabled={!hasSettingsOverrides}>
-          Reset to default
-        </button>
-      </div>
+      <SettingsOverrideActions schema={asset.modifier_schema} values={settingsValues} overrides={settingsOverrides} panelHeight={resolvedPanelHeight} isPanelResized={Boolean(isPanelResized)} onPanelHeightChange={onPanelHeightChange} minPanelHeight={minPanelHeight} onReset={handleResetSettingsOverrides} hasOverrides={hasSettingsOverrides} onImport={(overrides) => {
+        setChartOverrides(scatterPlotChartOverridesFromModifiers(asset.default_modifiers, overrides, asset.modifier_schema))
+      }} />
 
       <PanelSettingsSection title="Scatter plot">
         <label className="asset-dataviz-field">
@@ -576,7 +578,6 @@ function ScatterPlotChart({
   const containerRef = useRef<HTMLDivElement | null>(null)
   const [chartError, setChartError] = useState<string | null>(null)
   const viewRef = useRef<VegaEmbedResult | null>(null)
-  const initialChartHeightRef = useRef(chartHeight)
   const selectedBoundsRef = useRef<ScatterPlotSelectionBounds | null>(selectedBounds)
   const pendingXRangeRef = useRef(selectedBounds?.x ?? null)
   const pendingYRangeRef = useRef(selectedBounds?.y ?? null)
@@ -603,12 +604,13 @@ function ScatterPlotChart({
       selectedPointRowIndex,
       selectedLegend,
       chartTheme,
-      initialChartHeightRef.current,
+      chartHeight,
       overrides,
       defaultOverrides,
       chartScale,
     ),
     [
+      chartHeight,
       chartScale,
       chartTheme,
       defaultOverrides,
@@ -649,6 +651,7 @@ function ScatterPlotChart({
           defaultStyle: false,
           renderer: 'svg',
           tooltip: true,
+          patch: enforceTickLabelBounds,
         })
         if (disposed) {
           result.finalize()
@@ -737,22 +740,6 @@ function ScatterPlotChart({
     }
   }, [spec])
 
-  useLayoutEffect(() => {
-    const result = viewRef.current
-    if (result !== null) {
-      result.view.height(chartHeight).run()
-    }
-  }, [chartHeight])
-
-  useEffect(() => {
-    const result = viewRef.current
-    if (result === null) {
-      return
-    }
-    result.view.height(chartHeight)
-    void result.view.runAsync()
-  }, [chartHeight])
-
   if (!scatterPlot.points.length) {
     return <LoadingPlaceholder message="No numeric rows match the current scatter plot filters." />
   }
@@ -770,7 +757,7 @@ function ScatterPlotChart({
   )
 }
 
-function buildScatterPlotVegaLiteSpec(
+export function buildScatterPlotVegaLiteSpec(
   scatterPlot: PreparedScatterPlotPayload,
   selectedBounds: ScatterPlotSelectionBounds | null,
   selectedPointRowIndex: number | null,
@@ -821,7 +808,7 @@ function buildScatterPlotVegaLiteSpec(
     }
   return {
     $schema: 'https://vega.github.io/schema/vega-lite/v6.json',
-    autosize: { type: 'fit', contains: 'padding', resize: true },
+    autosize: { type: 'fit', contains: 'padding', resize: false },
     width: 'container',
     height: chartHeight,
     background: 'transparent',
@@ -881,7 +868,7 @@ function buildScatterPlotVegaLiteSpec(
       x: {
         field: 'x',
         type: 'quantitative',
-        axis: buildAxisSpec(overrides.xAxis, defaultOverrides.xAxis.label, chartScale),
+        axis: buildAxisSpec(overrides.xAxis, defaultOverrides.xAxis.label, chartScale, 'x'),
         scale: {
           ...(scatterPlot.domain ? {
             domain: [scatterPlot.domain.x.min, scatterPlot.domain.x.max],

@@ -23,6 +23,7 @@ import { PAGE_SIZE_OPTIONS } from './types'
 import type { AssetPanelFrameVariant, AssetPanelInfo, ChartAxisOverrides, ChartTitleOverrides, DatavizAxisScale, ModifierColumn } from './types'
 import { PreparedTable, formatCount } from './table'
 import { AssetFavoriteButton, AssetNoteButton } from './annotations'
+import { parseSettingsOverrides, settingsOverrideTransfer } from './overrideTransfer'
 
 export function AssetPanelFrame({
   asset,
@@ -36,6 +37,7 @@ export function AssetPanelFrame({
   showHeader = true,
   showExportActions = false,
   dataFramePreview,
+  onDownloadParquet,
   isPanelResized = false,
   children,
 }: {
@@ -50,6 +52,7 @@ export function AssetPanelFrame({
   showHeader?: boolean
   showExportActions?: boolean
   dataFramePreview?: PreparedTablePayload | null
+  onDownloadParquet?: () => Promise<void>
   isPanelResized?: boolean
   children: ReactNode
 }) {
@@ -66,7 +69,7 @@ export function AssetPanelFrame({
             {asset.description ? <p className="asset-panel-description">{asset.description}</p> : null}
           </div>
           {headerCenter ? <div className="asset-panel-header-center">{headerCenter}</div> : null}
-          <AssetPanelHeaderActions asset={asset} frameRef={frameRef} showExportActions={showExportActions} dataFramePreview={dataFramePreview} isPanelResized={isPanelResized} panelInfo={panelInfo} settingsTitle={settingsTitle} settingsBody={settingsBody} settingsActive={settingsActive} />
+          <AssetPanelHeaderActions asset={asset} frameRef={frameRef} showExportActions={showExportActions} dataFramePreview={dataFramePreview} onDownloadParquet={onDownloadParquet} isPanelResized={isPanelResized} panelInfo={panelInfo} settingsTitle={settingsTitle} settingsBody={settingsBody} settingsActive={settingsActive} />
         </div>
       ) : null}
       {children}
@@ -106,6 +109,7 @@ function AssetPanelHeaderActions({
   frameRef,
   showExportActions,
   dataFramePreview,
+  onDownloadParquet,
   isPanelResized,
   panelInfo,
   settingsTitle,
@@ -116,6 +120,7 @@ function AssetPanelHeaderActions({
   frameRef: { current: HTMLElement | null }
   showExportActions: boolean
   dataFramePreview?: PreparedTablePayload | null
+  onDownloadParquet?: () => Promise<void>
   isPanelResized: boolean
   panelInfo: AssetPanelInfo
   settingsTitle?: string
@@ -203,6 +208,7 @@ function AssetPanelHeaderActions({
                 <>
                   <button type="button" onClick={() => void runExport(() => copyText(tableToMarkdown(dataFramePreview.columns.map((column) => column.id), dataFramePreview.rows)))}>Copy Markdown</button>
                   <button type="button" onClick={() => void runExport(() => downloadText(tableToCsv(dataFramePreview.columns.map((column) => column.id), dataFramePreview.rows), assetExportFilename(exportTitle, 'csv'), 'text/csv;charset=utf-8'))}>Download CSV</button>
+                  {onDownloadParquet ? <button type="button" onClick={() => void runExport(onDownloadParquet)}>Download Parquet</button> : null}
                 </>
               ) : null}
               {exportKind === 'markdown' && markdownText !== null ? (
@@ -374,6 +380,80 @@ export function ResizableDatavizContent({
   )
 }
 
+export function SettingsOverrideActions({
+  schema,
+  values,
+  overrides,
+  onImport,
+  onReset,
+  hasOverrides,
+  panelHeight,
+  isPanelResized,
+  onPanelHeightChange,
+  minPanelHeight = 0,
+}: {
+  schema: Array<Record<string, unknown>>
+  values: Record<string, unknown>
+  overrides: Record<string, unknown>
+  onImport: (overrides: Record<string, unknown>) => void
+  onReset: () => void
+  hasOverrides: boolean
+  panelHeight: number
+  isPanelResized: boolean
+  onPanelHeightChange?: (height: number | null) => void
+  minPanelHeight?: number
+}) {
+  const [isImporting, setIsImporting] = useState(false)
+  const [text, setText] = useState('')
+  const [status, setStatus] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  async function handleExport() {
+    setError(null)
+    setStatus(null)
+    try {
+      await copyText(JSON.stringify(settingsOverrideTransfer(overrides, panelHeight, isPanelResized), null, 2))
+      setStatus('Overrides copied to clipboard.')
+    } catch (error) {
+      setError(error instanceof Error ? error.message : 'Could not copy overrides.')
+    }
+  }
+
+  return <>
+    <div className="asset-dataviz-settings-actions">
+      <button type="button" className="secondary asset-dataviz-settings-reset" onClick={() => {
+        onReset()
+        onPanelHeightChange?.(null)
+      }} disabled={!hasOverrides}>Reset to default</button>
+      <button type="button" className="secondary asset-dataviz-settings-reset" aria-expanded={isImporting} onClick={() => {
+        setIsImporting((current) => !current)
+        setError(null)
+        setStatus(null)
+      }}>Import</button>
+      <button type="button" className="secondary asset-dataviz-settings-reset" onClick={() => void handleExport()}>Export</button>
+    </div>
+    {isImporting ? <form className="asset-overrides-import" onSubmit={(event) => {
+      event.preventDefault()
+      setError(null)
+      try {
+        const imported = parseSettingsOverrides(text, schema, Object.keys(values), onPanelHeightChange ? minPanelHeight : null)
+        onImport(imported.modifier_overrides)
+        onPanelHeightChange?.(imported.panel_height)
+        setIsImporting(false)
+        setText('')
+        setStatus('Overrides imported.')
+      } catch (error) {
+        setError(error instanceof Error ? error.message : 'Could not import overrides.')
+      }
+    }}>
+      <textarea autoFocus rows={4} aria-label="Overrides JSON" placeholder="Paste exported overrides JSON" value={text} onChange={(event) => { setText(event.target.value); setError(null) }} />
+      <button type="submit" className="secondary asset-dataviz-settings-reset" disabled={!text.trim()}>Apply overrides</button>
+    </form> : null}
+    {error ? <p className="asset-overrides-status error" role="alert">{error}</p> : null}
+    {status ? <p className="asset-overrides-status" role="status">{status}</p> : null}
+  </>
+}
+
 export function PanelSettingsSection({
   title,
   children,
@@ -533,7 +613,7 @@ export function AxisOverridesSection({
       </label>
 
       <label className="asset-dataviz-field">
-        <span className={modifierFieldLabelClassName(!valuesEqual(overrides.tickSize, defaultOverrides.tickSize))}>Tick size (font)</span>
+        <span className={modifierFieldLabelClassName(!valuesEqual(overrides.tickSize, defaultOverrides.tickSize))}>Tick font size</span>
         <DeferredModifierInput
           displayValue={overrides.tickSize}
           inputMode="decimal"
@@ -543,6 +623,15 @@ export function AxisOverridesSection({
           onValidChange={(nextValue) => onChange({ ...overrides, tickSize: nextValue })}
           onCommit={(nextValue) => onChange({ ...overrides, tickSize: nextValue })}
         />
+      </label>
+
+      <label className="asset-dataviz-field">
+        <span className={modifierFieldLabelClassName(!valuesEqual(overrides.tickAngle, defaultOverrides.tickAngle))}>Tick angle</span>
+        <select value={overrides.tickAngle} onChange={(event) => onChange({ ...overrides, tickAngle: Number(event.target.value) as ChartAxisOverrides['tickAngle'] })}>
+          <option value={0}>Horizontal</option>
+          <option value={45}>45°</option>
+          <option value={90}>Vertical</option>
+        </select>
       </label>
 
       <label className="asset-dataviz-checkbox-field">
@@ -671,6 +760,7 @@ export function ErrorPlaceholder({ message }: { message: string }) {
 
 export function PreparedAssetTableSection({
   table,
+  maxTextLines = 1,
   columns,
   activeSort,
   activeFilters,
@@ -704,6 +794,7 @@ export function PreparedAssetTableSection({
   onClearFilters,
 }: {
   table: PreparedTablePayload
+  maxTextLines?: number
   columns: ModifierColumn[]
   activeSort: AssetSort | null
   activeFilters: AssetFilter[]
@@ -767,6 +858,7 @@ export function PreparedAssetTableSection({
         <div id={regionId} className={`asset-dataframe-shell${isRefreshing ? ' is-refreshing' : ''}`}>
           <PreparedTable
             table={table}
+            maxTextLines={maxTextLines}
             columns={columns}
             activeSort={activeSort}
             activeFilters={activeFilters}

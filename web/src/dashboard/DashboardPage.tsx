@@ -3,6 +3,7 @@ import { useQueries, useQuery, useQueryClient, type QueryClient } from '@tanstac
 
 import { ApiError, appUrl, FAVORITES_DASHBOARD_ID, getDashboard, listNodeAssets, patchDashboard } from '../lib/api'
 import { useDocumentMetadata } from '../lib/documentMetadata'
+import { filterDashboardPanels } from '../lib/dashboardSearch'
 import type { AssetRecord, DashboardPanelRecord, DashboardRecord } from '../lib/types'
 import { AssetPanel, type PersistedAssetPanelState } from '../assets/AssetPanel'
 import { DashboardSidebar, normalizeDashboardPanels } from './DashboardSidebar'
@@ -27,6 +28,7 @@ export function DashboardPage({
   })
   const [draftDashboard, setDraftDashboard] = useState<DashboardRecord | null>(null)
   const [saveError, setSaveError] = useState<string | null>(null)
+  const [search, setSearch] = useState('')
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved'>('idle')
   const draftRef = useRef<DashboardRecord | null>(null)
   const dirtyRef = useRef(false)
@@ -108,7 +110,7 @@ export function DashboardPage({
     return normalizeDashboardPanels(dashboard.panels)
   }, [dashboard])
 
-  const visiblePanels = orderedPanels
+  const visiblePanels = filterDashboardPanels(orderedPanels, assetsByLogicalId, search)
     .filter((panel) => panel.visible)
     .map((panel) => ({
       panel,
@@ -217,7 +219,7 @@ export function DashboardPage({
       <div className="canvas-underlay" />
 
       {dashboard ? (
-        <DashboardSidebar panels={orderedPanels} assetsByLogicalId={assetsByLogicalId} panelHref={(panelId) => dashboardPanelHref(dashboardId, panelId)} onPanelNavigate={handlePanelLinkClick} onPanelsChange={updateDraftPanels} />
+        <DashboardSidebar panels={orderedPanels} assetsByLogicalId={assetsByLogicalId} panelHref={(panelId) => dashboardPanelHref(dashboardId, panelId)} onPanelNavigate={handlePanelLinkClick} onPanelsChange={updateDraftPanels} search={search} onSearchChange={setSearch} />
       ) : null}
 
       <div className="assets-page dashboard-page">
@@ -284,8 +286,8 @@ export function DashboardPage({
         <div className="assets-panel-list">
           {!dashboardQuery.isLoading && !dashboardQuery.isError && !visiblePanels.length ? (
             <div className="panel assets-empty-state">
-              <h2>{dashboardId === FAVORITES_DASHBOARD_ID && !orderedPanels.length ? 'No favorite assets yet' : 'No visible panels'}</h2>
-              <p>{dashboardId === FAVORITES_DASHBOARD_ID && !orderedPanels.length ? 'Click the star on an asset to add it to this dashboard.' : 'This dashboard does not currently expose any visible asset panels.'}</p>
+              <h2>{search ? 'No visible assets match this search' : dashboardId === FAVORITES_DASHBOARD_ID && !orderedPanels.length ? 'No favorite assets yet' : 'No visible panels'}</h2>
+              <p>{search ? 'Try another title or notebook/asset id.' : dashboardId === FAVORITES_DASHBOARD_ID && !orderedPanels.length ? 'Click the star on an asset to add it to this dashboard.' : 'This dashboard does not currently expose any visible asset panels.'}</p>
             </div>
           ) : null}
 

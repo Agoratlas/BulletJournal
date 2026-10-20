@@ -4779,6 +4779,28 @@ input.invalid {
   font-size: 12px;
 }
 
+.dashboard-sidebar-search-button {
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+}
+
+.dashboard-sidebar-search-button.is-active {
+  color: var(--accent);
+}
+
+.dashboard-sidebar-search-input {
+  width: 100%;
+  min-width: 0;
+  font-size: 12px;
+}
+
 .dashboard-sidebar-list {
   --dashboard-sidebar-row-gap: 38px;
   display: grid;
@@ -5521,6 +5543,12 @@ button.asset-panel-action-button {
   backdrop-filter: blur(10px) saturate(0.9);
 }
 
+.asset-panel-info-popover {
+  width: max-content;
+  min-width: min(240px, calc(100vw - 48px));
+  max-width: min(480px, calc(100vw - 48px));
+}
+
 .asset-panel-info-popover dl {
   display: grid;
   gap: 10px;
@@ -5530,6 +5558,7 @@ button.asset-panel-action-button {
 .asset-panel-info-popover dl > div {
   display: grid;
   gap: 3px;
+  min-width: 0;
 }
 
 .asset-panel-info-popover dt {
@@ -5550,6 +5579,7 @@ button.asset-panel-action-button {
 
 .asset-panel-info-popover dd code {
   display: block;
+  font-size: 11px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -5629,6 +5659,31 @@ button.asset-panel-action-button {
 .asset-dataviz-settings-actions {
   display: flex;
   justify-content: flex-start;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.asset-overrides-import {
+  display: grid;
+  gap: 8px;
+  justify-items: start;
+}
+
+.asset-overrides-import textarea {
+  width: 100%;
+  resize: vertical;
+  font-family: monospace;
+  font-size: 12px;
+}
+
+.asset-overrides-status {
+  margin: 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.asset-overrides-status.error {
+  color: var(--bad);
 }
 
 .asset-dataviz-settings-reset {
@@ -6076,6 +6131,19 @@ button.asset-panel-action-button {
 
 .asset-table th {
   position: relative;
+}
+
+.asset-table-cell-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.asset-table-cell-text.is-multiline {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .asset-table th:last-child,

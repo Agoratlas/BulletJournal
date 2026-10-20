@@ -263,6 +263,7 @@ function DataFrameHeaderHighlightMenu({
 
 export function PreparedTable({
   table,
+  maxTextLines = 1,
   columns,
   activeSort,
   activeFilters,
@@ -274,6 +275,7 @@ export function PreparedTable({
   onApplyHighlights,
 }: {
   table: PreparedTablePayload
+  maxTextLines?: number
   columns: ModifierColumn[]
   activeSort: AssetSort | null
   activeFilters: AssetFilter[]
@@ -513,7 +515,11 @@ export function PreparedTable({
           {table.rows.length ? table.rows.map((row, index) => (
             <tr key={index}>
               {table.columns.map((column) => (
-                <td key={column.id} style={cellHighlightStyle(table, index, column.id)}>{renderCellValue(row[column.id])}</td>
+                <td key={column.id} style={cellHighlightStyle(table, index, column.id)}>
+                  <div className={`asset-table-cell-text${maxTextLines > 1 ? ' is-multiline' : ''}`} style={maxTextLines > 1 ? { WebkitLineClamp: Math.min(10, Math.max(1, Math.floor(maxTextLines))) } : undefined}>
+                    {renderCellValue(row[column.id])}
+                  </div>
+                </td>
               ))}
             </tr>
           )) : (

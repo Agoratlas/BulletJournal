@@ -81,6 +81,7 @@ export type ChartAxisOverrides = {
   hideLabel: boolean
   tickCount: string
   tickSize: string
+  tickAngle: 0 | 45 | 90
   showGridLines: boolean
   scale: DatavizAxisScale
 }

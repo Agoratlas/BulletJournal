@@ -10,6 +10,11 @@ from contextlib import closing, contextmanager
 from pathlib import Path
 from typing import Any
 
+from bulletjournal.assets.serialization import (
+    browser_safe_asset_definition,
+    browser_safe_query_modifiers,
+    browser_safe_query_schema,
+)
 from bulletjournal.config import DB_TIMEOUT_SECONDS
 from bulletjournal.domain.enums import ArtifactRole, ArtifactState, LineageMode, RunStatus, ValidationSeverity
 from bulletjournal.domain.errors import DashboardVersionConflictError, NotFoundError
@@ -2432,7 +2437,9 @@ class StateDB:
     @staticmethod
     def _row_to_asset(row: sqlite3.Row, objects: list[dict[str, Any]]) -> dict[str, Any]:
         source_hash = row['source_hash'] if row['source_hash'] is not None else row['declaration_source_hash']
-        definition = None if row['definition_json'] is None else json.loads(str(row['definition_json']))
+        definition = browser_safe_asset_definition(
+            None if row['definition_json'] is None else json.loads(str(row['definition_json']))
+        )
         title = row['title']
         description = row['description']
         if isinstance(definition, dict):
@@ -2463,10 +2470,10 @@ class StateDB:
             'definition': definition,
             'modifier_schema': []
             if row['modifier_schema_json'] is None
-            else json.loads(str(row['modifier_schema_json'])),
+            else browser_safe_query_schema(json.loads(str(row['modifier_schema_json']))),
             'default_modifiers': {}
             if row['default_modifiers_json'] is None
-            else json.loads(str(row['default_modifiers_json'])),
+            else browser_safe_query_modifiers(json.loads(str(row['default_modifiers_json']))),
             'override_schema_hash': row['override_schema_hash'],
             'warnings': [] if row['warning_json'] is None else json.loads(str(row['warning_json'])),
             'created_at': row['created_at'],

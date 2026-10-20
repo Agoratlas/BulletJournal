@@ -5,6 +5,8 @@ from typing import Any
 
 import pandas as pd
 
+from bulletjournal.assets.prepare_utils import browser_safe_value
+
 
 @dataclass(slots=True)
 class SerializedAssetObject:
@@ -22,6 +24,43 @@ class SerializedAssetVersion:
     modifier_schema: list[dict[str, Any]]
     default_modifiers: dict[str, Any]
     objects: list[SerializedAssetObject]
+
+    def __post_init__(self) -> None:
+        self.default_modifiers = browser_safe_query_modifiers(self.default_modifiers)
+        self.modifier_schema = browser_safe_query_schema(self.modifier_schema)
+
+
+def browser_safe_query_modifiers(modifiers: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: browser_safe_value(value) if key in {'filters', 'highlights'} else value
+        for key, value in modifiers.items()
+    }
+
+
+def browser_safe_query_schema(schema: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        {**entry, 'default_value': browser_safe_value(entry.get('default_value'))}
+        if entry.get('id') in {'filters', 'highlights'}
+        else entry
+        for entry in schema
+    ]
+
+
+def browser_safe_asset_definition(definition: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not isinstance(definition, dict) or not isinstance(definition.get('children'), list):
+        return definition
+    children = []
+    for child in definition['children']:
+        if not isinstance(child, dict):
+            children.append(child)
+            continue
+        normalized = dict(child)
+        if isinstance(child.get('default_modifiers'), dict):
+            normalized['default_modifiers'] = browser_safe_query_modifiers(child['default_modifiers'])
+        if isinstance(child.get('modifier_schema'), list):
+            normalized['modifier_schema'] = browser_safe_query_schema(child['modifier_schema'])
+        children.append(normalized)
+    return {**definition, 'children': children}
 
 
 def base_asset_definition(
@@ -93,13 +132,14 @@ def dataset_modifier_schema(
     ]
 
 
-def axis_modifier_defaults(label: str) -> dict[str, Any]:
+def axis_modifier_defaults(label: str, *, tick_angle: int = 0) -> dict[str, Any]:
     return {
         'label_size': 12,
         'label': label,
         'hide_label': False,
         'tick_count': None,
         'tick_size': None,
+        'tick_angle': tick_angle,
         'show_grid_lines': True,
         'scale': 'lin',
     }

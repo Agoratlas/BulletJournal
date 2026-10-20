@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Request
+from fastapi.responses import Response
 
 from bulletjournal.api.schemas import AssetAnnotationPatchRequest, AssetPrepareRequest
 
@@ -40,3 +41,15 @@ def patch_asset_annotation(node_id: str, asset_name: str, payload: AssetAnnotati
     return request.app.state.container.asset_service.patch_annotation(
         node_id, asset_name, is_favorite=payload.is_favorite, note=payload.note
     )
+
+
+@router.post('/assets/{node_id}/{asset_name}/download')
+def download_dataframe_preview(node_id: str, asset_name: str, payload: AssetPrepareRequest, request: Request):
+    content = request.app.state.container.asset_prepare_service.download_dataframe_preview(
+        node_id,
+        asset_name,
+        version_id=payload.asset_version_id,
+        modifier_overrides=payload.modifier_overrides,
+        panel_context=payload.panel_context,
+    )
+    return Response(content=content, media_type='application/vnd.apache.parquet')

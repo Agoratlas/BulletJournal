@@ -171,7 +171,7 @@ def scatter_plot_modifier_defaults(*, title: str, x_column: str, y_column: str) 
         'size_scaling': 1,
         'show_legend': True,
         'shape_style': 'outline',
-        'x_axis': axis_modifier_defaults(x_column),
+        'x_axis': axis_modifier_defaults(x_column, tick_angle=45),
         'y_axis': axis_modifier_defaults(y_column),
         'title': title_modifier_defaults(title),
     }

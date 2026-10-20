@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import embed, { type Result as VegaEmbedResult, type VisualizationSpec } from 'vega-embed'
 
@@ -9,12 +9,14 @@ import { histogramGroupFromLegendLabel, histogramSegmentIsSelected, histogramSel
 import type { AssetFilter, AssetHighlight, AssetSort, PreparedHistogramPayload } from '../../lib/types'
 import {
   buildAxisSpec,
+  enforceTickLabelBounds,
   buildChartPadding,
   buildChartTitle,
   buildScaleType,
   buildVegaLiteChartConfig,
   eventHasShiftKey,
   formatHistogramBound,
+  opaqueColor,
   parseSelectionRangeSignal,
   useAssetChartTheme,
 } from '../shared/chart'
@@ -29,6 +31,7 @@ import {
   PrepareErrorsNotice,
   PreparedAssetTableSection,
   ResizableDatavizContent,
+  SettingsOverrideActions,
   TitleOverridesSection,
 } from '../shared/layout'
 import {
@@ -256,10 +259,12 @@ export function HistogramAssetPanel({
   const hasGroups = Boolean(histogram?.group_column)
   const defaultBinCount = binCountFromValue(modifierDefaultValue(asset.default_modifiers, asset.modifier_schema, 'bin_count')) ?? initialState.binCount ?? 20
   const defaultTimeGranularity = granularityFromValue(modifierDefaultValue(asset.default_modifiers, asset.modifier_schema, 'granularity')) ?? initialState.granularity ?? 'auto'
-  const hasSettingsOverrides = Object.keys(buildModifierOverridesRecord({
+  const settingsValues = {
     ...(isTemporalHistogram ? { granularity: timeGranularity } : { bin_count: binCount }),
     ...serializeHistogramChartModifierValues(chartOverrides),
-  }, groupedChartDefaultsForDiff(asset.default_modifiers, chartOverrides, Boolean(asset.definition?.histogram_group_column)))).length > 0
+  }
+  const settingsOverrides = buildModifierOverridesRecord(settingsValues, groupedChartDefaultsForDiff(asset.default_modifiers, chartOverrides, Boolean(asset.definition?.histogram_group_column)))
+  const hasSettingsOverrides = Object.keys(settingsOverrides).length > 0 || Boolean(isPanelResized)
 
   useEffect(() => {
     setPageInput(String(resolvedPage.index + 1))
@@ -356,11 +361,14 @@ export function HistogramAssetPanel({
 
   const settingsBody = (
     <>
-      <div className="asset-dataviz-settings-actions">
-        <button type="button" className="secondary asset-dataviz-settings-reset" onClick={handleResetSettingsOverrides} disabled={!hasSettingsOverrides}>
-          Reset to default
-        </button>
-      </div>
+      <SettingsOverrideActions schema={asset.modifier_schema} values={settingsValues} overrides={settingsOverrides} panelHeight={resolvedPanelHeight} isPanelResized={Boolean(isPanelResized)} onPanelHeightChange={onPanelHeightChange} minPanelHeight={minPanelHeight} onReset={handleResetSettingsOverrides} hasOverrides={hasSettingsOverrides} onImport={(overrides) => {
+        const next = initialHistogramStateFromModifiers(asset.default_modifiers, overrides)
+        setPageIndex(0)
+        setBinCount(next.binCount ?? defaultBinCount)
+        setBinCountInput(String(next.binCount ?? defaultBinCount))
+        setTimeGranularity(next.granularity ?? defaultTimeGranularity)
+        setChartOverrides(histogramChartOverridesFromModifiers(asset.default_modifiers, overrides, asset.modifier_schema, Boolean(asset.definition?.histogram_group_column)))
+      }} />
 
       <PanelSettingsSection title="Histogram">
         {isTemporalHistogram ? (
@@ -611,7 +619,6 @@ function HistogramChart({
   const mountRef = useRef<HTMLDivElement | null>(null)
   const [chartError, setChartError] = useState<string | null>(null)
   const viewRef = useRef<VegaEmbedResult | null>(null)
-  const initialChartHeightRef = useRef(chartHeight)
   const selectedBarIndexesRef = useRef<number[]>(selectedBarIndexes)
   const selectedGroupsRef = useRef<HistogramGroupValue[]>(selectedGroups)
   const onSelectionChangeRef = useRef(onSelectionChange)
@@ -632,8 +639,8 @@ function HistogramChart({
   onGroupSelectionChangeRef.current = onGroupSelectionChange
 
   const spec = useMemo(
-    () => buildHistogramVegaLiteSpec(histogram, chartTheme, initialChartHeightRef.current, overrides, defaultOverrides, chartScale, selectedGroups, selectedBarIndexes),
-    [chartScale, chartTheme, defaultOverrides, histogram, overrides, selectedGroups, selectedBarIndexes],
+    () => buildHistogramVegaLiteSpec(histogram, chartTheme, chartHeight, overrides, defaultOverrides, chartScale, selectedGroups, selectedBarIndexes),
+    [chartHeight, chartScale, chartTheme, defaultOverrides, histogram, overrides, selectedGroups, selectedBarIndexes],
   )
 
   useEffect(() => {
@@ -698,6 +705,7 @@ function HistogramChart({
           defaultStyle: false,
           renderer: 'svg',
           tooltip: true,
+          patch: enforceTickLabelBounds,
         })
         if (disposed) {
           result.finalize()
@@ -830,22 +838,6 @@ function HistogramChart({
     void syncHistogramSelectedBars(result, selectedBarIndexes)
   }, [histogram, selectedBarIndexes.join(',')])
 
-  useLayoutEffect(() => {
-    const result = viewRef.current
-    if (result !== null) {
-      result.view.height(chartHeight).run()
-    }
-  }, [chartHeight])
-
-  useEffect(() => {
-    const result = viewRef.current
-    if (result === null) {
-      return
-    }
-    result.view.height(chartHeight)
-    void result.view.runAsync()
-  }, [chartHeight])
-
   if (!histogram.bins.length) {
     return <LoadingPlaceholder message="No rows match the current histogram filters." />
   }
@@ -863,7 +855,7 @@ function HistogramChart({
   )
 }
 
-function buildHistogramVegaLiteSpec(
+export function buildHistogramVegaLiteSpec(
   histogram: PreparedHistogramPayload,
   theme: ReturnType<typeof useAssetChartTheme>,
   chartHeight: number,
@@ -887,7 +879,7 @@ function buildHistogramVegaLiteSpec(
     ? buildCenteredHistogramAxisTicks(histogram, temporalTickLimit)
     : null
   const xAxisSpec = {
-    ...buildAxisSpec(overrides.xAxis, defaultOverrides.xAxis.label, chartScale),
+    ...buildAxisSpec(overrides.xAxis, defaultOverrides.xAxis.label, chartScale, 'x'),
     ...(temporalAxisTicks ? {
       values: temporalAxisTicks.values,
       labelExpr: temporalAxisTicks.labelExpr,
@@ -925,7 +917,7 @@ function buildHistogramVegaLiteSpec(
   })
   return {
     $schema: 'https://vega.github.io/schema/vega-lite/v6.json',
-    autosize: { type: 'fit', contains: 'padding', resize: true },
+    autosize: { type: 'fit', contains: 'padding', resize: false },
     width: 'container',
     height: chartHeight,
     background: 'transparent',
@@ -965,7 +957,7 @@ function buildHistogramVegaLiteSpec(
       type: 'rect',
       cornerRadiusTopLeft: isStacked ? { signal: 'datum.is_stack_top ? 3 : 0' } : 3,
       cornerRadiusTopRight: isStacked ? { signal: 'datum.is_stack_top ? 3 : 0' } : 3,
-      stroke: borderThickness > 0 ? '#1d4ed8' : undefined,
+      stroke: opaqueColor(theme.axisDomainColor),
       strokeWidth: borderThickness,
     },
     encoding: {

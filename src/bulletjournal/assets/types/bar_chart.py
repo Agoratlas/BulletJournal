@@ -222,7 +222,7 @@ def bar_chart_modifier_defaults(
         'group_mode': 'grouped',
         'group_normalize': 'none',
         'group_spacing': 20,
-        'x_axis': axis_modifier_defaults(category_column),
+        'x_axis': axis_modifier_defaults(category_column, tick_angle=45),
         'y_axis': axis_modifier_defaults(y_axis_label),
         'title': title_modifier_defaults(title),
     }
@@ -608,11 +608,16 @@ def prepare_bar_chart_main_payload(
 
         # Sort categories by category_order
         cat_entries = [
-            {'cat_key': key, 'cat_value': rows[0]['cat_value'], 'rows': rows} for key, rows in category_grouped.items()
+            {
+                'cat_value': rows[0]['cat_value'],
+                'aggregate_value': sum(row['aggregate_value'] for row in rows),
+                'rows': rows,
+            }
+            for rows in category_grouped.values()
         ]
         sorted_cat_entries = sort_category_rows(
             cat_entries,
-            category_field='cat_key',
+            category_field='cat_value',
             value_field='aggregate_value',
             default_mode=DEFAULT_BAR_CHART_CATEGORY_ORDER,
             category_order=category_order,

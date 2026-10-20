@@ -49,7 +49,16 @@ def validate_modifier_defaults(value: dict[str, object] | None, *, allowed_keys:
 def validate_axis_modifier_defaults(value: object, *, label: str) -> None:
     if not isinstance(value, dict):
         raise TypeError(f'{label} must be a dict.')
-    allowed_keys = {'label_size', 'label', 'hide_label', 'tick_count', 'tick_size', 'show_grid_lines', 'scale'}
+    allowed_keys = {
+        'label_size',
+        'label',
+        'hide_label',
+        'tick_count',
+        'tick_size',
+        'tick_angle',
+        'show_grid_lines',
+        'scale',
+    }
     unknown = sorted(set(value) - allowed_keys)
     if unknown:
         joined = ', '.join(unknown)
@@ -64,6 +73,8 @@ def validate_axis_modifier_defaults(value: object, *, label: str) -> None:
         validate_int_or_none(value['tick_count'], label=f'{label}.tick_count')
     if 'tick_size' in value:
         validate_number_or_none(value['tick_size'], label=f'{label}.tick_size')
+    if 'tick_angle' in value and (isinstance(value['tick_angle'], bool) or value['tick_angle'] not in (0, 45, 90)):
+        raise TypeError(f'{label}.tick_angle must be 0, 45, or 90.')
     if 'show_grid_lines' in value and not isinstance(value['show_grid_lines'], bool):
         raise TypeError(f'{label}.show_grid_lines must be a bool.')
     if 'scale' in value and value['scale'] not in {'lin', 'log'}:
