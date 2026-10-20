@@ -503,4 +503,39 @@ MIGRATIONS: list[tuple[str, str | MigrationCallable]] = [
         ALTER TABLE asset_versions ADD COLUMN override_source_version_id INTEGER NULL;
         """,
     ),
+    (
+        '014_asset_annotations',
+        """
+        CREATE TABLE asset_annotations (
+            node_id TEXT NOT NULL,
+            asset_name TEXT NOT NULL,
+            note TEXT NOT NULL DEFAULT '',
+            favorite_position INTEGER NULL,
+            favorite_panel_json TEXT NULL,
+            PRIMARY KEY (node_id, asset_name),
+            FOREIGN KEY (node_id, asset_name) REFERENCES asset_heads (node_id, asset_name)
+                ON DELETE CASCADE ON UPDATE CASCADE
+        );
+        INSERT INTO project_meta (key, value) VALUES ('favorites_version', '1');
+        INSERT INTO project_meta (key, value) VALUES ('favorites_created_at', strftime('%Y-%m-%dT%H:%M:%fZ', 'now'));
+        INSERT INTO project_meta (key, value) VALUES ('favorites_updated_at', strftime('%Y-%m-%dT%H:%M:%fZ', 'now'));
+        CREATE TRIGGER favorites_insert AFTER INSERT ON asset_annotations
+        WHEN NEW.favorite_position IS NOT NULL BEGIN
+            UPDATE project_meta SET value = CAST(value AS INTEGER) + 1 WHERE key = 'favorites_version';
+            UPDATE project_meta SET value = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE key = 'favorites_updated_at';
+        END;
+        CREATE TRIGGER favorites_delete AFTER DELETE ON asset_annotations
+        WHEN OLD.favorite_position IS NOT NULL BEGIN
+            UPDATE project_meta SET value = CAST(value AS INTEGER) + 1 WHERE key = 'favorites_version';
+            UPDATE project_meta SET value = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE key = 'favorites_updated_at';
+        END;
+        CREATE TRIGGER favorites_update AFTER UPDATE ON asset_annotations
+        WHEN OLD.favorite_position IS NOT NEW.favorite_position
+            OR OLD.favorite_panel_json IS NOT NEW.favorite_panel_json
+            OR (NEW.favorite_position IS NOT NULL AND OLD.node_id IS NOT NEW.node_id) BEGIN
+            UPDATE project_meta SET value = CAST(value AS INTEGER) + 1 WHERE key = 'favorites_version';
+            UPDATE project_meta SET value = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE key = 'favorites_updated_at';
+        END;
+        """,
+    ),
 ]

@@ -1,3 +1,12 @@
+from typing import Any
+
+
+class DashboardVersionConflictError(Exception):
+    def __init__(self, latest_dashboard: dict[str, Any]) -> None:
+        super().__init__('Dashboard version conflict.')
+        self.latest_dashboard = latest_dashboard
+
+
 class BulletJournalError(Exception):
     pass
 

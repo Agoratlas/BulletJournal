@@ -77,6 +77,8 @@ export function dashboardUrl(dashboardId: string): string {
   return appUrl(`/dashboards/${encodeURIComponent(dashboardId)}`)
 }
 
+export const FAVORITES_DASHBOARD_ID = '@favorites'
+
 export async function downloadNotebookSource(nodeId: string): Promise<string> {
   const response = await fetch(notebookDownloadUrl(nodeId))
   if (!response.ok) {
@@ -344,6 +346,17 @@ export async function setNodeOutputsState(nodeId: string, state: 'ready' | 'stal
 
 export async function listNodeAssets(nodeId: string): Promise<AssetRecord[]> {
   return request(`/api/v1/nodes/${encodeURIComponent(nodeId)}/assets`)
+}
+
+export async function patchAssetAnnotation(
+  nodeId: string,
+  assetName: string,
+  annotation: { is_favorite?: boolean; note?: string },
+): Promise<AssetRecord> {
+  return request(`/api/v1/assets/${encodeURIComponent(nodeId)}/${encodeURIComponent(assetName)}/annotation`, {
+    method: 'PATCH',
+    body: JSON.stringify(annotation),
+  })
 }
 
 export async function prepareAsset(

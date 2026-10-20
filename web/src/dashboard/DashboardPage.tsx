@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type MouseEvent } from 'react'
 import { useQueries, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query'
 
-import { ApiError, appUrl, getDashboard, listNodeAssets, patchDashboard } from '../lib/api'
+import { ApiError, appUrl, FAVORITES_DASHBOARD_ID, getDashboard, listNodeAssets, patchDashboard } from '../lib/api'
 import { useDocumentMetadata } from '../lib/documentMetadata'
 import type { AssetRecord, DashboardPanelRecord, DashboardRecord } from '../lib/types'
 import { AssetPanel, type PersistedAssetPanelState } from '../assets/AssetPanel'
@@ -223,7 +223,7 @@ export function DashboardPage({
       <div className="assets-page dashboard-page">
         <header className="panel assets-page-header">
           <div>
-            <p className="eyebrow">Saved dashboard</p>
+            <p className="eyebrow">{dashboardId === FAVORITES_DASHBOARD_ID ? 'Project favorites' : 'Saved dashboard'}</p>
             <h1>{dashboard?.title ?? dashboardId}</h1>
             <p className="assets-page-subtitle">
               {projectTitle || 'BulletJournal'}
@@ -284,8 +284,8 @@ export function DashboardPage({
         <div className="assets-panel-list">
           {!dashboardQuery.isLoading && !dashboardQuery.isError && !visiblePanels.length ? (
             <div className="panel assets-empty-state">
-              <h2>No visible panels</h2>
-              <p>This dashboard does not currently expose any visible asset panels.</p>
+              <h2>{dashboardId === FAVORITES_DASHBOARD_ID && !orderedPanels.length ? 'No favorite assets yet' : 'No visible panels'}</h2>
+              <p>{dashboardId === FAVORITES_DASHBOARD_ID && !orderedPanels.length ? 'Click the star on an asset to add it to this dashboard.' : 'This dashboard does not currently expose any visible asset panels.'}</p>
             </div>
           ) : null}
 
@@ -387,7 +387,7 @@ function reconcileDashboardPanels(
       continue
     }
     nextPanels.push({
-      panel_id: logicalId,
+      panel_id: existingPanel.panel_id,
       node_id: available.nodeId,
       asset_name: available.asset.asset_name,
       visible: existingPanel.visible,
@@ -399,6 +399,7 @@ function reconcileDashboardPanels(
   }
 
   for (const logicalId of discoveredLogicalIds) {
+    if (dashboard.dashboard_id === FAVORITES_DASHBOARD_ID) break
     if (existingPanelsByLogicalId.has(logicalId)) {
       continue
     }

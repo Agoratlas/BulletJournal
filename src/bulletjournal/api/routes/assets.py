@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Request
 
-from bulletjournal.api.schemas import AssetPrepareRequest
+from bulletjournal.api.schemas import AssetAnnotationPatchRequest, AssetPrepareRequest
 
 router = APIRouter(tags=['assets'])
 
@@ -32,4 +32,11 @@ def prepare_asset(node_id: str, asset_name: str, payload: AssetPrepareRequest, r
         transient_modifiers=payload.transient_modifiers,
         panel_context=payload.panel_context,
         persisted_override_schema_hash=payload.persisted_override_schema_hash,
+    )
+
+
+@router.patch('/assets/{node_id}/{asset_name}/annotation')
+def patch_asset_annotation(node_id: str, asset_name: str, payload: AssetAnnotationPatchRequest, request: Request):
+    return request.app.state.container.asset_service.patch_annotation(
+        node_id, asset_name, is_favorite=payload.is_favorite, note=payload.note
     )

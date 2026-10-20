@@ -929,6 +929,7 @@ export const SNAPSHOT_REFRESH_EVENTS = [
   'artifact.state_changed',
   'asset.state_changed',
   'asset.version_created',
+  'asset.annotation_updated',
   'checkpoint.created',
   'checkpoint.restored',
   'dashboard.deleted',

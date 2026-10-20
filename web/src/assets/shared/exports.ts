@@ -1,3 +1,5 @@
+import { embeddedChartFontCss, ensureChartFontsLoaded } from './fonts.ts'
+
 const PNG_MAX_DIMENSION = 4000
 
 export async function copyText(text: string): Promise<void> {
@@ -27,8 +29,8 @@ export function assetExportFilename(title: string, extension: string): string {
   return `${stem}.${extension}`
 }
 
-export function downloadSvg(svg: SVGSVGElement, filename: string): void {
-  downloadBlob(new Blob([serializeSvg(svg, chartBackgroundColor(svg))], { type: 'image/svg+xml;charset=utf-8' }), filename)
+export async function downloadSvg(svg: SVGSVGElement, filename: string): Promise<void> {
+  downloadBlob(new Blob([await serializeSvg(svg, chartBackgroundColor(svg))], { type: 'image/svg+xml;charset=utf-8' }), filename)
 }
 
 export async function downloadPng(svg: SVGSVGElement, filename: string): Promise<void> {
@@ -39,14 +41,32 @@ export async function copyPng(svg: SVGSVGElement): Promise<void> {
   if (typeof ClipboardItem === 'undefined' || !navigator.clipboard.write) {
     throw new Error('Copying images is not supported by this browser.')
   }
-  const blob = await svgToPng(svg, chartBackgroundColor(svg))
+  // Pass the promise immediately to preserve the click's user activation in Safari.
+  const blob = svgToPng(svg, chartBackgroundColor(svg))
   await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })])
 }
 
-function serializeSvg(svg: SVGSVGElement, background: string | null = null): string {
+async function serializeSvg(svg: SVGSVGElement, background: string | null = null): Promise<string> {
+  await ensureChartFontsLoaded()
   const clone = svg.cloneNode(true) as SVGSVGElement
   if (!clone.hasAttribute('xmlns')) {
     clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg')
+  }
+  const sourceText = [...svg.querySelectorAll<SVGElement>('text, tspan')]
+  const clonedText = [...clone.querySelectorAll<SVGElement>('text, tspan')]
+  const textStyles = sourceText.map((text, index) => {
+    const styles = getComputedStyle(text)
+    // Preserve inherited font properties when the SVG leaves the dashboard DOM.
+    for (const property of ['font-family', 'font-weight', 'font-style', 'font-size']) {
+      clonedText[index].style.setProperty(property, styles.getPropertyValue(property))
+    }
+    return { fontFamily: styles.fontFamily, fontWeight: styles.fontWeight }
+  })
+  const fontCss = await embeddedChartFontCss(textStyles)
+  if (fontCss) {
+    const style = document.createElementNS('http://www.w3.org/2000/svg', 'style')
+    style.textContent = fontCss
+    clone.insertBefore(style, clone.firstChild)
   }
   if (background) {
     const bounds = svg.getBoundingClientRect()
@@ -66,6 +86,7 @@ function serializeSvg(svg: SVGSVGElement, background: string | null = null): str
 }
 
 async function svgToPng(svg: SVGSVGElement, background: string): Promise<Blob> {
+  const serialized = await serializeSvg(svg, background)
   const bounds = svg.getBoundingClientRect()
   const viewBox = svg.viewBox.baseVal
   const sourceWidth = bounds.width || viewBox.width || Number(svg.getAttribute('width')) || 1
@@ -73,7 +94,7 @@ async function svgToPng(svg: SVGSVGElement, background: string): Promise<Blob> {
   const scale = PNG_MAX_DIMENSION / Math.max(sourceWidth, sourceHeight)
   const width = Math.max(1, Math.round(sourceWidth * scale))
   const height = Math.max(1, Math.round(sourceHeight * scale))
-  const url = URL.createObjectURL(new Blob([serializeSvg(svg, background)], { type: 'image/svg+xml;charset=utf-8' }))
+  const url = URL.createObjectURL(new Blob([serialized], { type: 'image/svg+xml;charset=utf-8' }))
   try {
     const image = await loadImage(url)
     const canvas = document.createElement('canvas')

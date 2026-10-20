@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query'
 import embed, { type Result as VegaEmbedResult, type VisualizationSpec } from 'vega-embed'
 
 import { prepareAsset } from '../../lib/api'
+import { ensureChartFontsLoaded } from '../shared/fonts'
 import type { AssetFilter, AssetHighlight, AssetSort, PreparedScatterPlotPayload } from '../../lib/types'
 import {
   buildAxisSpec,
@@ -641,6 +642,8 @@ function ScatterPlotChart({
     async function renderChart() {
       setChartError(null)
       try {
+        await ensureChartFontsLoaded()
+        if (disposed) return
         const result = await embed(containerRef.current as HTMLElement, spec, {
           actions: false,
           defaultStyle: false,

@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query'
 import embed, { type Result as VegaEmbedResult, type VisualizationSpec } from 'vega-embed'
 
 import { prepareAsset } from '../../lib/api'
+import { ensureChartFontsLoaded } from '../shared/fonts'
 import { backgroundCategoryGridLayer } from '../shared/backgroundGrid'
 import { barChartCategoryPadding, normalizeGroupedValues, stackStarts, topStackSegmentIndexes } from '../shared/groupedChart'
 import type { AssetFilter, AssetHighlight, AssetSort, PreparedBarChartPayload } from '../../lib/types'
@@ -567,6 +568,8 @@ function BarChartChart({
     async function renderChart() {
       setChartError(null)
       try {
+        await ensureChartFontsLoaded()
+        if (disposed) return
         const result = await embed(containerRef.current as HTMLElement, spec, {
           actions: false,
           defaultStyle: false,

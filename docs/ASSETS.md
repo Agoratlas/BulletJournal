@@ -81,6 +81,16 @@ assets.DataFrame(
 )
 ```
 
+## Favorites and notes
+
+The star in an asset panel marks it as a project favorite. A favorite has a yellow button with a white star, and a filled yellow star in the dashboard's panel list. Collections can be favorited as a whole; their children do not have separate favorite controls.
+
+Click **Assets** in the editor's top bar to open the project's permanent **Favorite assets** dashboard in a new tab. New favorites are appended with no panel overrides. This dashboard saves its own order, visibility, sizes, and modifiers independently of other dashboards. Removing an asset from favorites discards its settings in this dashboard; favoriting it again adds a fresh panel at the end.
+
+The pen button next to the star opens a multiline note editor. **Save** stores the note, **Cancel** discards edits, and clicking outside saves and closes the editor. A blue button indicates that an asset has a note. Notes are shared across all views of the asset.
+
+Favorites and notes survive new asset versions and notebook ID changes. Removing an asset declaration or deleting its notebook clears both, so recreating the same asset ID starts without favorites or notes.
+
 ## Shared interactive modifiers
 
 `DataFrame`, `BarChart`, `Histogram`, `PieChart`, and `ScatterPlot` all show a table and accept the following modifiers in their asset or dashboard panel.

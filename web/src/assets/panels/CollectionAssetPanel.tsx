@@ -568,6 +568,7 @@ function collectionChildAssetRecord(asset: AssetRecord, child: CollectionChild):
   return {
     ...asset,
     asset_name: child.name,
+    annotation: undefined,
     title: child.title,
     description: child.description,
     declared_asset_type: child.assetType,

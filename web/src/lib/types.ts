@@ -173,6 +173,7 @@ export type AssetObjectRecord = {
 }
 
 export type AssetRecord = {
+  annotation?: { is_favorite: boolean; note: string }
   node_id: string
   asset_name: string
   title: string | null

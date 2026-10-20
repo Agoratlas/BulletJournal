@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 
 import type { AssetChartTheme, ChartAxisOverrides, ChartTitleOverrides, HistogramSelectionRange, ScatterPlotSelectionBounds } from './types'
 import { optionalIntegerFromInput, optionalPositiveNumberFromInput } from './modifiers'
+import { VEGA_PANEL_FONT_FAMILY } from './fonts'
 
 export function buildAxisSpec(overrides: ChartAxisOverrides, defaultLabel: string, fontScale = 1) {
   const resolvedLabel = resolvedAxisLabel(overrides.label, defaultLabel)
@@ -19,8 +20,6 @@ export function buildAxisSpec(overrides: ChartAxisOverrides, defaultLabel: strin
 export function buildScaleType(scale: ChartAxisOverrides['scale']): 'linear' | 'log' {
   return scale === 'log' ? 'log' : 'linear'
 }
-
-export const VEGA_PANEL_FONT_FAMILY = 'Barlow'
 
 export function buildVegaLiteChartConfig(theme: AssetChartTheme, fontScale = 1) {
   return {

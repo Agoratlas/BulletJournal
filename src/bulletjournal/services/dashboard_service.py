@@ -6,7 +6,7 @@ from dataclasses import replace
 from typing import Any
 
 from bulletjournal.domain.enums import NodeKind
-from bulletjournal.domain.errors import GraphValidationError, NotFoundError
+from bulletjournal.domain.errors import DashboardVersionConflictError, GraphValidationError, NotFoundError
 from bulletjournal.domain.models import DashboardDocument, DashboardPanel, DashboardSource, LayoutEntry, Node
 from bulletjournal.storage.atomic_write import atomic_write_text
 from bulletjournal.utils import json_dumps, slugify, utc_now_iso
@@ -18,18 +18,14 @@ DASHBOARD_VERTICAL_OFFSET = 240
 DASHBOARD_NOTEBOOK_CENTER_OFFSET = 60
 
 
-class DashboardVersionConflictError(Exception):
-    def __init__(self, latest_dashboard: dict[str, Any]) -> None:
-        super().__init__('Dashboard version conflict.')
-        self.latest_dashboard = latest_dashboard
-
-
 class DashboardService:
     def __init__(self, project_service) -> None:
         self.project_service = project_service
         self._lock = threading.RLock()
 
     def get_dashboard(self, dashboard_id: str) -> dict[str, Any]:
+        if dashboard_id == '@favorites':
+            return self.project_service.require_project().state_db.get_favorites_dashboard()
         self.project_service.get_node(dashboard_id)
         return self._read_dashboard_document(dashboard_id).to_dict()
 
@@ -138,6 +134,18 @@ class DashboardService:
     ) -> dict[str, Any]:
         with self._lock:
             graph = self.project_service.graph()
+            if dashboard_id == '@favorites':
+                existing = self.project_service.require_project().state_db.get_favorites_dashboard()
+                if existing['version'] != dashboard_version:
+                    raise DashboardVersionConflictError(existing)
+                favorite_ids = {panel['panel_id'] for panel in existing['panels']}
+                favorite_panels = [panel for panel in panels or [] if panel.get('panel_id') in favorite_ids]
+                updated = self.project_service.require_project().state_db.patch_favorites_dashboard(
+                    dashboard_version,
+                    [panel.to_dict() for panel in self._coerce_panels(favorite_panels, graph=graph)],
+                )
+                self._publish_dashboard_updated(self._dashboard_from_dict(updated, dashboard_id=dashboard_id))
+                return updated
             existing = self._read_dashboard_document(dashboard_id)
             if existing.version != dashboard_version:
                 raise DashboardVersionConflictError(existing.to_dict())

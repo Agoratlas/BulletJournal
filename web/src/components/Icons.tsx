@@ -44,6 +44,14 @@ export function Download(props: SVGProps<SVGSVGElement>) {
   )
 }
 
+export function Star(props: SVGProps<SVGSVGElement>) {
+  return <IconBase {...props}><path d="m12 3 2.8 5.7 6.2.9-4.5 4.4 1.1 6.2-5.6-3-5.6 3 1.1-6.2L3 9.6l6.2-.9Z" /></IconBase>
+}
+
+export function NotePen(props: SVGProps<SVGSVGElement>) {
+  return <IconBase {...props}><path d="M20 13v7H4V4h7" /><path d="m10 14 1-4L19 2l3 3-8 8-4 1Z" /><path d="m17 4 3 3" /></IconBase>
+}
+
 export function Palette(props: SVGProps<SVGSVGElement>) {
   return (
     <IconBase {...props}>

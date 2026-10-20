@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState, type DragEvent, type MouseEvent } from 'react'
 
 import type { AssetRecord, DashboardPanelRecord } from '../lib/types'
+import { AssetFavoriteButton, openAssetPanelNote } from '../assets/shared/annotations'
+import { NotePen } from '../components/Icons'
 
 type DropIndicator = {
   panelId: string
@@ -28,6 +30,13 @@ export function DashboardSidebar({
   const draggedPanelIdRef = useRef<string | null>(null)
   const dragSourceHideFrameRef = useRef<number | null>(null)
   const dragCleanupFrameRef = useRef<number | null>(null)
+  const [pendingNotePanelId, setPendingNotePanelId] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (pendingNotePanelId && openAssetPanelNote(pendingNotePanelId)) {
+      setPendingNotePanelId(null)
+    }
+  }, [pendingNotePanelId, panels, assetsByLogicalId])
 
   useEffect(() => () => {
     if (dragSourceHideFrameRef.current !== null) window.cancelAnimationFrame(dragSourceHideFrameRef.current)
@@ -119,10 +128,25 @@ export function DashboardSidebar({
                 <div className="dashboard-sidebar-handle" aria-hidden="true" title="Drag to reorder"><DragHandleIcon /></div>
                 <span className={`dashboard-sidebar-state-bubble is-${assetState}`} aria-hidden="true" />
                 <a className="dashboard-sidebar-link" href={panelHref(panel.panel_id)} onClick={(event) => onPanelNavigate?.(event, panel.panel_id)}><span className="dashboard-sidebar-link-label">{label}</span></a>
-                <button type="button" className="dashboard-sidebar-visibility" onClick={(event) => {
-                  onPanelsChange((current) => current.map((entry) => entry.panel_id === panel.panel_id ? { ...entry, visible: !entry.visible } : entry))
-                  event.currentTarget.blur()
-                }} aria-label={panel.visible ? `Hide ${label}` : `Show ${label}`} title={panel.visible ? 'Hide panel' : 'Show panel'}><EyeOffIcon /></button>
+                <div className="dashboard-sidebar-actions">
+                  {asset?.annotation ? <button
+                    type="button"
+                    className={`dashboard-sidebar-action dashboard-sidebar-note${asset.annotation.note ? ' is-active' : ''}`}
+                    aria-label={`${asset.annotation.note ? 'Edit' : 'Add'} note for ${label}`}
+                    title={asset.annotation.note ? 'Edit asset note' : 'Add asset note'}
+                    onClick={() => {
+                      if (!panel.visible) {
+                        onPanelsChange((current) => current.map((entry) => entry.panel_id === panel.panel_id ? { ...entry, visible: true } : entry))
+                      }
+                      setPendingNotePanelId(panel.panel_id)
+                    }}
+                  ><NotePen width={16} height={16} /></button> : null}
+                  {asset ? <AssetFavoriteButton asset={asset} sidebar /> : null}
+                  <button type="button" className={`dashboard-sidebar-action dashboard-sidebar-visibility${!panel.visible ? ' is-active' : ''}`} onClick={(event) => {
+                    onPanelsChange((current) => current.map((entry) => entry.panel_id === panel.panel_id ? { ...entry, visible: !entry.visible } : entry))
+                    event.currentTarget.blur()
+                  }} aria-label={panel.visible ? `Hide ${label}` : `Show ${label}`} title={panel.visible ? 'Hide panel' : 'Show panel'}><EyeOffIcon /></button>
+                </div>
               </div>
             )
           })}

@@ -12,6 +12,7 @@ from typing import Any
 
 from bulletjournal.config import DB_TIMEOUT_SECONDS
 from bulletjournal.domain.enums import ArtifactRole, ArtifactState, LineageMode, RunStatus, ValidationSeverity
+from bulletjournal.domain.errors import DashboardVersionConflictError, NotFoundError
 from bulletjournal.domain.models import AssetDeclaration, CheckpointRecord, ValidationIssue
 from bulletjournal.observability.timing import measure
 from bulletjournal.storage.migrations import MIGRATIONS
@@ -1092,7 +1093,121 @@ class StateDB:
                     for declaration in declarations
                 ],
             )
+            connection.execute(
+                'DELETE FROM asset_annotations WHERE node_id = ? AND asset_name NOT IN '
+                '(SELECT asset_name FROM asset_declarations WHERE node_id = ?)',
+                (node_id, node_id),
+            )
             connection.commit()
+
+    def list_asset_annotations(self, node_id: str) -> dict[str, dict[str, Any]]:
+        with self._connection() as connection:
+            rows = connection.execute(
+                'SELECT asset_name, note, favorite_position FROM asset_annotations WHERE node_id = ?',
+                (node_id,),
+            ).fetchall()
+        return {
+            str(row['asset_name']): {'note': row['note'], 'is_favorite': row['favorite_position'] is not None}
+            for row in rows
+        }
+
+    def patch_asset_annotation(
+        self, node_id: str, asset_name: str, *, note: str | None = None, is_favorite: bool | None = None
+    ) -> None:
+        with self._connection() as connection:
+            connection.execute('BEGIN IMMEDIATE')
+            head = connection.execute(
+                'SELECT 1 FROM asset_heads WHERE node_id = ? AND asset_name = ? AND incarnation_id IS ?',
+                (node_id, asset_name, self._live_incarnation_id(connection, node_id)),
+            ).fetchone()
+            if head is None:
+                raise NotFoundError(f'Unknown asset `{node_id}/{asset_name}`.')
+            connection.execute(
+                'INSERT OR IGNORE INTO asset_annotations (node_id, asset_name) VALUES (?, ?)',
+                (node_id, asset_name),
+            )
+            if note is not None:
+                connection.execute(
+                    'UPDATE asset_annotations SET note = ? WHERE node_id = ? AND asset_name = ?',
+                    (note if note.strip() else '', node_id, asset_name),
+                )
+            if is_favorite is True:
+                # A fresh panel identity prevents an older open dashboard from
+                # applying overrides after unfavoriting and favoriting again.
+                connection.execute(
+                    'UPDATE asset_annotations SET favorite_position = '
+                    '(SELECT COALESCE(MAX(favorite_position), -1) + 1 FROM asset_annotations), '
+                    'favorite_panel_json = ? WHERE node_id = ? AND asset_name = ? AND favorite_position IS NULL',
+                    (json_dumps({'panel_id': f'favorite-{uuid.uuid4().hex}'}), node_id, asset_name),
+                )
+            elif is_favorite is False:
+                connection.execute(
+                    'UPDATE asset_annotations SET favorite_position = NULL, favorite_panel_json = NULL '
+                    'WHERE node_id = ? AND asset_name = ?',
+                    (node_id, asset_name),
+                )
+
+    def get_favorites_dashboard(self) -> dict[str, Any]:
+        with self._connection() as connection:
+            connection.execute('BEGIN')
+            return self._favorites_dashboard(connection)
+
+    @staticmethod
+    def _favorites_dashboard(connection: sqlite3.Connection) -> dict[str, Any]:
+        meta = dict(connection.execute("SELECT key, value FROM project_meta WHERE key LIKE 'favorites_%'"))
+        rows = connection.execute(
+            'SELECT node_id, asset_name, favorite_panel_json FROM asset_annotations '
+            'WHERE favorite_position IS NOT NULL ORDER BY favorite_position, node_id, asset_name'
+        ).fetchall()
+        panels = [
+            {
+                'visible': True,
+                'panel_height': None,
+                'modifier_overrides': {},
+                'override_schema_hash': None,
+                **json.loads(row['favorite_panel_json']),
+                'node_id': row['node_id'],
+                'asset_name': row['asset_name'],
+                'position': index,
+            }
+            for index, row in enumerate(rows)
+        ]
+        return {
+            'schema_version': 1,
+            'dashboard_id': '@favorites',
+            'version': int(meta['favorites_version']),
+            'title': 'Favorite assets',
+            'created_at': meta['favorites_created_at'],
+            'updated_at': meta['favorites_updated_at'],
+            'sources': [{'node_id': node_id} for node_id in dict.fromkeys(panel['node_id'] for panel in panels)],
+            'panels': panels,
+        }
+
+    def patch_favorites_dashboard(self, version: int, panels: list[dict[str, Any]]) -> dict[str, Any]:
+        with self._connection() as connection:
+            connection.execute('BEGIN IMMEDIATE')
+            existing = self._favorites_dashboard(connection)
+            if existing['version'] != version:
+                raise DashboardVersionConflictError(existing)
+            # Membership is changed only by the favorite action. Stale dashboard
+            # drafts cannot remove favorites or resurrect a deleted declaration.
+            positions = {panel['panel_id']: index for index, panel in enumerate(panels)}
+            ordered = sorted(
+                existing['panels'], key=lambda panel: positions.get(panel['panel_id'], len(panels) + panel['position'])
+            )
+            drafts = {panel['panel_id']: panel for panel in panels}
+            for index, panel in enumerate(ordered):
+                draft = drafts.get(panel['panel_id'], panel)
+                settings = {
+                    key: draft[key] for key in ('visible', 'panel_height', 'modifier_overrides', 'override_schema_hash')
+                }
+                settings['panel_id'] = panel['panel_id']
+                connection.execute(
+                    'UPDATE asset_annotations SET favorite_position = ?, favorite_panel_json = ? '
+                    'WHERE node_id = ? AND asset_name = ?',
+                    (index, json_dumps(settings), panel['node_id'], panel['asset_name']),
+                )
+            return self._favorites_dashboard(connection)
 
     def list_asset_declarations(self, node_id: str | None = None) -> list[dict[str, Any]]:
         with self._connection() as connection:

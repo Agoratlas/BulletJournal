@@ -7,6 +7,7 @@ import { parseStrictJson } from './lib/strictJson'
 import { CONSTANT_NODE_HEIGHT, CONSTANT_NODE_PORT_CENTER_OFFSET, CONSTANT_NODE_WIDTH, GRID_SIZE, ORGANIZER_NODE_PORT_CENTER_OFFSET, PORT_ROW_HEIGHT, STANDARD_NODE_PORT_CENTER_OFFSET, activeRunNodeId, artifactFor, artifactsForDisplay, currentRun, dependencyNodeIds, formatTimestamp, globalArtifactCounts, inputState, inputsForNode, outputsForNode, queuedRunNodeIds, templateByRef } from './lib/helpers'
 import { areaSettings, type AreaColorKey, type AreaTitlePosition } from './lib/area'
 import { useDocumentMetadata } from './lib/documentMetadata'
+import { FAVORITES_DASHBOARD_ID } from './lib/api'
 import type { ArtifactRecord, DashboardRecord, GraphPatchOperation, LayoutRecord, NodeRecord, ProjectSnapshot, SessionRecord, TemplateRecord } from './lib/types'
 import type { AppNotice, ClipboardGraph, ClipboardNodeRecord, ConstantValueType, DataFrameUploadFormat, GraphHistoryEntry, GraphMutationPlan, NodeActionItem, OptimisticGraphState, PaletteEntry, PalettePreviewBlock, PortActionMenuState } from './appTypes'
 import { applyGraphPatchResponse, applyOptimisticDashboardSources, applyOptimisticGraphOperations, areaAddOperationForNode, artifactTargetForPort, blockCreateMode, clampContextMenuPosition, cloneSnapshot, constantAddOperationForNode, copiedTitle, createClientNotice, dashboardAddOperationForNode, edgeIdForPorts, edgeIdsForPort, editorSessionDetails, expandMutationPlan, formatMarkdownCode, formatRunBlockedMessage, formatRunFailureMessage, freezeBlockMessage, frozenBlockBlockersForDelete, frozenBlockBlockersForRemovedEdges, frozenBlockBlockersForStaleRoots, isEditableTarget, isEditorOpenConflict, isFreezeConflict, isManagedRunFailure, normalizeNodeId, notebookAddOperationForNode, organizerAddOperationForNode, pipelineTemplateNodeRecords, pipelineTopLeftForCenter, SNAPSHOT_REFRESH_EVENTS, SNAPSHOT_REFRESH_THROTTLE_MS, snapToGrid, topologicallyOrderNodeIds, uniqueCopiedNodeId, upstreamNodeIds } from './lib/appHelpers'
@@ -809,6 +810,11 @@ function App() {
         return
       }
 
+      if (eventType === 'asset.annotation_updated') {
+        void queryClient.invalidateQueries({ queryKey: ['node-assets', nodeId], exact: true })
+        return
+      }
+
       if (eventType === 'asset.state_changed' || eventType === 'asset.version_created') {
         if (nodeId) {
           void queryClient.invalidateQueries({ queryKey: ['node-assets', nodeId], exact: true })
@@ -830,6 +836,7 @@ function App() {
       }
 
       if (eventType === 'notebook.reparsed' || eventType === 'message') {
+        void queryClient.invalidateQueries({ queryKey: ['dashboard', FAVORITES_DASHBOARD_ID], exact: true })
         void queryClient.invalidateQueries({ queryKey: ['node-assets'] })
         void queryClient.invalidateQueries({ queryKey: ['asset-prepare'] })
         void scheduleSnapshotRefresh()
@@ -865,6 +872,8 @@ function App() {
       }
 
       if (eventType === 'graph.updated') {
+        void queryClient.invalidateQueries({ queryKey: ['dashboard', FAVORITES_DASHBOARD_ID], exact: true })
+        void queryClient.invalidateQueries({ queryKey: ['node-assets'] })
         processGraphUpdatedEvent(eventGraphVersion)
         return
       }
@@ -4668,13 +4677,10 @@ function App() {
             </button>
             <button
               type="button"
-              className={`node-status-summary ${assetsAreReady ? 'is-ready' : 'needs-attention'} ${rightPanelMode === 'assets' ? 'is-active' : ''}`}
+              className={`node-status-summary ${assetsAreReady ? 'is-ready' : 'needs-attention'}`}
               onClick={() => {
-                setExplicitInspectorNodeId(null)
-                setRightPanelMode('assets')
+                window.open(dashboardUrl(FAVORITES_DASHBOARD_ID), '_blank', 'noopener,noreferrer')
               }}
-              aria-expanded={rightPanelMode === 'assets'}
-              aria-controls="right-side-panel"
               disabled={!projectId}
             >
               <span className="node-status-summary-label">Assets</span>

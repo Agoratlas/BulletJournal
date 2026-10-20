@@ -259,6 +259,11 @@ class NodeOutputsStateChangeRequest(StrictModel):
     only_current_state: ArtifactState | None = None
 
 
+class AssetAnnotationPatchRequest(StrictModel):
+    is_favorite: bool | None = None
+    note: str | None = None
+
+
 class AssetPrepareRequest(StrictModel):
     asset_version_id: int | None = None
     modifier_overrides: dict[str, Any] = Field(default_factory=dict)

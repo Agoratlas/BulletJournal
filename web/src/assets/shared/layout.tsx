@@ -22,6 +22,7 @@ import {
 import { PAGE_SIZE_OPTIONS } from './types'
 import type { AssetPanelFrameVariant, AssetPanelInfo, ChartAxisOverrides, ChartTitleOverrides, DatavizAxisScale, ModifierColumn } from './types'
 import { PreparedTable, formatCount } from './table'
+import { AssetFavoriteButton, AssetNoteButton } from './annotations'
 
 export function AssetPanelFrame({
   asset,
@@ -54,7 +55,7 @@ export function AssetPanelFrame({
 }) {
   const frameRef = useRef<HTMLElement | null>(null)
   return (
-    <section ref={frameRef} id={sectionId} className={frameVariant === 'inline' ? 'asset-panel-frame-inline' : 'panel asset-panel-card'}>
+    <section ref={frameRef} id={sectionId} data-asset-panel-id={panelInfo.panelId} className={frameVariant === 'inline' ? 'asset-panel-frame-inline' : 'panel asset-panel-card'}>
       {showHeader ? (
         <div className={`asset-panel-header${headerCenter ? ' has-center-content' : ''}`}>
           <div className="asset-panel-heading">
@@ -221,6 +222,11 @@ function AssetPanelHeaderActions({
           </div>
         </details>
       ) : null}
+
+      {asset.annotation ? <>
+        <AssetNoteButton asset={asset} onOpen={() => setOpenMenu(null)} />
+        <AssetFavoriteButton asset={asset} />
+      </> : null}
 
       <details className="asset-panel-action-menu" open={openMenu === 'info'}>
         <summary
