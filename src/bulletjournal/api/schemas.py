@@ -12,6 +12,13 @@ class StrictModel(BaseModel):
     model_config = ConfigDict(extra='forbid')
 
 
+class NotebookInput(StrictModel):
+    name: str = Field(pattern=r'^[a-z0-9_]+$')
+    data_type: str
+    description: str = ''
+    default_to_none: bool = False
+
+
 class AddNotebookNodeOperation(StrictModel):
     type: Literal['add_notebook_node']
     node_id: str
@@ -22,6 +29,7 @@ class AddNotebookNodeOperation(StrictModel):
     h: int = 220
     template_ref: str | None = None
     source_text: str | None = None
+    inputs: list[NotebookInput] | None = None
     ui: dict[str, Any] | None = None
 
 

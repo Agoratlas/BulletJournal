@@ -44,6 +44,7 @@ def test_can_add_and_run_builtin_notebook(tmp_path) -> None:
                     'type': 'add_notebook_node',
                     'node_id': 'sample_node',
                     'title': 'Sample Node',
+                    'template_ref': 'builtin/test_starter_notebook',
                     'x': 120,
                     'y': 140,
                 }
@@ -2413,6 +2414,7 @@ def test_standalone_notebook_script_run_persists_artifacts(tmp_path) -> None:
                         'type': 'add_notebook_node',
                         'node_id': 'sample_node',
                         'title': 'Sample Node',
+                        'template_ref': 'builtin/test_starter_notebook',
                     }
                 ],
             },

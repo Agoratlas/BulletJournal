@@ -289,7 +289,7 @@ function encodeDataFrameUploadFormat(format: 'parquet' | 'csv_comma' | 'csv_semi
   return format
 }
 
-export async function uploadConstantFile(nodeId: string, file: File, dataframeFormat: 'parquet' | 'csv_comma' | 'csv_semicolon' | 'csv_tab' | 'xlsx' = 'csv_comma') {
+export async function uploadConstantFile(nodeId: string, file: File, dataframeFormat: 'parquet' | 'csv_comma' | 'csv_semicolon' | 'csv_tab' | 'xlsx' = 'parquet') {
   const response = await fetch(appUrl(`/api/v1/constants/${nodeId}/upload?dataframe_format=${encodeDataFrameUploadFormat(dataframeFormat)}`), {
     method: 'POST',
     headers: {

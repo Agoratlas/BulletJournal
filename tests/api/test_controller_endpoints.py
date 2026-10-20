@@ -66,6 +66,7 @@ def test_controller_environment_change_preserves_frozen_outputs_and_notifies(tmp
                     'type': 'add_notebook_node',
                     'node_id': 'sample_node',
                     'title': 'Sample Node',
+                    'template_ref': 'builtin/test_starter_notebook',
                 }
             ],
         },

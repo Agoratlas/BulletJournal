@@ -4,7 +4,7 @@ import type { Connection, EdgeChange, Node } from 'reactflow'
 
 import { appBasePath, appUrl, cancelRun, clearConstantValue, createCheckpoint, currentProject, dashboardUrl, dismissNotice, downloadNotebookSource, getConstantValue, getDashboard, getSnapshot, listNodeAssets, listSessions, notebookAssetsUrl, notebookDownloadUrl, patchDashboard, patchGraph, redoGraphTombstone, restoreCheckpoint, restoreGraphTombstone, runAll, runNode, runSelection, setArtifactState, setConstantValue, setNodeOutputsState, stopSession, uploadConstantFile } from './lib/api'
 import { parseStrictJson } from './lib/strictJson'
-import { CONSTANT_NODE_HEIGHT, CONSTANT_NODE_PORT_CENTER_OFFSET, CONSTANT_NODE_WIDTH, GRID_SIZE, PORT_ROW_HEIGHT, STANDARD_NODE_PORT_CENTER_OFFSET, activeRunNodeId, artifactFor, artifactsForDisplay, currentRun, dependencyNodeIds, formatTimestamp, globalArtifactCounts, inputState, inputsForNode, outputsForNode, queuedRunNodeIds, templateByRef } from './lib/helpers'
+import { CONSTANT_NODE_HEIGHT, CONSTANT_NODE_PORT_CENTER_OFFSET, CONSTANT_NODE_WIDTH, GRID_SIZE, ORGANIZER_NODE_PORT_CENTER_OFFSET, PORT_ROW_HEIGHT, STANDARD_NODE_PORT_CENTER_OFFSET, activeRunNodeId, artifactFor, artifactsForDisplay, currentRun, dependencyNodeIds, formatTimestamp, globalArtifactCounts, inputState, inputsForNode, outputsForNode, queuedRunNodeIds, templateByRef } from './lib/helpers'
 import { areaSettings, type AreaColorKey, type AreaTitlePosition } from './lib/area'
 import { useDocumentMetadata } from './lib/documentMetadata'
 import type { ArtifactRecord, DashboardRecord, GraphPatchOperation, LayoutRecord, NodeRecord, ProjectSnapshot, SessionRecord, TemplateRecord } from './lib/types'
@@ -16,6 +16,8 @@ import { BlockPalette } from './components/BlockPalette'
 import { ActionButtons } from './components/ActionButtons'
 import { ConfirmDialog, CreateNotebookDialog, CreateOrganizerPortDialog, CreatePipelineDialog, EditAreaDialog, EditConstantDialog, EditOrganizerDialog, Modal } from './components/Dialogs'
 import { GraphCanvas } from './components/GraphCanvas'
+import { NotebookInputDialog } from './components/NotebookInputDialog'
+import { draftEdgeId, draftInputFromConnection, notebookDraftOperations, snapshotWithNotebookDrafts, type NotebookDraft, type NotebookDraftInput, type NotebookDraftInputEdit } from './lib/notebookDrafts'
 import { Info, Play, Plus, Redo, Stop, Undo, X } from './components/Icons'
 import { NodeInspector } from './components/NodeInspector'
 import { NoticeOverlay } from './components/NoticeOverlay'
@@ -23,6 +25,7 @@ import { SessionLoadingScreen } from './components/SessionLoadingScreen'
 import { SimpleMarkdown } from './components/SimpleMarkdown'
 import { NotebookAssetPanels } from './assets/NotebookAssetPanels'
 import { copyText } from './assets/shared/exports'
+import { inputSourcePath } from './lib/helpers'
 
 const NotebookAssetsPage = lazy(async () => {
   const module = await import('./assets/NotebookAssetsPage')
@@ -272,6 +275,9 @@ function App() {
   const [draggedPaletteEntry, setDraggedPaletteEntry] = useState<PaletteEntry | null>(null)
   const [paletteViewport, setPaletteViewport] = useState<{ center: { x: number; y: number }; zoom: number } | null>(null)
   const [pendingBlockCreation, setPendingBlockCreation] = useState<PendingBlockCreation | null>(null)
+  const [notebookDrafts, setNotebookDrafts] = useState<NotebookDraft[]>([])
+  const [notebookDraftInputEdit, setNotebookDraftInputEdit] = useState<NotebookDraftInputEdit | null>(null)
+  const creatingNotebookDraftIds = useRef(new Set<string>())
   const [pendingPipelineCreation, setPendingPipelineCreation] = useState<PendingPipelineCreation | null>(null)
   const [pendingOrganizerConnection, setPendingOrganizerConnection] = useState<PendingOrganizerConnection | null>(null)
   const [pendingAreaCreation, setPendingAreaCreation] = useState<PendingAreaCreation | null>(null)
@@ -315,6 +321,7 @@ function App() {
   const pendingClickSelectionRef = useRef<{ nodeIds: string[]; edgeIds: string[]; token: number } | null>(null)
   const pendingClickSelectionTokenRef = useRef(0)
   const dismissingAssetExplorerRef = useRef(false)
+  const [sourcePortFocus, setSourcePortFocus] = useState<{ nodeId: string; portName: string; token: number } | null>(null)
   const dashboardUpdateQueueRef = useRef(new Map<string, Promise<boolean>>())
   const dashboardMutationIdRef = useRef(0)
   const graphMutationQueueRef = useRef<QueuedGraphMutation[]>([])
@@ -364,6 +371,12 @@ function App() {
 
   const serverSnapshot = snapshotQuery.data ?? snapshot
   const liveSnapshot = optimisticGraph?.snapshot ?? serverSnapshot
+  const canvasSnapshot = useMemo(() => liveSnapshot ? snapshotWithNotebookDrafts(liveSnapshot, notebookDrafts) : null, [liveSnapshot, notebookDrafts])
+
+  useEffect(() => {
+    setNotebookDrafts([])
+    setNotebookDraftInputEdit(null)
+  }, [projectId])
 
   function setOptimisticGraphState(
     next: OptimisticGraphState | null | ((current: OptimisticGraphState | null) => OptimisticGraphState | null),
@@ -1139,6 +1152,13 @@ function App() {
     [liveSnapshot, portActionMenu],
   )
 
+  const portActionSourcePath = useMemo(
+    () => liveSnapshot && portActionMenu?.side === 'input'
+      ? inputSourcePath(liveSnapshot, portActionMenu.nodeId, portActionMenu.portName)
+      : null,
+    [liveSnapshot, portActionMenu],
+  )
+
   const portActionHead = useMemo(
     () => (liveSnapshot && portActionArtifact
       ? artifactFor(liveSnapshot, portActionArtifact.nodeId, portActionArtifact.artifactName)
@@ -1276,9 +1296,10 @@ function App() {
     if (inputIndex === -1) {
       return null
     }
+    const portCenterOffset = node.kind === 'organizer' ? ORGANIZER_NODE_PORT_CENTER_OFFSET : STANDARD_NODE_PORT_CENTER_OFFSET
     return {
       x: layout.x - CONSTANT_NODE_WIDTH - GRID_SIZE * 2,
-      y: layout.y + STANDARD_NODE_PORT_CENTER_OFFSET + inputIndex * PORT_ROW_HEIGHT - CONSTANT_NODE_PORT_CENTER_OFFSET,
+      y: layout.y + portCenterOffset + inputIndex * PORT_ROW_HEIGHT - CONSTANT_NODE_PORT_CENTER_OFFSET,
     }
   }
 
@@ -1472,6 +1493,11 @@ function App() {
   }
 
   function requestDeleteSelection(nodeIds: string[], edgeIds: string[], options: { createCheckpoint?: boolean } = {}) {
+    const draftIds = new Set(notebookDrafts.map((draft) => draft.id))
+    for (const nodeId of nodeIds) if (draftIds.has(nodeId)) deleteNotebookDraft(nodeId)
+    disconnectNotebookDraftEdges(edgeIds)
+    nodeIds = nodeIds.filter((nodeId) => !draftIds.has(nodeId))
+    edgeIds = edgeIds.filter((edgeId) => !notebookDrafts.some((draft) => draft.inputs.some((input) => draftEdgeId(draft.id, input.key) === edgeId)))
     if (!projectId || !liveSnapshot || (!nodeIds.length && !edgeIds.length)) {
       return
     }
@@ -1526,19 +1552,6 @@ function App() {
     const canMarkOutputsStale = node.kind !== 'constant' && (artifactHeads.some((artifact) => artifact.state !== 'stale') || assetCounts.ready > 0)
     const canMarkOutputsReady = node.kind !== 'constant' && (artifactHeads.some((artifact) => artifact.state === 'stale') || assetCounts.stale > 0) && nodeInputsAreReady(node)
     const actions: NodeActionItem[] = []
-
-    actions.push({
-      key: 'copy-link',
-      label: 'Copy link',
-      onClick: () => {
-        dismissMenu()
-        const url = new URL(window.location.href)
-        url.hash = encodeURIComponent(node.id)
-        void copyText(url.href).catch((error) => {
-          reportClientError('copy-block-link-failed', 'copy_block_link_failed', `Could not copy block link: ${String(error)}`, { nodeId: node.id })
-        })
-      },
-    })
 
     if (node.kind === 'notebook') {
       actions.push({
@@ -1669,6 +1682,19 @@ function App() {
         },
       })
     }
+
+    actions.push({
+      key: 'copy-link',
+      label: 'Copy link',
+      onClick: () => {
+        dismissMenu()
+        const url = new URL(window.location.href)
+        url.hash = encodeURIComponent(node.id)
+        void copyText(url.href).catch((error) => {
+          reportClientError('copy-block-link-failed', 'copy_block_link_failed', `Could not copy block link: ${String(error)}`, { nodeId: node.id })
+        })
+      },
+    })
 
     actions.push({
       key: 'delete-node',
@@ -1969,8 +1995,8 @@ function App() {
   }, [artifactExplorerOpen])
 
   const existingNodeIds = useMemo(
-    () => liveSnapshot?.graph.nodes.map((node) => node.id) ?? [],
-    [liveSnapshot],
+    () => [...(liveSnapshot?.graph.nodes.map((node) => node.id) ?? []), ...notebookDrafts.map((draft) => draft.nodeId)],
+    [liveSnapshot, notebookDrafts],
   )
 
   const existingNodeIdSet = useMemo(
@@ -2093,7 +2119,7 @@ function App() {
       {
         key: 'empty',
         title: 'New notebook',
-        description: 'Generic notebook scaffold with commented sample input and output declarations.',
+        description: 'Draft a notebook by dragging artifacts into its inputs, then create it when ready.',
         kind: 'empty',
         previewBlocks: palettePreviewBlocks('New notebook', 'empty'),
       },
@@ -3190,7 +3216,7 @@ function App() {
       return anchor
     }
     const nodeById = new Map(liveSnapshot.graph.nodes.map((node) => [node.id, node]))
-    const occupied = liveSnapshot.graph.layout
+    const occupied = (canvasSnapshot ?? liveSnapshot).graph.layout
       .filter((layout) => nodeById.get(layout.node_id)?.kind !== 'area')
       .map(placementRectForLayout)
     for (let ring = 0; ring <= MAX_PLACEMENT_RINGS; ring += 1) {
@@ -3294,6 +3320,15 @@ function App() {
     }
     const { entry, x, y } = pendingBlockCreation
     setPendingBlockCreation(null)
+    if (entry.kind === 'empty') {
+      const draft: NotebookDraft = {
+        id: `notebook-draft:${crypto.randomUUID()}`, nodeId: payload.nodeId, title: payload.title,
+        x: snapToGrid(x - NEW_NODE_WIDTH / 2), y: snapToGrid(y - NEW_NODE_HEIGHT / 2), inputs: [],
+      }
+      setNotebookDrafts((current) => [...current, draft])
+      selectSingleNode(draft.id, { openInspector: false })
+      return
+    }
     if (entry.kind === 'template') {
       await handleCreateNode({
         type: 'template',
@@ -3301,17 +3336,6 @@ function App() {
         title: payload.title,
         templateRef: entry.templateRef,
       }, { x, y })
-      return
-    }
-    if (entry.kind === 'empty') {
-      await handleCreateNode(
-        {
-          type: 'empty',
-          nodeId: payload.nodeId,
-          title: payload.title,
-        },
-        { x, y },
-      )
       return
     }
     if (entry.kind === 'dashboard') {
@@ -3792,7 +3816,9 @@ function App() {
   }
 
   async function handleEdgeChanges(changes: EdgeChange[]) {
-    const removals = changes.filter((change) => change.type === 'remove')
+    const removedIds = changes.filter((change) => change.type === 'remove').map((change) => change.id)
+    disconnectNotebookDraftEdges(removedIds)
+    const removals = changes.filter((change): change is Extract<EdgeChange, { type: 'remove' }> => change.type === 'remove' && !notebookDrafts.some((draft) => draft.inputs.some((input) => draftEdgeId(draft.id, input.key) === change.id)))
     if (!removals.length) {
       return
     }
@@ -3875,6 +3901,18 @@ function App() {
     if (!connection.source || !connection.target || !connection.sourceHandle || !connection.targetHandle) {
       return
     }
+    const draft = notebookDrafts.find((draft) => draft.id === connection.target)
+    if (draft) {
+      const edit = liveSnapshot && draftInputFromConnection(liveSnapshot, notebookDrafts, connection)
+      if (edit) setNotebookDraftInputEdit(edit)
+      else if (!draft.busy && connection.sourceHandle.startsWith('out:') && connection.targetHandle.startsWith('in:')) {
+        const inputKey = connection.targetHandle.slice(3)
+        const sourceNode = liveSnapshot?.graph.nodes.find((node) => node.id === connection.source)
+        const sourcePort = sourceNode && outputsForNode(sourceNode).find((port) => port.name === connection.sourceHandle!.slice(4))
+        if (sourcePort) updateNotebookDraft(draft.id, { inputs: draft.inputs.map((input) => input.key === inputKey && input.dataType === sourcePort.data_type ? { ...input, sourceNode: connection.source, sourcePort: sourcePort.name } : input) })
+      }
+      return
+    }
     const dashboardLinkNodes = dashboardLinkConnectionNodes(connection)
     if (dashboardLinkNodes) {
       const dashboard = await ensureDashboardRecord(dashboardLinkNodes.dashboardId)
@@ -3942,6 +3980,62 @@ function App() {
       ],
     }
     await mutateGraph(redo.operations, { history: liveSnapshot ? simpleHistoryEntryForPlan(liveSnapshot, redo) : null })
+  }
+
+  function updateNotebookDraft(draftId: string, patch: Partial<NotebookDraft>) {
+    setNotebookDrafts((current) => current.map((draft) => draft.id === draftId && !draft.busy ? { ...draft, ...patch, nodeId: patch.nodeId === undefined ? draft.nodeId : normalizeNodeId(patch.nodeId), error: null } : draft))
+  }
+
+  function deleteNotebookDraft(draftId: string) {
+    if (creatingNotebookDraftIds.current.has(draftId)) return
+    setNotebookDrafts((current) => current.filter((draft) => draft.id !== draftId))
+    setNotebookDraftInputEdit((current) => current?.draftId === draftId ? null : current)
+    applySelection(selectedNodeIds.filter((nodeId) => nodeId !== draftId), selectedEdgeIds.filter((edgeId) => !edgeId.startsWith(`${draftId}:`)), { openInspector: false })
+  }
+
+  function disconnectNotebookDraftEdges(edgeIds: string[]) {
+    if (!edgeIds.length) return
+    setNotebookDrafts((current) => current.map((draft) => draft.busy ? draft : {
+      ...draft,
+      inputs: draft.inputs.map((input) => edgeIds.includes(draftEdgeId(draft.id, input.key)) ? { ...input, sourceNode: null, sourcePort: null } : input),
+    }))
+  }
+
+  function saveNotebookDraftInput(input: NotebookDraftInput) {
+    if (!notebookDraftInputEdit) return
+    const { draftId, insertIndex } = notebookDraftInputEdit
+    setNotebookDrafts((current) => current.map((draft) => {
+      if (draft.id !== draftId || draft.busy) return draft
+      if (draft.inputs.some((item) => item.key !== input.key && item.name === input.name)) return draft
+      const editing = draft.inputs.some((item) => item.key === input.key)
+      const inputs = editing ? draft.inputs.map((item) => item.key === input.key ? input : item) : [...draft.inputs]
+      if (!editing) inputs.splice(insertIndex, 0, input)
+      return { ...draft, inputs, error: null }
+    }))
+    setNotebookDraftInputEdit(null)
+  }
+
+  async function createNotebookDraft(draftId: string) {
+    const draft = notebookDrafts.find((draft) => draft.id === draftId)
+    if (!draft || !liveSnapshot || creatingNotebookDraftIds.current.has(draftId)) return
+    creatingNotebookDraftIds.current.add(draftId)
+    setNotebookDrafts((current) => current.map((draft) => draft.id === draftId ? { ...draft, busy: true, error: null } : draft))
+    try {
+      const operations = notebookDraftOperations(draft, liveSnapshot)
+      const success = await mutateGraph(operations, {
+        history: simpleHistoryEntryForPlan(liveSnapshot, { operations }),
+        onSuccess: () => {
+          setNotebookDrafts((current) => current.filter((draft) => draft.id !== draftId))
+          selectCreatedNodes([draft.nodeId])
+        },
+      })
+      if (!success) throw new Error('Could not create the notebook. Your draft is still available; try again.')
+    } catch (error) {
+      setNotebookDrafts((current) => current.map((draft) => draft.id === draftId ? { ...draft, error: error instanceof Error ? error.message : 'Notebook creation failed.' } : draft))
+    } finally {
+      creatingNotebookDraftIds.current.delete(draftId)
+      setNotebookDrafts((current) => current.map((draft) => draft.id === draftId ? { ...draft, busy: false } : draft))
+    }
   }
 
   async function handleConfirmCreateOrganizerLane(payload: { name: string }) {
@@ -4014,7 +4108,10 @@ function App() {
     if (!liveSnapshot) {
       return
     }
-    const operations = nodes.flatMap(({ nodeId, x, y }) => {
+    for (const { nodeId, x, y } of nodes) {
+      if (notebookDrafts.some((draft) => draft.id === nodeId)) updateNotebookDraft(nodeId, { x: snapToGrid(x), y: snapToGrid(y) })
+    }
+    const operations = nodes.filter(({ nodeId }) => !notebookDrafts.some((draft) => draft.id === nodeId)).flatMap(({ nodeId, x, y }) => {
       const nextX = Math.round(x / 20) * 20
       const nextY = Math.round(y / 20) * 20
       const currentLayout = liveSnapshot.graph.layout.find((entry) => entry.node_id === nodeId)
@@ -4480,7 +4577,7 @@ function App() {
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [clipboardGraph, graphHistoryFuture, graphHistoryPast, liveSnapshot, projectId, selectedEdgeIds, selectedNodeIds])
+  }, [clipboardGraph, graphHistoryFuture, graphHistoryPast, liveSnapshot, notebookDrafts, projectId, selectedEdgeIds, selectedNodeIds])
 
   const counts = liveSnapshot ? globalArtifactCounts(liveSnapshot) : { ready: 0, stale: 0, pending: 0 }
   const assetCounts = liveSnapshot
@@ -4646,7 +4743,11 @@ function App() {
         <main className="canvas-panel">
           {liveSnapshot ? (
             <GraphCanvas
-              snapshot={liveSnapshot}
+              snapshot={canvasSnapshot!}
+              notebookDrafts={notebookDrafts}
+              onUpdateNotebookDraft={updateNotebookDraft}
+              onCreateNotebookDraft={(draftId) => void createNotebookDraft(draftId)}
+              onDeleteNotebookDraft={deleteNotebookDraft}
               serverNowMs={serverNowMs}
               serverNowClientAnchorMs={clientNowAnchorMs}
               selectedNodeIds={selectedNodeIds}
@@ -4671,6 +4772,7 @@ function App() {
                 onNodeSelect={handleNodeSelection}
                 onEdgeSelect={handleEdgeSelection}
                 onNodeContextMenu={(nodeId, position) => {
+                  if (notebookDrafts.some((draft) => draft.id === nodeId)) return
                   const menuNode = liveSnapshot.graph.nodes.find((node) => node.id === nodeId)
                   if (menuNode?.kind === 'notebook') {
                     void preloadNotebookAssetCount(nodeId)
@@ -4731,6 +4833,7 @@ function App() {
                 nodeNoticeSeverityById={nodeNoticeSeverityById}
                 hoveredNoticeNodeId={hoveredNoticeNodeId}
                 focusedNotice={noticeFocusRequest}
+                focusedOutputPort={sourcePortFocus}
               />
           ) : (
             <div className="empty-state">
@@ -4827,8 +4930,11 @@ function App() {
           {portActionMenu.side === 'input' ? (
             <button
               className="secondary menu-item"
-              disabled={supportedConstantDataType(inputsForNode(portActionMenuNode).find((port) => port.name === portActionMenu.portName)?.data_type) === null}
+              disabled={portActionEdgeIds.length > 0 || supportedConstantDataType(inputsForNode(portActionMenuNode).find((port) => port.name === portActionMenu.portName)?.data_type) === null}
               onClick={() => {
+                if (portActionEdgeIds.length > 0) {
+                  return
+                }
                 const dataType = supportedConstantDataType(inputsForNode(portActionMenuNode).find((port) => port.name === portActionMenu.portName)?.data_type)
                 const placement = constantPlacementForInput(portActionMenuNode.id, portActionMenu.portName)
                 if (!dataType || !placement) {
@@ -4847,7 +4953,22 @@ function App() {
               Set constant
             </button>
           ) : null}
-          {portActionMenuNode.kind !== 'constant' ? (
+          {portActionMenu.side === 'input' ? (
+            <button
+              className="secondary menu-item"
+              disabled={!portActionSourcePath}
+              onClick={() => {
+                if (!portActionSourcePath) return
+                setPortActionMenu(null)
+                setExplicitInspectorNodeId(null)
+                applySelection([], portActionSourcePath.edgeIds, { openInspector: false })
+                setSourcePortFocus((current) => ({ nodeId: portActionSourcePath.nodeId, portName: portActionSourcePath.portName, token: (current?.token ?? 0) + 1 }))
+              }}
+            >
+              Go to source
+            </button>
+          ) : null}
+          {portActionMenu.side === 'output' && portActionMenuNode.kind !== 'constant' ? (
             <>
               <button
                 className="secondary menu-item"
@@ -5008,6 +5129,16 @@ function App() {
         />
       ) : null}
 
+      {notebookDraftInputEdit && notebookDrafts.some((draft) => draft.id === notebookDraftInputEdit.draftId && !draft.busy) ? (
+        <NotebookInputDialog
+          key={notebookDraftInputEdit.input.key}
+          input={notebookDraftInputEdit.input}
+          existingIds={notebookDrafts.find((draft) => draft.id === notebookDraftInputEdit.draftId)!.inputs.filter((input) => input.key !== notebookDraftInputEdit.input.key).map((input) => input.name)}
+          onClose={() => setNotebookDraftInputEdit(null)}
+          onSave={saveNotebookDraftInput}
+        />
+      ) : null}
+
       {pendingAreaCreation ? (
         <EditAreaDialog
           title="Create Area"
@@ -5083,7 +5214,10 @@ function App() {
       {pendingBlockCreation && liveSnapshot && blockCreateMode(pendingBlockCreation.entry) === 'notebook' ? (
         <CreateNotebookDialog
           blockLabel={pendingBlockCreation.entry.title}
-          suggestedTitle={pendingBlockCreation.entry.title}
+          dialogTitle={pendingBlockCreation.entry.kind === 'empty' ? 'New notebook' : undefined}
+          suggestedTitle={pendingBlockCreation.entry.kind === 'empty' ? 'New notebook' : pendingBlockCreation.entry.title}
+          suggestedNodeId={pendingBlockCreation.entry.kind === 'empty' ? nextAvailableNodeId('new_notebook') : undefined}
+          submitLabel={pendingBlockCreation.entry.kind === 'empty' ? 'Continue' : undefined}
           existingIds={existingNodeIds}
           onClose={() => setPendingBlockCreation(null)}
           onCreate={handleConfirmCreateBlock}

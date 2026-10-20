@@ -38,6 +38,7 @@ from bulletjournal.parser.interface_parser import parse_notebook_interface
 from bulletjournal.services.notebook_freshness import lineage_metadata_for_notebook, notebook_uses_execution_head
 from bulletjournal.storage.atomic_write import atomic_write_text
 from bulletjournal.storage.graph_store import GraphStore
+from bulletjournal.templates.notebook_draft import render_notebook_inputs
 from bulletjournal.utils import json_dumps, utc_now_iso
 
 GRID_SIZE = 20
@@ -562,6 +563,9 @@ class GraphService:
             raise GraphValidationError(f'Node `{node_id}` already exists.')
         template_ref = operation.get('template_ref')
         source_text = operation.get('source_text')
+        inputs = operation.get('inputs')
+        if inputs is not None and (template_ref is not None or source_text is not None):
+            raise GraphValidationError('Notebook inputs cannot be combined with a template or inline source.')
         ui = operation.get('ui')
         template = (
             self.project_service.template_service.resolve_template_source(str(template_ref), allow_inactive=False)
@@ -593,6 +597,8 @@ class GraphService:
                 template,
                 node_id=node_id,
             )
+        if inputs is not None:
+            source = render_notebook_inputs(source, inputs)
         interface = self._inline_notebook_interface(source_text=source, node_id=node_id)
         return node_id, source, interface
 

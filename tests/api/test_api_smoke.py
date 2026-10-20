@@ -232,8 +232,9 @@ def test_new_notebook_is_custom_and_uses_empty_template_source(tmp_path) -> None
     assert 'from bulletjournal.runtime import artifacts, assets' in source
     assert 'import marimo as mo' in source
     assert 'import pandas as pd' in source
-    assert 'assets.push(' in source
-    assert "name='sample_table'" in source
+    assert '    # artifacts.push(' in source
+    assert node['interface']['inputs'] == []
+    assert node['interface']['outputs'] == []
 
 
 def test_notebook_assets_are_listed_through_dedicated_api(tmp_path) -> None:
@@ -1605,6 +1606,7 @@ def test_warning_notice_can_be_dismissed_via_api(tmp_path) -> None:
                     'type': 'add_notebook_node',
                     'node_id': 'sample_node',
                     'title': 'Sample Node',
+                    'template_ref': 'builtin/test_starter_notebook',
                 }
             ],
         },
@@ -1615,12 +1617,7 @@ def test_warning_notice_can_be_dismissed_via_api(tmp_path) -> None:
     source = notebook_path.read_text(encoding='utf-8')
     notebook_path.write_text(
         source.replace(
-            """sample_count = artifacts.pull(
-        name='sample_count',
-        data_type=int,
-        default=10,
-        description='How many sample rows to generate',
-    )""",
+            "sample_count = artifacts.pull(name='sample_count', data_type=int, default=10)",
             """sample_count = artifacts.pull(
         name='sample_count',
         data_type='mystery',
@@ -1774,6 +1771,7 @@ def test_invalid_notebook_changes_keep_previous_ports_and_surface_errors(tmp_pat
                     'type': 'add_notebook_node',
                     'node_id': 'sample_node',
                     'title': 'Sample Node',
+                    'template_ref': 'builtin/test_starter_notebook',
                 }
             ],
         },
@@ -1784,12 +1782,7 @@ def test_invalid_notebook_changes_keep_previous_ports_and_surface_errors(tmp_pat
     original_source = notebook_path.read_text(encoding='utf-8')
     notebook_path.write_text(
         original_source.replace(
-            """    artifacts.push(
-        frame,
-        name='sample_df',
-        data_type=pd.DataFrame,
-        description='Sample output frame',
-    )""",
+            "    artifacts.push(frame, name='sample_df', data_type=pd.DataFrame, description='Sample output frame')",
             """    artifacts.push(
         frame,
         name='renamed_df',
@@ -1818,8 +1811,8 @@ def test_invalid_notebook_changes_keep_previous_ports_and_surface_errors(tmp_pat
         for issue in snapshot['validation_issues']
         if issue['node_id'] == 'sample_node' and issue['code'] == 'invalid_syntax'
     )
-    assert syntax_issue['message'] == 'Syntax error on line 43, column 13: invalid syntax. Offending code: `broken =`.'
-    assert syntax_issue['details']['line'] == 43
+    assert syntax_issue['message'] == 'Syntax error on line 39, column 13: invalid syntax. Offending code: `broken =`.'
+    assert syntax_issue['details']['line'] == 39
     assert syntax_issue['details']['source'] == '    broken ='
     assert node['state'] == 'error'
 
@@ -1842,6 +1835,7 @@ def test_unparsable_marimo_cell_keeps_previous_ports_and_surfaces_errors(tmp_pat
                     'type': 'add_notebook_node',
                     'node_id': 'sample_node',
                     'title': 'Sample Node',
+                    'template_ref': 'builtin/test_starter_notebook',
                 }
             ],
         },
@@ -1855,12 +1849,7 @@ def test_unparsable_marimo_cell_keeps_previous_ports_and_surfaces_errors(tmp_pat
             """@app.cell
 def _(pd, sample_count):
     frame = pd.DataFrame({'value': list(range(sample_count))})
-    artifacts.push(
-        frame,
-        name='sample_df',
-        data_type=pd.DataFrame,
-        description='Sample output frame',
-    )
+    artifacts.push(frame, name='sample_df', data_type=pd.DataFrame, description='Sample output frame')
     return frame""",
             'app._unparsable_cell(\n    r"""\nframe = pd.DataFrame({\'value\': list(range(sample_count))})\nartifacts.push(frame, name=\'renamed_df\', data_type=pd.DataFrame, description=\'Sample output frame\')\nbroken =\nreturn frame\n"""\n)',
         ),
@@ -3297,6 +3286,7 @@ def test_artifact_download_uses_node_and_artifact_name_and_extension(tmp_path) -
                     'type': 'add_notebook_node',
                     'node_id': 'sample_node',
                     'title': 'Sample Node',
+                    'template_ref': 'builtin/test_starter_notebook',
                 }
             ],
         },
@@ -3337,6 +3327,7 @@ def test_dataframe_csv_download_returns_attachment(tmp_path) -> None:
                     'type': 'add_notebook_node',
                     'node_id': 'sample_node',
                     'title': 'Sample Node',
+                    'template_ref': 'builtin/test_starter_notebook',
                 }
             ],
         },
@@ -3380,6 +3371,7 @@ def test_dataframe_csv_download_rejects_large_artifacts(tmp_path, monkeypatch) -
                     'type': 'add_notebook_node',
                     'node_id': 'sample_node',
                     'title': 'Sample Node',
+                    'template_ref': 'builtin/test_starter_notebook',
                 }
             ],
         },
@@ -3721,6 +3713,7 @@ def test_artifact_state_endpoints_can_mark_outputs_stale_and_ready(tmp_path) -> 
                     'type': 'add_notebook_node',
                     'node_id': 'sample_node',
                     'title': 'Sample Node',
+                    'template_ref': 'builtin/test_starter_notebook',
                 }
             ],
         },

@@ -16,7 +16,7 @@ export function ArtifactPreviewPanel({ preview, imageSrc = null }: ArtifactPrevi
   }
 
   if (preview.kind === 'simple') {
-    return <pre className="artifact-preview code-block artifact-simple-preview">{formatSimplePreview(preview.repr)}</pre>
+    return <pre className="artifact-preview code-block artifact-simple-preview">{formatSimplePreview(preview.repr)}{preview.truncated ? '...' : ''}</pre>
   }
 
   if (preview.kind === 'object') {

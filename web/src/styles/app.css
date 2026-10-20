@@ -1899,6 +1899,11 @@ label span,
   overflow: visible;
   background: var(--constant-type-color);
   color: #111827;
+  box-shadow: none !important;
+}
+
+.rf-node.constant-node.is-selected {
+  --rf-node-outline-width: 4px;
 }
 
 .rf-dashboard-node {
@@ -2023,6 +2028,12 @@ label span,
 
 .rf-node.constant-node::after {
   display: none;
+}
+
+.rf-node.constant-node.is-selected::after {
+  display: block;
+  inset: -4px;
+  border-radius: calc(var(--rf-node-radius) + 4px);
 }
 
 .rf-node.constant-node.has-active-notice-error::after,
@@ -6559,4 +6570,118 @@ input.invalid {
     text-overflow: ellipsis;
     white-space: nowrap;
   }
+}
+.notebook-draft-node::after {
+  border-style: dashed;
+}
+
+.notebook-draft-node {
+  overflow: visible;
+}
+.notebook-draft-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 14px;
+}
+
+.notebook-draft-header .rf-node-titles {
+  flex: 1;
+  min-width: 0;
+}
+
+.notebook-draft-tag {
+  margin-left: auto;
+  font-size: 11px;
+  opacity: 0.65;
+}
+
+.notebook-draft-node > .notebook-draft-inputs {
+  position: relative;
+  z-index: 2;
+}
+
+.notebook-draft-inputs .rf-organizer-slot-layer {
+  z-index: 2;
+}
+
+.notebook-draft-input {
+  position: relative;
+  height: 40px;
+}
+
+.notebook-draft-input .rf-port-row {
+  padding-right: 40px;
+}
+
+.notebook-draft-input-actions {
+  position: absolute;
+  right: 10px;
+  top: 0;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.notebook-draft-input-actions button {
+  padding: 3px;
+  display: flex;
+}
+
+.notebook-draft-footer {
+  min-height: calc(var(--editor-grid) * 4 + 1px);
+  padding: 14px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 10px;
+}
+
+.notebook-draft-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.notebook-draft-actions button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 8px 14px;
+}
+
+button.notebook-draft-cancel {
+  color: var(--bad);
+  border: 1px solid var(--bad);
+  background: transparent;
+}
+
+button.notebook-draft-create {
+  background: linear-gradient(135deg, #34b85a, #228f47);
+}
+
+button.notebook-draft-create:hover:not(:disabled) {
+  background: linear-gradient(135deg, #40c767, #29a450);
+}
+
+.notebook-input-dialog-title {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+}
+
+.notebook-input-dialog-title .port-type-label {
+  font-family: var(--sans);
+  font-size: 13px;
+}
+
+.notebook-input-default {
+  justify-content: flex-start;
+}
+
+.notebook-input-default input[type='checkbox'] {
+  width: auto;
+  margin: 0;
+  flex: none;
 }

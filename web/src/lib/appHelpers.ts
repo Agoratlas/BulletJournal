@@ -665,7 +665,14 @@ export function applyOptimisticGraphOperations(snapshot: ProjectSnapshot, operat
               : {
                   frozen: Boolean((operation.ui as { frozen?: unknown } | undefined)?.frozen),
                 },
-          interface: null,
+          interface: type === 'add_notebook_node' && Array.isArray(operation.inputs) ? {
+            node_id: nodeId, source_hash: '', outputs: [], docs: null, issues: [],
+            inputs: (operation.inputs as Array<{ name: string; data_type: string; description: string; default_to_none: boolean }>).map((input, index) => ({
+              name: input.name, data_type: input.data_type, description: input.description,
+              default: null, has_default: input.default_to_none, role: null,
+              kind: input.data_type === 'file' ? 'file' : 'value', direction: 'input', declaration_index: index,
+            })),
+          } : null,
           execution_meta: null,
           orchestrator_state: null,
           state: 'pending',

@@ -8,7 +8,7 @@ import { parseStrictJson } from '../lib/strictJson'
 import { X } from './Icons'
 
 type ModalProps = {
-  title: string
+  title: ReactNode
   onClose: () => void
   children: ReactNode
   contentClassName?: string
@@ -140,8 +140,10 @@ export function ConfirmDialog({
 type CreateNotebookDialogProps = {
   blockLabel: string
   suggestedTitle: string
+  suggestedNodeId?: string
   existingIds: string[]
   submitLabel?: string
+  dialogTitle?: string
   onClose: () => void
   onCreate: (payload: { nodeId: string; title: string }) => Promise<void>
 }
@@ -248,18 +250,18 @@ export function SaveDashboardDialog({
   )
 }
 
-export function CreateNotebookDialog({ blockLabel, suggestedTitle, existingIds, submitLabel = 'Create block', onClose, onCreate }: CreateNotebookDialogProps) {
+export function CreateNotebookDialog({ blockLabel, suggestedTitle, suggestedNodeId, existingIds, submitLabel = 'Create block', dialogTitle, onClose, onCreate }: CreateNotebookDialogProps) {
   const [title, setTitle] = useState(suggestedTitle)
-  const [nodeId, setNodeId] = useState(normalizeNodeId(suggestedTitle))
+  const [nodeId, setNodeId] = useState(suggestedNodeId ?? normalizeNodeId(suggestedTitle))
   const [nodeIdTouched, setNodeIdTouched] = useState(false)
   const [busy, setBusy] = useState(false)
 
   useEffect(() => {
     setTitle(suggestedTitle)
-    setNodeId(normalizeNodeId(suggestedTitle))
+    setNodeId(suggestedNodeId ?? normalizeNodeId(suggestedTitle))
     setNodeIdTouched(false)
     setBusy(false)
-  }, [suggestedTitle])
+  }, [suggestedTitle, suggestedNodeId])
 
   const resolvedId = useMemo(() => normalizeNodeId(nodeId), [nodeId])
   const duplicateId = existingIds.includes(resolvedId)
@@ -286,11 +288,12 @@ export function CreateNotebookDialog({ blockLabel, suggestedTitle, existingIds, 
   }
 
   return (
-    <Modal title={`Create ${blockLabel}`} onClose={onClose}>
+    <Modal title={dialogTitle ?? `Create ${blockLabel}`} onClose={onClose}>
       <form className="form-grid" onSubmit={handleSubmit}>
         <label>
           <span>Name</span>
           <input
+            autoFocus
             value={title}
             onChange={(event) => {
               const nextTitle = event.target.value
@@ -301,7 +304,7 @@ export function CreateNotebookDialog({ blockLabel, suggestedTitle, existingIds, 
             }}
             placeholder="Parse user CSV"
           />
-          {invalidTitle ? <span className="field-note error">Name is required.</span> : <span className="field-note">Shown on the node card in the editor.</span>}
+          {invalidTitle ? <span className="field-note error">Name is required.</span> : null}
         </label>
         <label>
           <span>Node ID</span>
@@ -319,9 +322,7 @@ export function CreateNotebookDialog({ blockLabel, suggestedTitle, existingIds, 
             <span className="field-note error">This ID is already used by another node.</span>
           ) : invalidId ? (
             <span className="field-note error">Node ID is required.</span>
-          ) : (
-            <span className="field-note">Node IDs are stored as snake_case and used in graph references.</span>
-          )}
+          ) : null}
         </label>
         <div className="dialog-actions">
           <button type="button" className="secondary" onClick={onClose}>Cancel</button>
@@ -809,7 +810,7 @@ export function EditConstantDialog({ mode = 'create', initialDataType, allowType
   const [jsonText, setJsonText] = useState(initialJsonValue)
   const [uploadFile, setUploadFile] = useState<File | null>(null)
   const [jsonUploadFile, setJsonUploadFile] = useState<File | null>(null)
-  const [dataframeFormat, setDataframeFormat] = useState<DataFrameUploadFormat>('csv_comma')
+  const [dataframeFormat, setDataframeFormat] = useState<DataFrameUploadFormat>('parquet')
   const [busy, setBusy] = useState(false)
   const [validationError, setValidationError] = useState<string | null>(null)
 
@@ -818,7 +819,7 @@ export function EditConstantDialog({ mode = 'create', initialDataType, allowType
     setJsonText(initialJsonValue)
     setUploadFile(null)
     setJsonUploadFile(null)
-    setDataframeFormat('csv_comma')
+    setDataframeFormat('parquet')
     setBusy(false)
     setValidationError(null)
   }, [initialDataType, initialJsonValue])
@@ -915,10 +916,10 @@ export function EditConstantDialog({ mode = 'create', initialDataType, allowType
               <>
                 <span>File type</span>
                 <select value={dataframeFormat} onChange={(event) => setDataframeFormat(event.target.value as DataFrameUploadFormat)}>
+                  <option value="parquet">Parquet</option>
                   <option value="csv_comma">CSV (comma)</option>
                   <option value="csv_semicolon">CSV (semicolon)</option>
                   <option value="csv_tab">CSV (tab)</option>
-                  <option value="parquet">Parquet</option>
                   <option value="xlsx">XLSX</option>
                 </select>
               </>

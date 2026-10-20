@@ -20,38 +20,18 @@ def _():
     return
 
 
+# Notebook inputs are inserted here.
+
+
 @app.cell
 def _():
-    sample_count = artifacts.pull(
-        name='sample_count',
-        data_type=int,
-        default=10,
-        description='How many sample rows to generate',
-    )
-    return sample_count
-
-
-@app.cell
-def _(pd, sample_count):
-    frame = pd.DataFrame({'value': list(range(sample_count))})
-    artifacts.push(
-        frame,
-        name='sample_df',
-        data_type=pd.DataFrame,
-        description='Sample output frame',
-    )
-    return frame
-
-
-@app.cell
-def _(assets, frame):
-    assets.push(
-        assets.DataFrame(frame),
-        name='sample_table',
-        title='Sample table',
-        description='Interactive preview of the sample output frame',
-        asset_type=assets.DataFrame,
-    )
+    # Publish an output artifact
+    # artifacts.push(
+    #     result,
+    #     name='result',
+    #     data_type=pd.DataFrame,
+    #     description='Describe the output artifact',
+    # )
     return
 
 

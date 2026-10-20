@@ -684,7 +684,7 @@ def test_snapshot_uses_cached_template_app_definition(tmp_path, monkeypatch: pyt
     assert notebook['template_status'] == 'template'
 
 
-def test_default_new_notebook_includes_assets_example(tmp_path) -> None:
+def test_default_new_notebook_is_an_input_free_scaffold_with_commented_push_example(tmp_path) -> None:
     project_root = init_project_root(tmp_path / 'project').root
     project_service = ProjectService(_FakeEventService(), TemplateService())
     project_service.open_project(project_root)
@@ -705,9 +705,11 @@ def test_default_new_notebook_includes_assets_example(tmp_path) -> None:
     source = notebook_path.read_text(encoding='utf-8')
 
     assert 'from bulletjournal.runtime import artifacts, assets' in source
-    assert "description='How many sample rows to generate'" in source
-    assert 'assets.DataFrame(frame)' in source
-    assert "name='sample_table'" in source
+    assert '# Custom BulletJournal notebook' in source
+    assert '    # artifacts.push(' in source
+    notebook = next(node for node in project_service.snapshot()['graph']['nodes'] if node['id'] == 'sample_node')
+    assert notebook['interface']['inputs'] == []
+    assert notebook['interface']['outputs'] == []
 
 
 def test_graph_service_blocks_notebook_id_change_while_editor_is_open(tmp_path) -> None:

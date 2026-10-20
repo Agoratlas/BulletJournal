@@ -29,12 +29,17 @@ import ReactFlow, {
 import { areaSettings } from '../lib/area'
 import { CONSTANT_NODE_PORT_CENTER_OFFSET, CONSTANT_NODE_WIDTH, ORGANIZER_NODE_PORT_CENTER_OFFSET, PORT_ROW_HEIGHT, STANDARD_NODE_PORT_CENTER_OFFSET, artifactCounts, artifactFor, artifactIsEmpty, badgeForNode, formatDurationSeconds, inputBindingSource, inputState, inputsForNode, outputsForNode } from '../lib/helpers'
 import type { ArtifactState, NodeRecord, Port, ProjectSnapshot } from '../lib/types'
+import { NOTEBOOK_DRAFT_HEADER_HEIGHT, type NotebookDraft } from '../lib/notebookDrafts'
 import { ArtifactCounts } from './ArtifactCounts'
-import { Eye, Pencil, Play } from './Icons'
+import { Check, Eye, Pencil, Play, X } from './Icons'
 import { PortLabel, TYPE_COLORS, displayPortName } from './PortLabel'
 
 type GraphCanvasProps = {
   snapshot: ProjectSnapshot
+  notebookDrafts?: NotebookDraft[]
+  onUpdateNotebookDraft: (draftId: string, patch: Partial<NotebookDraft>) => void
+  onCreateNotebookDraft: (draftId: string) => void
+  onDeleteNotebookDraft: (draftId: string) => void
   serverNowMs?: number
   serverNowClientAnchorMs?: number
   selectedNodeIds: string[]
@@ -75,6 +80,7 @@ type GraphCanvasProps = {
   nodeNoticeSeverityById?: Record<string, 'error' | 'warning'>
   hoveredNoticeNodeId?: string | null
   focusedNotice?: { nodeId: string; token: number } | null
+  focusedOutputPort?: { nodeId: string; portName: string; token: number } | null
 }
 
 const NON_RUNNABLE_NODE_KINDS = new Set(['constant', 'organizer', 'area', 'dashboard'])
@@ -90,6 +96,10 @@ function validationIssuesForNode(snapshot: ProjectSnapshot, nodeId: string) {
 }
 
 type BulletJournalNodeData = {
+  draft?: NotebookDraft
+  onUpdateNotebookDraft: GraphCanvasProps['onUpdateNotebookDraft']
+  onCreateNotebookDraft: GraphCanvasProps['onCreateNotebookDraft']
+  onDeleteNotebookDraft: GraphCanvasProps['onDeleteNotebookDraft']
   node: NodeRecord
   snapshot: ProjectSnapshot
   serverNowMs: number
@@ -304,7 +314,7 @@ function PortRow({
   return (
     <div
       className={`rf-port-row ${side} ${isConnecting ? 'connecting' : ''} ${isCompatible ? '' : 'incompatible'} ${isEmptyOrDefault ? 'empty-or-default' : ''} ${isMissingRequiredInput ? 'missing-required' : ''}`}
-      title={`${port.name} (${port.data_type})`}
+      title={`${displayPortName(port)} (${port.data_type})`}
     >
       {side === 'input' ? (
         <Handle
@@ -434,10 +444,14 @@ function OrganizerGhostHandleLayer({
   slotCount,
   connecting,
   visibleInsertIndex,
+  inputOnly = false,
+  disabled = false,
 }: {
   slotCount: number
   connecting: boolean
   visibleInsertIndex: number | null
+  inputOnly?: boolean
+  disabled?: boolean
 }) {
   const slotIndices = Array.from({ length: slotCount }, (_, index) => index)
   return (
@@ -452,20 +466,58 @@ function OrganizerGhostHandleLayer({
             type="target"
             id={`ghost-in:${insertIndex}`}
             position={Position.Left}
-            isConnectable={visibleInsertIndex === insertIndex}
+            isConnectable={!disabled && visibleInsertIndex === insertIndex}
+            isConnectableStart={!inputOnly}
             className={`rf-handle ghost-handle organizer-slot-handle ${connecting ? 'connecting' : ''} ${visibleInsertIndex === insertIndex ? 'visible-slot-handle' : ''}`}
             isValidConnection={(connection) => Boolean(connection.source && connection.source !== connection.target && (!connecting || visibleInsertIndex === insertIndex))}
           />
-          <Handle
+          {!inputOnly ? <Handle
             type="source"
             id={`ghost-out:${insertIndex}`}
             position={Position.Right}
             isConnectable={visibleInsertIndex === insertIndex}
             className={`rf-handle ghost-handle organizer-slot-handle ${connecting ? 'connecting' : ''} ${visibleInsertIndex === insertIndex ? 'visible-slot-handle' : ''}`}
             isValidConnection={(connection) => Boolean(connection.target && connection.source !== connection.target && (!connecting || visibleInsertIndex === insertIndex))}
-          />
+          /> : null}
         </div>
       ))}
+    </div>
+  )
+}
+
+function NotebookDraftCard({ data, selected }: { data: BulletJournalNodeData; selected: boolean }) {
+  const draft = data.draft!
+  const ports = inputsForNode(data.node)
+  const duplicateId = data.snapshot.graph.nodes.some((node) => node.id !== draft.id && node.id === draft.nodeId)
+  const invalid = !draft.title.trim() || !draft.nodeId || duplicateId
+  const visibleInsertIndex = data.organizerGhostInsertIndex ?? (ports.length === 0 ? 0 : null)
+
+  return (
+    <div className={`rf-node notebook-draft-node ${selected ? 'is-selected' : ''}`} onContextMenu={(event) => { event.preventDefault(); event.stopPropagation() }}>
+      <header className="rf-node-header notebook-draft-header">
+        <span className="rf-badge">N</span>
+        <div className="rf-node-titles"><h4>{draft.title}</h4><span>{draft.nodeId}</span></div>
+        <span className="notebook-draft-tag">Draft</span>
+      </header>
+      <div className="notebook-draft-inputs">
+        <OrganizerGhostHandleLayer slotCount={ports.length + 1} connecting={Boolean(data.connectionIntent)} visibleInsertIndex={visibleInsertIndex} inputOnly disabled={draft.busy} />
+        {ports.map((port, index) => (
+          <div className="notebook-draft-input" key={port.name}>
+            <PortRow node={data.node} snapshot={data.snapshot} port={port} side="input" connectionIntent={data.connectionIntent} index={index} onPortContextMenu={() => undefined} />
+            <div className="notebook-draft-input-actions nodrag">
+              <button type="button" className="ghost-button" title="Remove input" aria-label={`Remove ${draft.inputs[index].name}`} disabled={draft.busy} onClick={() => data.onUpdateNotebookDraft(draft.id, { inputs: draft.inputs.filter((input) => input.key !== port.name) })}><X width={14} height={14} /></button>
+            </div>
+          </div>
+        ))}
+      </div>
+      <div className="rf-node-footer notebook-draft-footer nodrag" onClick={(event) => event.stopPropagation()}>
+        {duplicateId ? <p className="field-note error">This node ID is already in use.</p> : null}
+        {draft.error ? <p className="field-note error" role="alert">{draft.error}</p> : null}
+        <div className="notebook-draft-actions">
+          <button type="button" className="notebook-draft-cancel" disabled={draft.busy} onClick={() => data.onDeleteNotebookDraft(draft.id)}><X width={24} height={24} /><span>Cancel</span></button>
+          <button type="button" className="notebook-draft-create" disabled={draft.busy || invalid} onClick={() => data.onCreateNotebookDraft(draft.id)}><Check width={32} height={32} /><span>{draft.busy ? 'Creating…' : 'Create'}</span></button>
+        </div>
+      </div>
     </div>
   )
 }
@@ -673,6 +725,8 @@ const BulletJournalNodeCard = memo(({ data, selected }: NodeProps<BulletJournalN
       executionTimerLabel = formatDurationSeconds(executionMeta.duration_seconds)
     }
   }
+
+  if (data.draft) return <NotebookDraftCard data={data} selected={selected} />
 
   if (node.kind === 'organizer') {
     const organizerRows = organizerGhostRows(node)
@@ -1086,7 +1140,7 @@ function fixedNodeHeight(node: NodeRecord, layoutHeight: number | undefined): nu
   return undefined
 }
 
-export function GraphCanvas({ snapshot, serverNowMs = Date.now(), serverNowClientAnchorMs = Date.now(), selectedNodeIds, selectedEdgeIds, activeRunNodeId = null, queuedRunNodeIds = [], completedRunNodeIds = [], activeEditorNodeIds = [], onConnect, onEdgesChange, onSelectionChange, onNodeSelect, onEdgeSelect, onNodeContextMenu, onSelectionContextMenu, onPortContextMenu, onEditConstantNode, onEditOrganizerNode, onEditAreaNode, onOpenEditor, onOpenDashboard, onKillEditor, onRunNode, onOpenArtifacts, onOpenAssets, onCanvasInteract, onCanvasClear, onNodesMove, onNodeResize, onNodesDelete, draggedBlock, onBlockDrop, onViewportChange, dashboardPseudoLinks = [], selectedDashboardId = null, selectedDashboardSourceNodeIds = [], onToggleDashboardSource = () => undefined, nodeNoticeSeverityById = {}, hoveredNoticeNodeId = null, focusedNotice = null }: GraphCanvasProps) {
+export function GraphCanvas({ snapshot, notebookDrafts = [], onUpdateNotebookDraft, onCreateNotebookDraft, onDeleteNotebookDraft, serverNowMs = Date.now(), serverNowClientAnchorMs = Date.now(), selectedNodeIds, selectedEdgeIds, activeRunNodeId = null, queuedRunNodeIds = [], completedRunNodeIds = [], activeEditorNodeIds = [], onConnect, onEdgesChange, onSelectionChange, onNodeSelect, onEdgeSelect, onNodeContextMenu, onSelectionContextMenu, onPortContextMenu, onEditConstantNode, onEditOrganizerNode, onEditAreaNode, onOpenEditor, onOpenDashboard, onKillEditor, onRunNode, onOpenArtifacts, onOpenAssets, onCanvasInteract, onCanvasClear, onNodesMove, onNodeResize, onNodesDelete, draggedBlock, onBlockDrop, onViewportChange, dashboardPseudoLinks = [], selectedDashboardId = null, selectedDashboardSourceNodeIds = [], onToggleDashboardSource = () => undefined, nodeNoticeSeverityById = {}, hoveredNoticeNodeId = null, focusedNotice = null, focusedOutputPort = null }: GraphCanvasProps) {
   const { screenToFlowPosition, setCenter, setViewport, getNode } = useReactFlow()
   const nodesInitialized = useNodesInitialized()
   const store = useStoreApi()
@@ -1108,6 +1162,7 @@ export function GraphCanvas({ snapshot, serverNowMs = Date.now(), serverNowClien
   const [menuOpenNodeId, setMenuOpenNodeId] = useState<string | null>(null)
   const lastHandleSignatureRef = useRef<Record<string, string>>({})
   const lastFocusedNoticeTokenRef = useRef<number | null>(null)
+  const lastFocusedOutputPortTokenRef = useRef<number | null>(null)
   const [blockAnchor, setBlockAnchor] = useState(() => ({ hash: window.location.hash, token: 0 }))
   const lastBlockAnchorRef = useRef<string | null>(null)
   const connectionIntent = connectionDragActive ? rawConnectionIntent : null
@@ -1179,9 +1234,11 @@ export function GraphCanvas({ snapshot, serverNowMs = Date.now(), serverNowClien
     const startedFromOrganizer = sourceNode?.kind === 'organizer'
     let nearest: { nodeId: string; insertIndex: number; distance: number } | null = null
     for (const node of snapshot.graph.nodes) {
-      if (node.kind !== 'organizer') {
+      const draft = notebookDrafts.find((draft) => draft.id === node.id)
+      if (node.kind !== 'organizer' && !draft) {
         continue
       }
+      if (draft && (draft.busy || connectionIntent.handleType !== 'source' || !sourceHandleId.startsWith('out:'))) continue
       if ((startedFromOrganizer || startedFromOrganizerGhost) && node.id === sourceNodeId) {
         continue
       }
@@ -1189,14 +1246,15 @@ export function GraphCanvas({ snapshot, serverNowMs = Date.now(), serverNowClien
       if (!layout) {
         continue
       }
-      const portCount = outputsForNode(node).length
+      const portCount = draft ? draft.inputs.length : outputsForNode(node).length
+      const top = layout.y + (draft ? NOTEBOOK_DRAFT_HEADER_HEIGHT : 0)
       const width = nodeDimensions[node.id]?.width ?? layout.w ?? 160
       const height = nodeDimensions[node.id]?.height ?? Math.max(PORT_ROW_HEIGHT, portCount * PORT_ROW_HEIGHT)
-      const insertIndex = portCount === 0 ? 0 : Math.max(0, Math.min(portCount, Math.round((pointerFlowPosition.y - layout.y) / PORT_ROW_HEIGHT)))
-      const slotY = layout.y + (portCount === 0 ? ORGANIZER_NODE_PORT_CENTER_OFFSET : insertIndex * PORT_ROW_HEIGHT)
+      const insertIndex = portCount === 0 ? 0 : Math.max(0, Math.min(portCount, Math.round((pointerFlowPosition.y - top) / PORT_ROW_HEIGHT)))
+      const slotY = top + (portCount === 0 ? ORGANIZER_NODE_PORT_CENTER_OFFSET : insertIndex * PORT_ROW_HEIGHT)
       const outsideEnd = portCount > 0 && (
-        (insertIndex === 0 && pointerFlowPosition.y < layout.y)
-        || (insertIndex === portCount && pointerFlowPosition.y > layout.y + portCount * PORT_ROW_HEIGHT)
+        (insertIndex === 0 && pointerFlowPosition.y < top)
+        || (insertIndex === portCount && pointerFlowPosition.y > top + portCount * PORT_ROW_HEIGHT)
       )
       const snapTolerance = (GRAPH_CONNECTION_RADIUS + 9) / (transform[2] || 1)
       const dx = Math.max(layout.x - pointerFlowPosition.x, 0, pointerFlowPosition.x - (layout.x + width))
@@ -1216,7 +1274,7 @@ export function GraphCanvas({ snapshot, serverNowMs = Date.now(), serverNowClien
       previews[nearest.nodeId] = nearest.insertIndex
     }
     return previews
-  }, [connectionIntent, nodeDimensions, pointerFlowPosition, snapshot.graph.layout, snapshot.graph.nodes, transform])
+  }, [connectionIntent, notebookDrafts, nodeDimensions, pointerFlowPosition, snapshot.graph.layout, snapshot.graph.nodes, transform])
   const organizerGhostSignature = useMemo(
     () => JSON.stringify(Object.entries(organizerGhostByNodeId).sort(([left], [right]) => left.localeCompare(right))),
     [organizerGhostByNodeId],
@@ -1247,6 +1305,10 @@ export function GraphCanvas({ snapshot, serverNowMs = Date.now(), serverNowClien
         id: node.id,
         type: 'bulletJournalNode',
         data: {
+          draft: notebookDrafts.find((draft) => draft.id === node.id),
+          onUpdateNotebookDraft,
+          onCreateNotebookDraft,
+          onDeleteNotebookDraft,
           node,
           snapshot,
           serverNowMs,
@@ -1288,12 +1350,12 @@ export function GraphCanvas({ snapshot, serverNowMs = Date.now(), serverNowClien
         width: nodeDimensions[node.id]?.width,
         height: nodeDimensions[node.id]?.height,
         selected: selectedNodeIds.includes(node.id),
-        draggable: node.kind !== 'area' || selectedNodeIds.includes(node.id),
+        draggable: !notebookDrafts.find((draft) => draft.id === node.id)?.busy && (node.kind !== 'area' || selectedNodeIds.includes(node.id)),
         connectable: node.kind !== 'area',
         zIndex: node.kind === 'area' ? -1 : menuOpenNodeId === node.id ? 200 : 0,
       }
     })
-  }, [snapshot, serverNowMs, serverNowClientAnchorMs, selectedNodeIds, activeRunNodeId, queuedRunNodeIds, completedRunNodeIds, activeEditorNodeIds, onNodeContextMenu, onPortContextMenu, onEditConstantNode, onEditOrganizerNode, onEditAreaNode, onKillEditor, onNodeResize, onNodeSelect, onOpenArtifacts, onOpenAssets, onOpenDashboard, onOpenEditor, onRunNode, onToggleDashboardSource, selectedDashboardId, selectedDashboardSourceNodeIds, selectedDashboardPseudoEdgeNotebookIds, selectedDashboardPseudoEdgeDashboardIds, nodeDimensions, organizerGhostByNodeId, connectionIntent, pendingLayoutVersion, menuOpenNodeId, nodeNoticeSeverityById, hoveredNoticeNodeId])
+  }, [snapshot, notebookDrafts, onUpdateNotebookDraft, onCreateNotebookDraft, onDeleteNotebookDraft, serverNowMs, serverNowClientAnchorMs, selectedNodeIds, activeRunNodeId, queuedRunNodeIds, completedRunNodeIds, activeEditorNodeIds, onNodeContextMenu, onPortContextMenu, onEditConstantNode, onEditOrganizerNode, onEditAreaNode, onKillEditor, onNodeResize, onNodeSelect, onOpenArtifacts, onOpenAssets, onOpenDashboard, onOpenEditor, onRunNode, onToggleDashboardSource, selectedDashboardId, selectedDashboardSourceNodeIds, selectedDashboardPseudoEdgeNotebookIds, selectedDashboardPseudoEdgeDashboardIds, nodeDimensions, organizerGhostByNodeId, connectionIntent, pendingLayoutVersion, menuOpenNodeId, nodeNoticeSeverityById, hoveredNoticeNodeId])
 
   useEffect(() => {
     const currentNodeIds = new Set(snapshot.graph.nodes.map((node) => node.id))
@@ -1374,7 +1436,7 @@ export function GraphCanvas({ snapshot, serverNowMs = Date.now(), serverNowClien
         JSON.stringify({
           inputs: inputsForNode(node).map((port) => [port.name, port.data_type, port.declaration_index ?? null]),
           outputs: outputsForNode(node).map((port) => [port.name, port.data_type, port.declaration_index ?? null]),
-          organizerGhostInsertIndex: node.kind === 'organizer' ? (organizerGhostByNodeId[node.id] ?? null) : null,
+          organizerGhostInsertIndex: organizerGhostByNodeId[node.id] ?? null,
           dashboardSourcePort: node.kind === 'notebook' && (selectedDashboardId !== null || selectedDashboardPseudoEdgeNotebookIds.includes(node.id)),
           dashboardSourceSelected: selectedDashboardSourceNodeIds.includes(node.id),
           dashboardTargetPort: selectedDashboardId === node.id || selectedDashboardPseudoEdgeDashboardIds.includes(node.id),
@@ -1450,7 +1512,7 @@ export function GraphCanvas({ snapshot, serverNowMs = Date.now(), serverNowClien
         selected: isSelected,
         animated: false,
         markerEnd: { type: MarkerType.ArrowClosed, color: stroke },
-        style: { strokeWidth: isSelected ? 3.6 : isFrozen ? 2.8 : 2.2, stroke },
+        style: { strokeWidth: isSelected ? 3.6 : isFrozen ? 2.8 : 2.2, stroke, ...(notebookDrafts.some((draft) => draft.id === edge.target_node) ? { strokeDasharray: '6 4' } : {}) },
       }
     })
     const pseudoEdges = dashboardPseudoLinks
@@ -1476,7 +1538,7 @@ export function GraphCanvas({ snapshot, serverNowMs = Date.now(), serverNowClien
         }
       })
     return [...executionEdges, ...pseudoEdges]
-  }, [dashboardPseudoLinks, snapshot.graph.edges, snapshot.graph.nodes, selectedEdgeIds])
+  }, [dashboardPseudoLinks, notebookDrafts, snapshot.graph.edges, snapshot.graph.nodes, selectedEdgeIds])
 
   const handleNodeDragStop: NodeDragHandler = (_event, node) => {
     onCanvasInteract()
@@ -1584,6 +1646,21 @@ export function GraphCanvas({ snapshot, serverNowMs = Date.now(), serverNowClien
       },
     )
   }, [focusedNotice, nodeDimensions, setCenter, snapshot.graph.layout])
+
+  useEffect(() => {
+    if (!focusedOutputPort || !nodesInitialized || lastFocusedOutputPortTokenRef.current === focusedOutputPort.token) return
+    const node = snapshot.graph.nodes.find((entry) => entry.id === focusedOutputPort.nodeId)
+    if (!node) return
+    const handle = Array.from(shellRef.current?.querySelectorAll<HTMLElement>('.react-flow__handle') ?? [])
+      .find((entry) => entry.dataset.nodeid === node.id && entry.dataset.handleid === `out:${focusedOutputPort.portName}`)
+    const bounds = handle?.getBoundingClientRect()
+    const point = bounds
+      ? screenToFlowPosition({ x: bounds.left + bounds.width / 2, y: bounds.top + bounds.height / 2 })
+      : portAnchorForSelection(snapshot, node, nodeDimensions, 'output', focusedOutputPort.portName)
+    if (!point) return
+    lastFocusedOutputPortTokenRef.current = focusedOutputPort.token
+    void setCenter(point.x, point.y, { zoom: GRAPH_DEFAULT_ZOOM, duration: 220 })
+  }, [focusedOutputPort, nodeDimensions, nodesInitialized, screenToFlowPosition, setCenter, snapshot])
 
   return (
     <div
@@ -1706,6 +1783,15 @@ export function GraphCanvas({ snapshot, serverNowMs = Date.now(), serverNowClien
           const targetNode = snapshot.graph.nodes.find((item) => item.id === connection.target)
           if (!sourceNode || !targetNode || sourceNode.id === targetNode.id) {
             return false
+          }
+          if (notebookDrafts.some((draft) => draft.id === sourceNode.id)) return false
+          const draft = notebookDrafts.find((draft) => draft.id === targetNode.id)
+          if (draft) {
+            if (draft.busy || !connection.sourceHandle.startsWith('out:')) return false
+            const sourcePort = outputsForNode(sourceNode).find((port) => port.name === connection.sourceHandle!.slice(4))
+            if (!sourcePort) return false
+            if (connection.targetHandle.startsWith('ghost-in:')) return true
+            return draft.inputs.some((input) => `in:${input.key}` === connection.targetHandle && input.dataType === sourcePort.data_type)
           }
           const dashboardLinkConnection = sourceNode.kind !== targetNode.kind
             && ((sourceNode.kind === 'dashboard' && targetNode.kind === 'notebook') || (sourceNode.kind === 'notebook' && targetNode.kind === 'dashboard'))

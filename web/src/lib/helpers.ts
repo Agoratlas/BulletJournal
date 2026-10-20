@@ -110,6 +110,30 @@ export function inputBindingSource(snapshot: ProjectSnapshot, nodeId: string, in
   return resolveOutputBinding(snapshot, direct.source_node, direct.source_port)
 }
 
+export function inputSourcePath(snapshot: ProjectSnapshot, nodeId: string, inputName: string): { nodeId: string; portName: string; edgeIds: string[] } | null {
+  const nodeById = new Map(snapshot.graph.nodes.map((node) => [node.id, node]))
+  const edgeIds: string[] = []
+  const visited = new Set<string>()
+  let currentNodeId = nodeId
+  let currentPortName = inputName
+  while (true) {
+    const signature = JSON.stringify([currentNodeId, currentPortName])
+    if (visited.has(signature)) return null
+    visited.add(signature)
+    const edge = snapshot.graph.edges.find((entry) => entry.target_node === currentNodeId && entry.target_port === currentPortName)
+    if (!edge) return null
+    edgeIds.push(edge.id)
+    const source = nodeById.get(edge.source_node)
+    if (!source) return null
+    if (source.kind === 'constant' || source.kind === 'notebook') {
+      return { nodeId: source.id, portName: edge.source_port, edgeIds: edgeIds.reverse() }
+    }
+    if (source.kind !== 'organizer') return null
+    currentNodeId = source.id
+    currentPortName = edge.source_port
+  }
+}
+
 export function resolveOutputBinding(snapshot: ProjectSnapshot, nodeId: string, portName: string): { source_node: string; source_port: string } | null {
   const nodeById = new Map(snapshot.graph.nodes.map((node) => [node.id, node]))
   let currentNodeId = nodeId
