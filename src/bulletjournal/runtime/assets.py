@@ -24,6 +24,16 @@ def push(
     asset_type: type[BaseAsset] | None = None,
     **kwargs: Any,
 ) -> None:
+    """Publish an asset as a viewable notebook result that can be displayed in asset panels and dashboards.
+    Its contents and display defaults are stored as a new asset version.
+
+    - ``asset``: The BulletJournal asset instance to publish, such as ``assets.BarChart(...)``
+      or ``assets.Markdown(...)``.
+    - ``name``: Asset identifier, written in snake_case.
+    - ``title``: Literal string used as the asset's display title.
+    - ``description``: Documentation string for this output.
+    - ``asset_type``: Optional expected asset class, such as ``assets.BarChart``.
+    """
     if kwargs:
         unexpected = ', '.join(sorted(kwargs))
         raise TypeError(f'Unexpected asset push kwargs: {unexpected}')

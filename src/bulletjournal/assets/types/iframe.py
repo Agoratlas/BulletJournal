@@ -9,6 +9,11 @@ from bulletjournal.assets.serialization import SerializedAssetVersion, base_asse
 
 @dataclass(slots=True)
 class Iframe(BaseAsset):
+    """Create an asset that embeds a web page in an iframe for display in asset panels and dashboards.
+
+    - ``url``: String containing the URL of the page to embed.
+    """
+
     url: str
 
     asset_type_id = 'iframe'

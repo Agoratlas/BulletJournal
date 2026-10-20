@@ -67,6 +67,21 @@ DEFAULT_HISTOGRAM_CATEGORY_ORDER = 'category_asc'
 
 @dataclass(slots=True, init=False)
 class Histogram(BaseAsset):
+    """Create an interactive histogram showing how many rows fall into each numeric range or time period.
+    An optional grouping column splits each range or period into separate bars or stacked sections.
+
+    - ``dataframe``: Source ``pd.DataFrame``.
+    - ``x``: Numeric, date, or datetime column name to count.
+    - ``bin_count``: Number of bins for numeric data; defaults to ``20``.
+    - ``granularity``: Time grouping for temporal data: ``auto`` (default), ``year``, ``month``,
+      ``week``, ``day``, or ``hour``. Date-only columns do not support ``hour``.
+    - ``group``: Optional column name that splits each bin into groups.
+    - ``color``: Optional CSS color for ungrouped bars. With ``group``, use a color column name
+      or dictionary mapping group values to colors.
+    - ``**modifier_kwargs``: Initial display settings, such as ``group_mode='stacked'``, ``group_normalize``,
+      ``group_order``, ``bar_width``, ``x_axis``, ``y_axis``, ``title``, or ``highlights``.
+    """
+
     dataframe: pd.DataFrame
     x: str
     group: str | None

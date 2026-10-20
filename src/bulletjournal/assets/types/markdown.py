@@ -9,6 +9,12 @@ from bulletjournal.assets.serialization import SerializedAssetVersion, base_asse
 
 @dataclass(slots=True)
 class Markdown(BaseAsset):
+    """Create a formatted text asset from Markdown for display in asset panels and dashboards.
+    Use it for summaries, explanations, or other narrative results.
+
+    - ``text``: String containing the Markdown content to display.
+    """
+
     text: str
 
     asset_type_id = 'markdown'

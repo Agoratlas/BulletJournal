@@ -61,6 +61,17 @@ DEFAULT_PIE_CHART_PALETTE = [
 
 @dataclass(slots=True, init=False)
 class PieChart(BaseAsset):
+    """Create an interactive pie or donut chart showing each category's share of the rows.
+    Slice sizes are based on row counts, excluding rows with a missing category.
+
+    - ``dataframe``: Source ``pd.DataFrame``.
+    - ``category``: Column name whose distinct values define the slices.
+    - ``color``: Optional color column name or dictionary mapping category values to CSS colors;
+      a color column must assign one non-empty color string per category.
+    - ``**modifier_kwargs``: Initial display settings, such as ``inner_radius``, ``show_percentages``,
+      ``merge_threshold``, ``category_order``, ``title``, or ``highlights``.
+    """
+
     dataframe: pd.DataFrame
     category: str
     color: str | dict[object, str] | None

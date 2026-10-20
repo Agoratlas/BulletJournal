@@ -17,6 +17,13 @@ class _CollectionEntry:
 
 @dataclass(slots=True)
 class Collection(BaseAsset):
+    """Create a collection that displays several related assets as one notebook result.
+    Add children with ``add_asset(...)``, then publish the collection with ``assets.push(...)``.
+
+    - ``display_mode``: Initial layout: ``single`` (default) shows one child at a time,
+      ``all`` shows all children in one column, and ``2_columns`` or ``3_columns`` shows a grid.
+    """
+
     display_mode: str = 'single'
     _children: list[_CollectionEntry] = field(default_factory=list, init=False, repr=False)
 
@@ -33,6 +40,13 @@ class Collection(BaseAsset):
             raise ValueError("Collection display_mode must be 'all', 'single', '2_columns', or '3_columns'.")
 
     def add_asset(self, asset: BaseAsset, name: str | None = None, title: str | None = None) -> None:
+        """Append an asset to this collection in display order.
+        Child names must be unique within the collection, and collections cannot contain other collections.
+
+        - ``asset``: The BulletJournal asset instance to add.
+        - ``name``: Optional child identifier; defaults to an available name such as ``asset_1``.
+        - ``title``: Optional child display title; defaults to a title such as ``Asset 1``.
+        """
         if not isinstance(asset, BaseAsset):
             raise TypeError('Collection children must be BulletJournal asset instances.')
         if isinstance(asset, Collection):

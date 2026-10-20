@@ -29,6 +29,15 @@ from bulletjournal.assets.validation import validate_highlights
 
 @dataclass(slots=True)
 class DataFrame(BaseAsset):
+    """Create an interactive table from a ``pd.DataFrame``, with paging, sorting, and filtering available in asset
+    and dashboard panels. Optional highlight rules emphasize matching cells or rows.
+
+    - ``dataframe``: Source ``pd.DataFrame``.
+    - ``highlights``: Optional list of highlight-rule dictionaries identifying a column, a match kind
+      (``range``, ``value``, or ``regex``), and a six-digit hex highlight color;
+      ``highlight_scope`` selects ``cell`` or ``row``.
+    """
+
     dataframe: pd.DataFrame
     highlights: list[dict[str, object]] | None = None
 

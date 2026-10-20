@@ -9,6 +9,15 @@ from bulletjournal.runtime.serializers import validate_runtime_value_type
 
 
 def pull(*, name: str, data_type: Any, default: Any = None, description: str | None = None) -> Any:
+    """Load and return the value connected to a named notebook input, validating it against the declared data type.
+    If the input is unconnected, its declared default is used; without a default, the run fails.
+
+    - ``name``: Artifact identifier, written in snake_case.
+    - ``data_type``: Expected Python type, such as ``int``, ``str``, or ``pd.DataFrame``.
+    - ``default``: Fallback for an unconnected input; must be a literal, JSON-serializable value.
+      Omit it to require a connection.
+    - ``description``: Documentation string for this input.
+    """
     del description
     context = current_runtime_context()
     if default is not None:
@@ -22,6 +31,13 @@ def pull(*, name: str, data_type: Any, default: Any = None, description: str | N
 
 
 def pull_file(*, name: str, allow_missing: bool = False, description: str | None = None):
+    """Return the local file path for the artifact connected to a named notebook input.
+    If the input is unconnected, the run fails unless ``allow_missing=True``, in which case it returns ``None``.
+
+    - ``name``: Artifact identifier, written in snake_case.
+    - ``allow_missing``: Allow an unconnected input and return ``None``; defaults to ``False``.
+    - ``description``: Documentation string for this input.
+    """
     del description
     context = current_runtime_context()
     metadata = context.resolve_pull_file(name=name, allow_missing=allow_missing)
@@ -39,6 +55,14 @@ def push(
     description: str | None = None,
     **kwargs: Any,
 ) -> None:
+    """Publish a Python value as a named output artifact so downstream notebooks can consume it.
+
+    - ``value``: The Python value to publish.
+    - ``name``: Artifact identifier, written in snake_case.
+    - ``data_type``: Expected Python type, such as ``int``, ``str``, or ``pd.DataFrame``.
+    - ``optional``: Set to ``True`` to allow publishing ``None``; defaults to ``False``.
+    - ``description``: Documentation string for this output.
+    """
     del description
     if kwargs:
         unexpected = ', '.join(sorted(kwargs))
@@ -64,6 +88,13 @@ def push_file(
     description: str | None = None,
     **kwargs: Any,
 ) -> FilePushHandle:
+    """Create a context manager that provides a temporary path for writing an output file.
+    The file is published as a named artifact when the ``with`` block completes successfully.
+
+    - ``name``: Artifact identifier, written in snake_case.
+    - ``extension``: Optional literal filename suffix, such as ``.csv`` or ``.png``.
+    - ``description``: Documentation string for this output.
+    """
     del description
     if kwargs:
         unexpected = ', '.join(sorted(kwargs))

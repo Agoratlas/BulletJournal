@@ -85,6 +85,21 @@ BAR_CHART_AGGREGATION_TITLES = {
 
 @dataclass(slots=True, init=False)
 class BarChart(BaseAsset):
+    """Create an interactive bar chart that groups rows by category and calculates an aggregate value for each category.
+    An optional grouping column splits categories into separate bars or stacked sections.
+
+    - ``dataframe``: Source ``pd.DataFrame``.
+    - ``category``: Column name used for categories on the x-axis.
+    - ``value``: Column name whose values are aggregated; numeric aggregations require a numeric column.
+    - ``aggregation``: Calculation to apply: ``sum`` (default), ``mean``, ``count``, ``unique``,
+      ``min``, ``max``, or ``median``. Aliases include ``avg``/``average``, ``len``/``size``, and ``nunique``.
+    - ``group``: Optional column name that splits each category into groups.
+    - ``color``: Optional color column name or dictionary mapping categories to CSS colors.
+      For grouped charts, use a dictionary mapping group values to colors.
+    - ``**modifier_kwargs``: Initial display settings, such as ``category_order``, ``group_mode='stacked'``,
+      ``group_normalize``, ``bar_width``, ``x_axis``, ``y_axis``, ``title``, or ``highlights``.
+    """
+
     dataframe: pd.DataFrame
     category: str
     color: str | dict[object, str] | None

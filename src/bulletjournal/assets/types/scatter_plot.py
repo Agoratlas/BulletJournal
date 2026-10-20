@@ -46,6 +46,21 @@ MAX_SCATTER_PLOT_POINTS = 10_000
 
 @dataclass(slots=True, init=False)
 class ScatterPlot(BaseAsset):
+    """Create an interactive scatter plot comparing two numeric columns, with optional columns controlling point
+    labels, shapes, sizes, and colors. The source DataFrame must contain no more than 10,000 rows.
+
+    - ``dataframe``: Source ``pd.DataFrame``, with at most 10,000 rows.
+    - ``x``: Numeric column name used for horizontal coordinates.
+    - ``y``: Numeric column name used for vertical coordinates.
+    - ``label``: Optional column name shown in point details.
+    - ``shape``: Optional column name used to assign point shapes.
+    - ``size``: Optional numeric or categorical column name used to assign point sizes.
+    - ``color``: Optional numeric or categorical column name used to assign point colors.
+    - ``size_scaling``: Strength of numeric size differences, from ``0.1`` to ``3.0``; defaults to ``1``.
+    - ``**modifier_kwargs``: Initial display settings, such as ``min_point_size``, ``max_point_size``,
+      ``show_legend``, ``shape_style``, ``x_axis``, ``y_axis``, ``title``, or ``highlights``.
+    """
+
     dataframe: pd.DataFrame
     x: str
     y: str
