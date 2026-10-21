@@ -653,6 +653,9 @@ class ProjectService:
         asset_states_by_node: dict[str, list[str]] = {}
         asset_declaration_node_ids = {str(item['node_id']) for item in project.state_db.list_asset_declarations()}
         asset_states = project.state_db.list_asset_heads() if include_details else project.state_db.list_asset_states()
+        asset_states_by_key = {
+            (str(asset['node_id']), str(asset['asset_name'])): str(asset['state']) for asset in asset_states
+        }
         for asset in asset_states:
             asset_states_by_node.setdefault(str(asset['node_id']), []).append(str(asset['state']))
         runs = project.state_db.list_run_records() if include_details else []
@@ -697,7 +700,9 @@ class ProjectService:
                     ArtifactState.READY.value: asset_states.count(ArtifactState.READY.value),
                 }
             if node.kind == NodeKind.DASHBOARD and self.dashboard_service is not None:
-                node_ui = self._dashboard_ui_payload(node.id, base_ui=node_ui)
+                node_ui = self._dashboard_ui_payload(
+                    node.id, base_ui=node_ui, graph=graph, asset_states=asset_states_by_key
+                )
             orchestrator_state = orchestrator_state_by_node.get(node.id)
             output_states = [
                 *artifact_states_by_node.get(node.id, []),
@@ -1077,15 +1082,21 @@ class ProjectService:
         if project.state_db.get_project_meta('last_notebook_edit_at') is None:
             project.state_db.set_project_meta('last_notebook_edit_at', project.metadata.created_at)
 
-    def _dashboard_ui_payload(self, dashboard_id: str, *, base_ui: dict[str, Any]) -> dict[str, Any]:
+    def _dashboard_ui_payload(
+        self,
+        dashboard_id: str,
+        *,
+        base_ui: dict[str, Any],
+        graph: GraphData,
+        asset_states: dict[tuple[str, str], str],
+    ) -> dict[str, Any]:
         if self.dashboard_service is None:
             return base_ui
         try:
-            dashboard = self.dashboard_service.get_dashboard(dashboard_id)
+            dashboard = self.dashboard_service.get_dashboard(dashboard_id, graph=graph)
         except (NotFoundError, FileNotFoundError, ValueError):
             return base_ui
         counts = {'pending': 0, 'stale': 0, 'ready': 0}
-        state_db = self.require_project().state_db
         for panel in dashboard.get('panels', []):
             if not isinstance(panel, dict):
                 continue
@@ -1093,8 +1104,7 @@ class ProjectService:
             asset_name = str(panel.get('asset_name') or '').strip()
             if not node_id or not asset_name:
                 continue
-            head = state_db.get_asset_head(node_id, asset_name)
-            state = str(head.get('state') or 'pending') if isinstance(head, dict) else 'pending'
+            state = asset_states.get((node_id, asset_name), 'pending')
             if state in counts:
                 counts[state] += 1
         return {

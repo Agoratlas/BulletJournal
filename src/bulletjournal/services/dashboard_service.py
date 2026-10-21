@@ -7,7 +7,7 @@ from typing import Any
 
 from bulletjournal.domain.enums import NodeKind
 from bulletjournal.domain.errors import DashboardVersionConflictError, GraphValidationError, NotFoundError
-from bulletjournal.domain.models import DashboardDocument, DashboardPanel, DashboardSource, LayoutEntry, Node
+from bulletjournal.domain.models import DashboardDocument, DashboardPanel, DashboardSource, GraphData, LayoutEntry, Node
 from bulletjournal.storage.atomic_write import atomic_write_text
 from bulletjournal.utils import json_dumps, slugify, utc_now_iso
 
@@ -23,10 +23,13 @@ class DashboardService:
         self.project_service = project_service
         self._lock = threading.RLock()
 
-    def get_dashboard(self, dashboard_id: str) -> dict[str, Any]:
+    def get_dashboard(self, dashboard_id: str, *, graph: GraphData | None = None) -> dict[str, Any]:
         if dashboard_id == '@favorites':
             return self.project_service.require_project().state_db.get_favorites_dashboard()
-        self.project_service.get_node(dashboard_id)
+        if graph is None:
+            self.project_service.get_node(dashboard_id)
+        elif not any(node.id == dashboard_id for node in graph.nodes):
+            raise NotFoundError(f'Unknown node `{dashboard_id}`.')
         return self._read_dashboard_document(dashboard_id).to_dict()
 
     def create_dashboard(

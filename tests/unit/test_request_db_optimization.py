@@ -3,6 +3,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from bulletjournal.services.dashboard_service import DashboardService
 from bulletjournal.services.graph_service import GraphService
 from bulletjournal.services.notebook_service import NotebookService
 from bulletjournal.services.project_service import ProjectService
@@ -39,6 +40,59 @@ def test_snapshot_connection_count_does_not_grow_with_notebooks(tmp_path, monkey
     assert len(snapshot['graph']['nodes']) == 12
     assert all(node['interface'] is not None for node in snapshot['graph']['nodes'])
     assert len(calls) <= 15
+
+
+@pytest.mark.parametrize('include_details', [True, False])
+def test_dashboard_snapshot_reuses_graph_and_asset_states(tmp_path, monkeypatch, include_details):
+    import json
+
+    service = ProjectService(Events(), TemplateService())
+    service.open_project(init_project_root(tmp_path / 'project').root)
+    service.watcher.stop()
+    graph_service = GraphService(service)
+    graph_service.apply_operations(
+        int(service.graph().meta['graph_version']),
+        [{'type': 'add_dashboard_node', 'node_id': f'dashboard_{index}'} for index in range(12)],
+    )
+    project = service.require_project()
+    service.dashboard_service = DashboardService(service)
+    for index in range(12):
+        project.paths.dashboard_path(f'dashboard_{index}').write_text(
+            json.dumps(
+                {
+                    'title': 'Dashboard',
+                    'sources': [{'node_id': 'source'}],
+                    'panels': [
+                        {'node_id': 'source', 'asset_name': 'ready'},
+                        {'node_id': 'source', 'asset_name': 'missing'},
+                    ],
+                }
+            ),
+            encoding='utf-8',
+        )
+    from bulletjournal.domain.enums import ArtifactState
+
+    project.state_db.ensure_asset_head('source', 'ready', ArtifactState.READY)
+    connections, graph_reads = [], []
+    connect, read = project.state_db._connect, project.graph_store.read
+
+    def counted_connect():
+        connections.append(1)
+        return connect()
+
+    def counted_read():
+        graph_reads.append(1)
+        return read()
+
+    monkeypatch.setattr(project.state_db, '_connect', counted_connect)
+    monkeypatch.setattr(project.graph_store, 'read', counted_read)
+    snapshot = service.snapshot(include_details=include_details)
+    assert len(graph_reads) == 1
+    assert len(connections) <= 15
+    for node in snapshot['graph']['nodes']:
+        assert node['ui']['asset_counts'] == {'pending': 1, 'stale': 0, 'ready': 1}
+        assert node['ui']['source_count'] == 1
+        assert node['ui']['panel_count'] == 2
 
 
 @pytest.mark.parametrize('journal_mode', ['DELETE', 'WAL'])
