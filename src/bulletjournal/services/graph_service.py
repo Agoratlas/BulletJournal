@@ -228,21 +228,19 @@ class GraphService:
                     graph,
                 )
             graph = self.project_service.write_graph(graph)
-            for node in created_incarnations:
-                state_db.register_node_incarnation(node.incarnation_id, node.id, node.kind.value)
+            with state_db.transaction():
+                for node in created_incarnations:
+                    state_db.register_node_incarnation(node.incarnation_id, node.id, node.kind.value)
             for node_id, source in pending_notebook_creates:
                 self.project_service.require_project().paths.notebook_path(node_id).write_text(source, encoding='utf-8')
             for node_id in pending_editor_stops:
                 if self.project_service.run_service is not None:
                     self.project_service.run_service.session_manager.stop_by_node(node_id)
-            for node_id, artifact_name in pending_artifact_state_resets:
-                self.project_service.require_project().state_db.delete_artifact_state(node_id, artifact_name)
-            for node_id, artifact_name in pending_input_heads:
-                self.project_service.require_project().state_db.ensure_artifact_head(
-                    node_id,
-                    artifact_name,
-                    ArtifactState.PENDING,
-                )
+            with state_db.transaction():
+                for node_id, artifact_name in pending_artifact_state_resets:
+                    state_db.delete_artifact_state(node_id, artifact_name)
+                for node_id, artifact_name in pending_input_heads:
+                    state_db.ensure_artifact_head(node_id, artifact_name, ArtifactState.PENDING)
             constant_value_node_ids = {node_id for node_id, _, _ in pending_constant_values}
             for node_id, _artifact_name in pending_input_heads:
                 node = next(entry for entry in graph.nodes if entry.id == node_id)

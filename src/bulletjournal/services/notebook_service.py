@@ -29,13 +29,18 @@ class NotebookService:
         contract = parse_notebook_contract(notebook_path, node_id=node_id)
         interface_payload = contract.interface.to_dict()
         blocking_errors = [issue for issue in contract.issues if issue.severity == ValidationSeverity.ERROR]
-        project.state_db.replace_validation_issues(node_id, contract.issues)
         removed_edges: list[dict[str, Any]] = []
         if not blocking_errors:
             removed_edges = self._sync_ports(node_id, previous_interface, contract.interface)
-            asset_declarations_changed = self._sync_asset_declarations(node_id, previous_contract, contract)
+        with project.state_db.transaction():
+            project.state_db.replace_validation_issues(node_id, contract.issues)
+            if not blocking_errors:
+                asset_declarations_changed = self._sync_asset_declarations(node_id, previous_contract, contract)
+                project.state_db.save_notebook_contract(
+                    node_id, contract.source_hash, contract.docs, contract.to_dict()
+                )
+        if not blocking_errors:
             durable_warnings = self._removed_edge_warnings(node_id=node_id, removed_edges=removed_edges)
-            project.state_db.save_notebook_contract(node_id, contract.source_hash, contract.docs, contract.to_dict())
             if asset_declarations_changed and self.project_service.dashboard_service is not None:
                 self.project_service.dashboard_service.refresh_dashboards_for_source(node_id)
             for warning in durable_warnings:
@@ -203,11 +208,12 @@ class NotebookService:
             if name not in current_input_names or _input_type(current, name) != previous_port['data_type']
         ]
 
-        for port in current.outputs:
-            project.state_db.ensure_artifact_head(node_id, port.name, ArtifactState.PENDING)
+        with project.state_db.transaction():
+            for port in current.outputs:
+                project.state_db.ensure_artifact_head(node_id, port.name, ArtifactState.PENDING)
 
-        for name in removed_output_names:
-            project.state_db.delete_artifact_state(node_id, name)
+            for name in removed_output_names:
+                project.state_db.delete_artifact_state(node_id, name)
 
         from bulletjournal.services.graph_service import GraphService
 

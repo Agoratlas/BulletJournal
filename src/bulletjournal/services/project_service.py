@@ -28,7 +28,7 @@ from bulletjournal.domain.state_machine import derive_node_state
 from bulletjournal.execution.planner import downstream_closure, upstream_closure
 from bulletjournal.execution.watcher import NotebookWatcher
 from bulletjournal.parser.source_hash import normalized_source_hash_text
-from bulletjournal.services.notebook_freshness import lineage_metadata_for_notebook, notebook_uses_execution_head
+from bulletjournal.services.notebook_freshness import lineage_metadata_for_notebook
 from bulletjournal.storage.graph_store import GraphStore
 from bulletjournal.storage.object_gc import ObjectGarbageCollector, ObjectGCSettings
 from bulletjournal.storage.object_store import ObjectStore
@@ -427,10 +427,22 @@ class ProjectService:
         resolved['issues'] = self.validation_issues(node_id=node_id, include_dismissed=include_dismissed)
         return resolved
 
-    def interfaces_by_node(self, graph: GraphData | None = None) -> dict[str, dict[str, Any]]:
+    def interfaces_by_node(
+        self, graph: GraphData | None = None, *, validation: list[dict[str, Any]] | None = None
+    ) -> dict[str, dict[str, Any]]:
+        state_db = self.require_project().state_db
+        stored = state_db.latest_interfaces_json()
+        issues_by_node: dict[str, list[dict[str, Any]]] = {}
+        for issue in state_db.list_validation_issues() if validation is None else validation:
+            issues_by_node.setdefault(str(issue['node_id']), []).append(issue)
         interfaces: dict[str, dict[str, Any]] = {}
         for node in (self.graph() if graph is None else graph).nodes:
-            interface = self.latest_interface(node.id, node=node)
+            if node.kind == NodeKind.NOTEBOOK:
+                interface = stored.get(node.id)
+                if interface is not None:
+                    interface = {**interface, 'issues': issues_by_node.get(node.id, [])}
+            else:
+                interface = self.latest_interface(node.id, node=node)
             if interface is not None:
                 interfaces[node.id] = dict(interface)
         return interfaces
@@ -617,13 +629,13 @@ class ProjectService:
     def snapshot(self, *, include_details: bool = True) -> dict[str, Any]:
         project = self.require_project()
         graph = project.graph_store.read()
-        interfaces = self.interfaces_by_node(graph)
         validation = self.validation_issues()
+        interfaces = self.interfaces_by_node(graph, validation=validation)
         validation_errors_by_node: dict[str, bool] = {}
         for issue in validation:
             if issue.get('severity') == ValidationSeverity.ERROR.value:
                 validation_errors_by_node[str(issue['node_id'])] = True
-        notices = self.notices()
+        notices = sorted([*validation, *project.state_db.list_persistent_notices()], key=_notice_sort_key)
         runtime_error_notice_by_node: dict[str, bool] = {}
         for notice in notices:
             node_id = notice.get('node_id')
@@ -639,6 +651,7 @@ class ProjectService:
         for artifact in artifact_states:
             artifact_states_by_node.setdefault(str(artifact['node_id']), []).append(str(artifact['state']))
         asset_states_by_node: dict[str, list[str]] = {}
+        asset_declaration_node_ids = {str(item['node_id']) for item in project.state_db.list_asset_declarations()}
         asset_states = project.state_db.list_asset_heads() if include_details else project.state_db.list_asset_states()
         for asset in asset_states:
             asset_states_by_node.setdefault(str(asset['node_id']), []).append(str(asset['state']))
@@ -690,7 +703,9 @@ class ProjectService:
                 *artifact_states_by_node.get(node.id, []),
                 *asset_states_by_node.get(node.id, []),
             ]
-            if node.kind == NodeKind.NOTEBOOK and notebook_uses_execution_head(self, node.id, interface, node=node):
+            if node.kind == NodeKind.NOTEBOOK and (
+                interface is None or (not interface.get('outputs') and node.id not in asset_declaration_node_ids)
+            ):
                 execution_head = notebook_execution_heads.get(node.id)
                 if execution_head is None:
                     output_states = [ArtifactState.PENDING.value]
@@ -711,7 +726,8 @@ class ProjectService:
                     ),
                 }
             )
-        notices = self.notices()
+        # Template resolution above can add missing-template notices.
+        notices = sorted([*validation, *project.state_db.list_persistent_notices()], key=_notice_sort_key)
         return {
             'server_time': utc_now_iso(),
             'project': {

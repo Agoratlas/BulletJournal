@@ -8,6 +8,7 @@ import zlib
 from collections.abc import Iterable, Iterator
 from contextlib import closing, contextmanager
 from pathlib import Path
+from threading import local
 from typing import Any
 
 from bulletjournal.assets.serialization import (
@@ -56,10 +57,24 @@ def _unique_validation_issues(issues: Iterable[ValidationIssue]) -> list[Validat
     return unique_issues
 
 
+class _TransactionConnection:
+    """Delegate to native SQLite, deferring storage-method commits to the owner."""
+
+    def __init__(self, connection: sqlite3.Connection):
+        self.connection = connection
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self.connection, name)
+
+    def commit(self) -> None:
+        pass
+
+
 class StateDB:
     def __init__(self, path: Path):
         self.path = path
         self._journal_mode = _database_journal_mode(path)
+        self._transactions = local()
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._initialize()
 
@@ -80,8 +95,29 @@ class StateDB:
 
     @contextmanager
     def _connection(self) -> Iterator[sqlite3.Connection]:
+        transaction = getattr(self._transactions, 'connection', None)
+        if transaction is not None:
+            with measure('db'):
+                yield transaction
+            return
         with measure('db'), closing(self._connect()) as connection, connection:
             yield connection
+
+    @contextmanager
+    def transaction(self) -> Iterator[None]:
+        """Batch related storage calls on this thread into one native transaction.
+
+        Callers must not invoke methods that manage their own BEGIN/rollback,
+        backups, or filesystem publication inside this scope.
+        """
+        if getattr(self._transactions, 'connection', None) is not None:
+            raise RuntimeError('Nested StateDB transactions are not supported.')
+        with measure('db'), closing(self._connect()) as connection, connection:
+            self._transactions.connection = _TransactionConnection(connection)
+            try:
+                yield
+            finally:
+                del self._transactions.connection
 
     def _initialize(self) -> None:
         with self._connection() as connection:
@@ -898,6 +934,26 @@ class StateDB:
             return None
         interface = payload.get('interface')
         return dict(interface) if isinstance(interface, dict) else payload
+
+    def latest_interfaces_json(self) -> dict[str, dict[str, Any]]:
+        """Load the latest contract for each current node incarnation in one query."""
+        with self._connection() as connection:
+            rows = connection.execute(
+                'SELECT nr.node_id, nr.interface_json FROM notebook_revisions nr '
+                'JOIN (SELECT revisions.node_id, MAX(revisions.rowid) AS latest_rowid '
+                'FROM notebook_revisions revisions LEFT JOIN node_incarnations live '
+                "ON live.node_id = revisions.node_id AND live.status = 'live' "
+                'WHERE revisions.incarnation_id IS live.incarnation_id GROUP BY revisions.node_id) latest '
+                'ON nr.rowid = latest.latest_rowid'
+            ).fetchall()
+        interfaces = {}
+        for row in rows:
+            payload = json.loads(str(row['interface_json']))
+            if not isinstance(payload, dict):
+                continue
+            interface = payload.get('interface')
+            interfaces[str(row['node_id'])] = dict(interface) if isinstance(interface, dict) else payload
+        return interfaces
 
     def latest_source_hash(self, node_id: str) -> str | None:
         with self._connection() as connection:
