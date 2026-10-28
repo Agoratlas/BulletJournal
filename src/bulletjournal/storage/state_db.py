@@ -625,6 +625,7 @@ class StateDB:
         expires_at: str,
         manifest_path: str,
         manifest_checksum: str,
+        execution_log_paths: list[Path] | None = None,
     ) -> dict[str, Any]:
         with self._connection() as connection:
             execution_meta = connection.execute(
@@ -709,7 +710,10 @@ class StateDB:
             for column in ('stdout_path', 'stderr_path'):
                 path_value = execution_meta[column]
                 if path_value:
-                    Path(str(path_value)).unlink(missing_ok=True)
+                    if execution_log_paths is None:
+                        Path(str(path_value)).unlink(missing_ok=True)
+                    else:
+                        execution_log_paths.append(Path(str(path_value)))
         return {
             'artifact_heads': artifact_heads,
             'asset_heads': asset_heads,

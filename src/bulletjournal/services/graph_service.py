@@ -7,6 +7,7 @@ import uuid
 from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Any
 
 from bulletjournal.domain.enums import ArtifactState, NodeKind
@@ -101,6 +102,7 @@ class GraphService:
             pending_notebook_interfaces: dict[str, dict[str, Any]] = {}
             created_incarnations: list[Node] = []
             tombstone_mutations: list[dict[str, Any]] = []
+            pending_tombstones: list[dict[str, Any]] = []
             for operation in operations:
                 op_type = operation['type']
                 if op_type == 'add_notebook_node':
@@ -208,7 +210,7 @@ class GraphService:
                 elif op_type == 'update_node_frozen':
                     pending_editor_stops.extend(self._update_frozen(graph, operation))
                 elif op_type == 'delete_node':
-                    tombstone_mutations.append(self._tombstone_node(graph, str(operation['node_id'])))
+                    pending_tombstones.append(self._prepare_tombstone_node(graph, str(operation['node_id'])))
                     deleted = self._delete_node(graph, str(operation['node_id']))
                     stale_roots.update(deleted['stale_roots'])
                     interruption_roots.update(deleted['stale_roots'])
@@ -222,6 +224,7 @@ class GraphService:
                 else:
                     raise GraphValidationError(f'Unsupported graph operation `{op_type}`.')
             self._validate_graph(graph)
+            tombstone_mutations = self._publish_tombstones(pending_tombstones)
             if interruption_roots and self.project_service.run_service is not None:
                 active_run_interruption = self.project_service.run_service.interrupt_active_run_if_nodes_affected(
                     sorted(interruption_roots),
@@ -1293,7 +1296,7 @@ class GraphService:
             'stale_roots': stale_roots,
         }
 
-    def _tombstone_node(self, graph: GraphData, node_id: str) -> dict[str, Any]:
+    def _prepare_tombstone_node(self, graph: GraphData, node_id: str) -> dict[str, Any]:
         project = self.project_service.require_project()
         node = next((item for item in graph.nodes if item.id == node_id), None)
         if node is None:
@@ -1331,17 +1334,6 @@ class GraphService:
             else []
         )
         manifest_path = tombstone_dir / 'manifest.json'
-        state = project.state_db.tombstone_node_state(
-            tombstone_id=tombstone_id,
-            mutation_id=mutation_id,
-            incarnation_id=node.incarnation_id,
-            node_id=node.id,
-            node_kind=node.kind.value,
-            deleted_at=deleted_at,
-            expires_at=expires_at,
-            manifest_path=str(manifest_path.relative_to(project.paths.root)),
-            manifest_checksum='preparing',
-        )
         payload = {
             'schema_version': 1,
             'tombstone_id': tombstone_id,
@@ -1354,18 +1346,57 @@ class GraphService:
             'notebook_source': source_text,
             'dashboard': dashboard_json,
             'dashboard_references': dashboard_references,
-            'state': state,
         }
-        checksum = hash_json(payload)
-        atomic_write_text(manifest_path, json_dumps({'checksum': checksum, 'manifest': payload}, pretty=True) + '\n')
-        project.state_db.update_tombstone_manifest_checksum(tombstone_id, checksum)
-        return {
-            'mutation_id': mutation_id,
-            'tombstone_id': tombstone_id,
-            'incarnation_id': node.incarnation_id,
-            'node_id': node.id,
-            'expires_at': expires_at,
-        }
+        return {'payload': payload, 'path': manifest_path}
+
+    def _publish_tombstones(self, tombstones: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Retain all states, publish manifests, then finalize all checksums.
+
+        Both database phases are atomic; filesystem publication is outside them.
+        A failed publication leaves retained objects pinned and preparing records,
+        and the caller does not publish the edited graph.
+        """
+        if not tombstones:
+            return []
+        project = self.project_service.require_project()
+        execution_log_paths: list[Path] = []
+        with project.state_db.transaction():
+            for entry in tombstones:
+                payload = entry['payload']
+                node = payload['node']
+                payload['state'] = project.state_db.tombstone_node_state(
+                    tombstone_id=payload['tombstone_id'],
+                    mutation_id=payload['mutation_id'],
+                    incarnation_id=node['incarnation_id'],
+                    node_id=node['id'],
+                    node_kind=node['kind'],
+                    deleted_at=payload['deleted_at'],
+                    expires_at=payload['expires_at'],
+                    manifest_path=str(entry['path'].relative_to(project.paths.root)),
+                    manifest_checksum='preparing',
+                    execution_log_paths=execution_log_paths,
+                )
+        for path in execution_log_paths:
+            path.unlink(missing_ok=True)
+        for entry in tombstones:
+            payload = entry['payload']
+            entry['checksum'] = hash_json(payload)
+            atomic_write_text(
+                entry['path'], json_dumps({'checksum': entry['checksum'], 'manifest': payload}, pretty=True) + '\n'
+            )
+        with project.state_db.transaction():
+            for entry in tombstones:
+                project.state_db.update_tombstone_manifest_checksum(entry['payload']['tombstone_id'], entry['checksum'])
+        return [
+            {
+                'mutation_id': entry['payload']['mutation_id'],
+                'tombstone_id': entry['payload']['tombstone_id'],
+                'incarnation_id': entry['payload']['node']['incarnation_id'],
+                'node_id': entry['payload']['node']['id'],
+                'expires_at': entry['payload']['expires_at'],
+            }
+            for entry in tombstones
+        ]
 
     def restore_tombstone(self, tombstone_id: str, *, request_id: str | None = None) -> dict[str, Any]:
         project = self.project_service.require_project()

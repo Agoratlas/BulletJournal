@@ -12,6 +12,176 @@ from bulletjournal.storage.project_fs import init_project_root
 from bulletjournal.storage.state_db import StateDB
 
 
+@pytest.mark.parametrize('journal_mode', ['DELETE', 'WAL'])
+@pytest.mark.parametrize('node_count', [1, 12])
+def test_mass_delete_has_constant_commits_and_restorable_manifests(tmp_path, monkeypatch, journal_mode, node_count):
+    import json
+    import sqlite3
+
+    from bulletjournal.domain.hashing import hash_json
+
+    monkeypatch.setenv('BULLETJOURNAL_DB_JOURNAL_MODE', journal_mode)
+    service = ProjectService(Events(), TemplateService())
+    service.open_project(init_project_root(tmp_path / 'project').root)
+    service.watcher.stop()
+    graph = GraphService(service)
+    graph.apply_operations(
+        int(service.graph().meta['graph_version']),
+        [{'type': 'add_area_node', 'node_id': f'area_{index}'} for index in range(node_count)],
+    )
+    project = service.require_project()
+    statements = []
+    original = project.state_db._connect
+
+    def connect():
+        connection = original()
+        connection.set_trace_callback(statements.append)
+        return connection
+
+    monkeypatch.setattr(project.state_db, '_connect', connect)
+    result = graph.apply_operations(
+        int(service.graph().meta['graph_version']),
+        [{'type': 'delete_node', 'node_id': f'area_{index}'} for index in range(node_count)],
+        request_id='delete-many',
+    )
+    # Two tombstone phases, two activity metadata writes, cached response.
+    assert statements.count('COMMIT') == 5
+    assert len(result['tombstone_mutations']) == node_count
+    assert not service.graph().nodes
+    for mutation in result['tombstone_mutations']:
+        with sqlite3.connect(project.state_db.path) as connection:
+            checksum, path = connection.execute(
+                'SELECT manifest_checksum, manifest_path FROM node_tombstones WHERE tombstone_id = ?',
+                (mutation['tombstone_id'],),
+            ).fetchone()
+        envelope = json.loads((project.paths.root / path).read_text())
+        assert envelope['checksum'] == checksum == hash_json(envelope['manifest'])
+        graph.restore_tombstone(mutation['tombstone_id'])
+    assert len(service.graph().nodes) == node_count
+
+
+def test_failed_mass_delete_does_not_publish_graph_or_finalize_any_checksums(tmp_path, monkeypatch):
+    import sqlite3
+
+    import bulletjournal.services.graph_service as module
+
+    service = ProjectService(Events(), TemplateService())
+    service.open_project(init_project_root(tmp_path / 'project').root)
+    service.watcher.stop()
+    graph = GraphService(service)
+    graph.apply_operations(
+        int(service.graph().meta['graph_version']),
+        [{'type': 'add_area_node', 'node_id': f'area_{index}'} for index in range(3)],
+    )
+    original = module.atomic_write_text
+    writes = []
+
+    def fail_second_manifest(path, text):
+        writes.append(path)
+        if len(writes) == 2:
+            raise OSError('manifest disk failure')
+        original(path, text)
+
+    monkeypatch.setattr(module, 'atomic_write_text', fail_second_manifest)
+    with pytest.raises(OSError, match='manifest disk failure'):
+        graph.apply_operations(
+            int(service.graph().meta['graph_version']),
+            [{'type': 'delete_node', 'node_id': f'area_{index}'} for index in range(3)],
+        )
+    assert len(service.graph().nodes) == 3
+    with sqlite3.connect(service.require_project().state_db.path) as connection:
+        assert connection.execute('SELECT manifest_checksum FROM node_tombstones').fetchall() == [
+            ('preparing',),
+            ('preparing',),
+            ('preparing',),
+        ]
+
+
+@pytest.mark.parametrize('failure_phase', ['retain', 'checksum'])
+def test_tombstone_batch_database_failure_rolls_back_entire_phase(tmp_path, monkeypatch, failure_phase):
+    import sqlite3
+
+    service = ProjectService(Events(), TemplateService())
+    service.open_project(init_project_root(tmp_path / 'project').root)
+    service.watcher.stop()
+    graph = GraphService(service)
+    graph.apply_operations(
+        int(service.graph().meta['graph_version']),
+        [{'type': 'add_area_node', 'node_id': f'area_{index}'} for index in range(3)],
+    )
+    db = service.require_project().state_db
+    method = 'tombstone_node_state' if failure_phase == 'retain' else 'update_tombstone_manifest_checksum'
+    original = getattr(db, method)
+    calls = []
+
+    def fail_second(*args, **kwargs):
+        calls.append(1)
+        result = original(*args, **kwargs)
+        if len(calls) == 2:
+            raise sqlite3.OperationalError('injected database failure')
+        return result
+
+    monkeypatch.setattr(db, method, fail_second)
+    with pytest.raises(sqlite3.OperationalError, match='injected database failure'):
+        graph.apply_operations(
+            int(service.graph().meta['graph_version']),
+            [{'type': 'delete_node', 'node_id': f'area_{index}'} for index in range(3)],
+        )
+    assert len(service.graph().nodes) == 3
+    with sqlite3.connect(db.path) as connection:
+        rows = connection.execute('SELECT manifest_checksum FROM node_tombstones').fetchall()
+        assert rows == ([] if failure_phase == 'retain' else [('preparing',)] * 3)
+        statuses = connection.execute('SELECT DISTINCT status FROM node_incarnations').fetchall()
+        assert statuses == [('live' if failure_phase == 'retain' else 'tombstoned',)]
+
+
+def test_batch_tombstone_pins_are_committed_before_manifest_publication(tmp_path, monkeypatch):
+    import json
+    import sqlite3
+
+    import bulletjournal.services.graph_service as module
+
+    service = ProjectService(Events(), TemplateService())
+    service.open_project(init_project_root(tmp_path / 'project').root)
+    service.watcher.stop()
+    graph = GraphService(service)
+    graph.apply_operations(
+        int(service.graph().meta['graph_version']),
+        [
+            {'type': 'add_constant_node', 'node_id': f'constant_{i}', 'data_type': 'int', 'value': i + 1}
+            for i in range(3)
+        ],
+    )
+    project = service.require_project()
+    original = module.atomic_write_text
+    publications = []
+
+    def inspect_manifest(path, text):
+        envelope = json.loads(text)
+        with sqlite3.connect(project.state_db.path) as connection:
+            assert connection.execute('SELECT COUNT(*) FROM node_tombstones').fetchone()[0] == 3
+            assert (
+                connection.execute("SELECT COUNT(*) FROM object_pins WHERE owner_kind = 'tombstone'").fetchone()[0] == 3
+            )
+            assert connection.execute('SELECT DISTINCT manifest_checksum FROM node_tombstones').fetchall() == [
+                ('preparing',)
+            ]
+        assert len(envelope['manifest']['state']['pinned_hashes']) == 1
+        publications.append(path)
+        original(path, text)
+
+    monkeypatch.setattr(module, 'atomic_write_text', inspect_manifest)
+    result = graph.apply_operations(
+        int(service.graph().meta['graph_version']),
+        [{'type': 'delete_node', 'node_id': f'constant_{i}'} for i in range(3)],
+    )
+    assert len(publications) == 3
+    monkeypatch.setattr(module, 'atomic_write_text', original)
+    for mutation in result['tombstone_mutations']:
+        graph.restore_tombstone(mutation['tombstone_id'])
+    assert all(project.state_db.get_artifact_head(f'constant_{i}', 'value')['current_version_id'] for i in range(3))
+
+
 class Events:
     def publish(self, *args, **kwargs):
         pass
