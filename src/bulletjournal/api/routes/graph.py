@@ -57,4 +57,5 @@ def download_notebook(node_id: str, request: Request):
         notebook_path,
         media_type='text/x-python; charset=utf-8',
         filename=filename,
+        headers={'Cache-Control': 'no-store'},
     )

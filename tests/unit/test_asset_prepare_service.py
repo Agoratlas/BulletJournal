@@ -374,6 +374,7 @@ def test_parquet_preview_download_matches_filtered_sorted_page_and_preserves_typ
         },
     )
     assert response.status_code == 200
+    assert response.headers.get('cache-control') == 'no-store'
     assert response.headers['content-type'] == 'application/vnd.apache.parquet'
     downloaded = pd.read_parquet(io.BytesIO(response.content))
     pd.testing.assert_frame_equal(downloaded, frame.iloc[[2, 0]].reset_index(drop=True))

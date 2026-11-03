@@ -364,6 +364,7 @@ def test_create_app_downloads_execution_logs(monkeypatch, tmp_path: Path) -> Non
         response = client.get('/api/v1/nodes/node_a/execution-logs/stdout/download')
 
     assert response.status_code == 200
+    assert response.headers.get('cache-control') == 'no-store'
     assert response.text == 'hello stdout\n'
     assert 'run-1_node_a.stdout.log' in response.headers['content-disposition']
 

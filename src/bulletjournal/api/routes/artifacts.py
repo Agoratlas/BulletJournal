@@ -41,13 +41,17 @@ def download_artifact(node_id: str, artifact_name: str, request: Request, format
         return Response(
             content=file_info['content'],
             media_type=file_info['mime_type'],
-            headers={'Content-Disposition': f'attachment; filename="{file_info["filename"]}"'},
+            headers={
+                'Content-Disposition': f'attachment; filename="{file_info["filename"]}"',
+                'Cache-Control': 'no-store',
+            },
         )
     project = container.project_service.require_project()
     return FileResponse(
         file_info['path'],
         media_type=file_info['mime_type'],
         filename=file_info['filename'],
+        headers={'Cache-Control': 'no-store'},
         background=BackgroundTask(project.state_db.release_object_lease, file_info['lease_id']),
     )
 
@@ -60,6 +64,7 @@ def artifact_content(node_id: str, artifact_name: str, request: Request):
     return FileResponse(
         file_info['path'],
         media_type=file_info['mime_type'],
+        headers={'Cache-Control': 'no-store'},
         background=BackgroundTask(project.state_db.release_object_lease, file_info['lease_id']),
     )
 
@@ -99,7 +104,7 @@ def download_dataframe_preview(node_id: str, artifact_name: str, payload: AssetP
         modifier_overrides=payload.modifier_overrides,
         artifact=True,
     )
-    return Response(content=content, media_type='application/vnd.apache.parquet')
+    return Response(content=content, media_type='application/vnd.apache.parquet', headers={'Cache-Control': 'no-store'})
 
 
 @router.post('/constants/{node_id}/upload')
@@ -147,7 +152,12 @@ def set_constant_value(node_id: str, payload: ConstantValueUpdateRequest, reques
 @router.get('/nodes/{node_id}/execution-logs/{stream}/download')
 def download_execution_log(node_id: str, stream: str, request: Request):
     log_path = _resolve_execution_log_path(node_id=node_id, stream=stream, request=request)
-    return FileResponse(Path(log_path), media_type='text/plain; charset=utf-8', filename=log_path.name)
+    return FileResponse(
+        Path(log_path),
+        media_type='text/plain; charset=utf-8',
+        filename=log_path.name,
+        headers={'Cache-Control': 'no-store'},
+    )
 
 
 @router.get('/nodes/{node_id}/execution-logs/{stream}')

@@ -3304,6 +3304,7 @@ def test_artifact_download_uses_node_and_artifact_name_and_extension(tmp_path) -
     response = client.get('/api/v1/artifacts/sample_node/sample_df/download')
 
     assert response.status_code == 200
+    assert response.headers.get('cache-control') == 'no-store'
     assert response.headers['content-disposition'].startswith('attachment;')
     assert 'filename="sample_node_sample_df.parquet"' in response.headers['content-disposition']
     assert response.headers['content-type']
@@ -3345,6 +3346,7 @@ def test_dataframe_csv_download_returns_attachment(tmp_path) -> None:
     response = client.get('/api/v1/artifacts/sample_node/sample_df/download?format=csv')
 
     assert response.status_code == 200
+    assert response.headers.get('cache-control') == 'no-store'
     assert response.headers['content-type'].startswith('text/csv')
     assert 'filename="sample_node_sample_df.csv"' in response.headers['content-disposition']
     assert b'value\n' in response.content
@@ -3438,6 +3440,7 @@ def test_dataframe_xlsx_download_preserves_unicode(tmp_path) -> None:
     response = client.get('/api/v1/artifacts/emoji_frame/emoji_frame/download?format=xlsx')
 
     assert response.status_code == 200
+    assert response.headers.get('cache-control') == 'no-store'
     assert response.headers['content-type'].startswith(
         'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
     )
@@ -3604,6 +3607,7 @@ def test_file_artifact_content_endpoint_renders_inline_image(tmp_path) -> None:
     content = client.get('/api/v1/artifacts/image_source/preview_image/content')
 
     assert content.status_code == 200
+    assert content.headers.get('cache-control') == 'no-store'
     assert content.headers['content-type'].startswith('image/png')
     assert 'attachment' not in content.headers.get('content-disposition', '')
     assert content.content == png_bytes
@@ -3691,6 +3695,7 @@ def test_notebook_download_endpoint_returns_python_source(tmp_path) -> None:
     response = client.get('/api/v1/nodes/sample_node/notebook/download')
 
     assert response.status_code == 200
+    assert response.headers.get('cache-control') == 'no-store'
     assert response.headers['content-type'].startswith('text/x-python')
     assert 'filename="sample_node.py"' in response.headers['content-disposition']
     assert 'import marimo' in response.text

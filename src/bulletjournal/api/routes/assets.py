@@ -52,4 +52,4 @@ def download_dataframe_preview(node_id: str, asset_name: str, payload: AssetPrep
         modifier_overrides=payload.modifier_overrides,
         panel_context=payload.panel_context,
     )
-    return Response(content=content, media_type='application/vnd.apache.parquet')
+    return Response(content=content, media_type='application/vnd.apache.parquet', headers={'Cache-Control': 'no-store'})
