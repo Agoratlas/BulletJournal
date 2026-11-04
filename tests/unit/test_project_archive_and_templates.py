@@ -16,7 +16,7 @@ from bulletjournal.domain.errors import ProjectValidationError
 from bulletjournal.services.graph_service import GraphService
 from bulletjournal.services.template_service import TemplateService
 from bulletjournal.storage.project_archive import ProjectExportMode, export_project_archive, import_project_archive
-from bulletjournal.storage.project_fs import ProjectPaths, init_project_root
+from bulletjournal.storage.project_fs import ProjectPaths, init_project_root, is_project_root, require_project_root
 from bulletjournal.storage.state_db import StateDB
 from bulletjournal.templates.builtin_provider import FilesystemTemplateProvider, example_provider
 
@@ -51,8 +51,15 @@ def test_project_archive_modes_round_trip_final_state_schema(tmp_path: Path, mod
     archive_path = tmp_path / f'{mode.value}.zip'
 
     export_project_archive(project_root, archive_path, mode=mode)
+    extracted_root = tmp_path / 'extracted'
+    with zipfile.ZipFile(archive_path) as archive:
+        archive.extractall(extracted_root)
+    assert is_project_root(extracted_root)
+    assert require_project_root(extracted_root).root == extracted_root
     imported_root = tmp_path / 'imported'
     import_project_archive(archive_path, imported_root)
+    assert is_project_root(imported_root)
+    assert require_project_root(imported_root).root == imported_root
 
     with sqlite3.connect(imported_root / 'metadata' / 'state.db') as connection:
         tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}

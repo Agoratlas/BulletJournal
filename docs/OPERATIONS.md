@@ -54,6 +54,29 @@ bulletjournal import my-project.zip restored-project
 
 Exports omit local virtual environments and other transient runtime files.
 
+Use `--mode` to select `code_only`, `code_and_constants`, `code_and_data`,
+`snapshot`, or `full` (the default). All modes produce directly importable project roots.
+
+```bash
+bulletjournal export . my-project-snapshot.zip --mode snapshot
+```
+
+A snapshot preserves current notebook code, graph/layout, dashboards,
+`metadata/project.json`, `pyproject.toml`, and `uv.lock`. Its trimmed `metadata/state.db`
+contains live node identities, current artifact/asset heads and their versions,
+asset definitions/object links, annotations/favorites, execution/freshness heads,
+current validation state (including dismissals), and the latest notebook status/error
+summaries. Only object blobs referenced by current artifact or asset versions are included,
+including stale outputs and constant values. Current-version publication/input
+metadata is retained for provenance; historical input object blobs are not.
+
+Snapshots exclude historical versions/runs, checkpoints, deleted-node recovery,
+unreferenced objects, mutation caches, temporary files, and execution logs. Log
+paths are cleared. Referenced objects are checksum/size validated, and missing or
+corrupt objects fail the export. Capture uses the project lock to coordinate with
+object collection and output publication. A snapshot restores saved
+state; it does not capture a running Python process or external service state.
+
 ## Reverse proxy deployment
 
 - configure `base_path` when serving the app under a prefix such as `/p/study-a`

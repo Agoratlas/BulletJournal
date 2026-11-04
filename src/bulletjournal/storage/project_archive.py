@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import shutil
 import sqlite3
 import tempfile
 import zipfile
-from contextlib import suppress
+from contextlib import nullcontext, suppress
 from enum import StrEnum
 from pathlib import Path, PurePosixPath
 
@@ -19,6 +20,7 @@ from bulletjournal.storage.project_fs import (
     validate_project_id,
     validate_project_schema_version,
 )
+from bulletjournal.storage.project_lock import ProjectLock
 from bulletjournal.storage.state_db import StateDB
 from bulletjournal.utils import utc_now_iso
 
@@ -48,6 +50,7 @@ class ProjectExportMode(StrEnum):
     CODE_ONLY = 'code_only'
     CODE_AND_CONSTANTS = 'code_and_constants'
     CODE_AND_DATA = 'code_and_data'
+    SNAPSHOT = 'snapshot'
     FULL = 'full'
 
 
@@ -70,9 +73,20 @@ def export_project_archive(
         }
     with tempfile.TemporaryDirectory(prefix='bulletjournal-export-') as temp_dir:
         staged_root = Path(temp_dir) / 'project'
-        _stage_project_for_export(paths, staged_root, mode=resolved_mode)
-        _reconcile_staged_state_db(ProjectPaths(staged_root), mode=resolved_mode)
+        barrier = (
+            ProjectLock(paths.project_lock_path).exclusive()
+            if resolved_mode == ProjectExportMode.SNAPSHOT
+            else nullcontext()
+        )
+        with barrier:
+            _stage_project_for_export(paths, staged_root, mode=resolved_mode)
+            if resolved_mode == ProjectExportMode.SNAPSHOT:
+                _stage_snapshot_state(paths, ProjectPaths(staged_root))
+            else:
+                _reconcile_staged_state_db(ProjectPaths(staged_root), mode=resolved_mode)
         require_project_root(staged_root)
+        if resolved_mode == ProjectExportMode.SNAPSHOT:
+            shutil.rmtree(ProjectPaths(staged_root).temp_dir)
         _write_archive_from_root(staged_root, archive)
     return {
         'archive_path': str(archive),
@@ -170,7 +184,10 @@ def _stage_project_for_export(paths: ProjectPaths, staged_root: Path, *, mode: P
     _copy_directory(paths.graph_dir, staged_paths.graph_dir)
     _copy_directory(paths.notebooks_dir, staged_paths.notebooks_dir)
     _copy_directory(paths.dashboards_dir, staged_paths.dashboards_dir)
-    _copy_directory(paths.metadata_dir, staged_paths.metadata_dir)
+    if mode == ProjectExportMode.SNAPSHOT:
+        shutil.copy2(paths.project_json_path, staged_paths.project_json_path)
+    else:
+        _copy_directory(paths.metadata_dir, staged_paths.metadata_dir)
     _copy_sqlite_database(paths.state_db_path, staged_paths.state_db_path)
     shutil.copy2(paths.pyproject_path, staged_paths.pyproject_path)
     shutil.copy2(paths.uv_lock_path, staged_paths.uv_lock_path)
@@ -182,6 +199,125 @@ def _stage_project_for_export(paths: ProjectPaths, staged_root: Path, *, mode: P
         _copy_directory(paths.uploads_dir, staged_paths.uploads_dir)
     if mode == ProjectExportMode.FULL:
         _copy_directory(paths.checkpoints_dir, staged_paths.checkpoints_dir)
+
+
+def _stage_snapshot_state(source_paths: ProjectPaths, paths: ProjectPaths) -> None:
+    """Build a fresh database so deleted history cannot remain in SQLite free pages."""
+    StateDB(paths.state_db_path)
+    captured_db = paths.metadata_dir / 'captured.db'
+    paths.state_db_path.rename(captured_db)
+    StateDB(paths.state_db_path)
+    nodes = json.loads((paths.graph_dir / 'nodes.json').read_text(encoding='utf-8'))
+    with sqlite3.connect(captured_db) as source, sqlite3.connect(paths.state_db_path) as target:
+        source.execute('CREATE TEMP TABLE snapshot_nodes (node_id TEXT PRIMARY KEY, incarnation_id TEXT)')
+        source.executemany(
+            'INSERT INTO snapshot_nodes VALUES (?, ?)',
+            [(node['id'], node.get('incarnation_id')) for node in nodes],
+        )
+        live = (
+            'node_id IN (SELECT node_id FROM snapshot_nodes) AND '
+            '(incarnation_id IS NULL OR incarnation_id IN (SELECT incarnation_id FROM snapshot_nodes))'
+        )
+        source.execute(
+            f'CREATE TEMP VIEW snapshot_artifact_versions AS SELECT av.* FROM artifact_versions av '  # noqa: S608 - internal predicates
+            f'JOIN artifact_heads ah ON ah.current_version_id = av.version_id '
+            f'WHERE ah.rowid IN (SELECT rowid FROM artifact_heads WHERE {live})'
+        )
+        source.execute(
+            f'CREATE TEMP VIEW snapshot_asset_versions AS SELECT av.* FROM asset_versions av '  # noqa: S608
+            f'JOIN asset_heads ah ON ah.current_asset_version_id = av.asset_version_id '
+            f'WHERE ah.rowid IN (SELECT rowid FROM asset_heads WHERE {live})'
+        )
+        source.execute(
+            'CREATE TEMP VIEW snapshot_objects AS SELECT artifact_hash FROM snapshot_artifact_versions UNION '
+            'SELECT artifact_hash FROM asset_version_objects WHERE asset_version_id IN '
+            '(SELECT asset_version_id FROM snapshot_asset_versions)'
+        )
+        tables = {
+            'node_incarnations': "status = 'live' AND incarnation_id IN (SELECT incarnation_id FROM snapshot_nodes)",
+            'objects': 'artifact_hash IN (SELECT artifact_hash FROM snapshot_objects)',
+            'artifact_versions': 'version_id IN (SELECT version_id FROM snapshot_artifact_versions)',
+            'asset_versions': 'asset_version_id IN (SELECT asset_version_id FROM snapshot_asset_versions)',
+            'artifact_heads': live,
+            'asset_heads': live,
+            'asset_version_objects': 'asset_version_id IN (SELECT asset_version_id FROM snapshot_asset_versions)',
+            'asset_declarations': live,
+            'asset_annotations': 'node_id IN (SELECT node_id FROM snapshot_nodes)',
+            'notebook_execution_heads': live,
+            'orchestrator_execution_meta': live,
+            'notebook_revisions': (
+                # Keep the latest parsed contract even when current source has syntax errors.
+                f'{live} AND rowid IN (SELECT MAX(rowid) FROM notebook_revisions '  # noqa: S608
+                'GROUP BY node_id, incarnation_id)'
+            ),
+            'validation_issues': 'node_id IN (SELECT node_id FROM snapshot_nodes)',
+            'validation_issue_dismissals': (
+                'issue_id IN (SELECT issue_id FROM validation_issues '
+                'WHERE node_id IN (SELECT node_id FROM snapshot_nodes))'
+            ),
+            'persistent_notices': f'node_id IS NULL OR ({live})',
+            # These are the latest summaries, not the full run history.
+            'run_records': (
+                f'run_id IN (SELECT run_id FROM orchestrator_execution_meta WHERE {live} '  # noqa: S608
+                f'UNION SELECT run_id FROM notebook_execution_heads WHERE {live})'
+            ),
+            'publication_batches': (
+                'publication_id IN (SELECT publication_id FROM snapshot_artifact_versions '
+                'UNION SELECT publication_id FROM snapshot_asset_versions)'
+            ),
+            'run_inputs': (
+                'publication_id IN (SELECT publication_id FROM snapshot_artifact_versions '
+                'UNION SELECT publication_id FROM snapshot_asset_versions)'
+            ),
+            # Restore this last: annotation triggers update favorites metadata.
+            'project_meta': "key NOT IN ('gc_last_report', 'gc_last_error', 'gc_last_completed_at', 'gc_requested_at')",
+        }
+        target.execute('PRAGMA foreign_keys = ON')
+        for table, predicate in tables.items():
+            rows = source.execute(f'SELECT * FROM {table} WHERE {predicate}')  # noqa: S608 - internal table/predicate allowlist
+            columns = ', '.join(f'"{column[0]}"' for column in rows.description)
+            placeholders = ', '.join('?' for _ in rows.description)
+            target.executemany(
+                f'INSERT OR REPLACE INTO {table} ({columns}) VALUES ({placeholders})',  # noqa: S608
+                rows.fetchall(),
+            )
+        target.execute('UPDATE orchestrator_execution_meta SET stdout_path = NULL, stderr_path = NULL')
+        target.execute(
+            "UPDATE objects SET gc_state = 'active', gc_marked_at = NULL, quarantined_at = NULL, "
+            'delete_after = NULL, quarantine_path = NULL, unreferenced_at = NULL'
+        )
+        # Provenance may reference an older override source; do not leave dangling version pointers.
+        target.execute(
+            'UPDATE artifact_versions SET override_source_version_id = NULL '
+            'WHERE override_source_version_id NOT IN (SELECT version_id FROM artifact_versions)'
+        )
+        target.execute(
+            'UPDATE asset_versions SET override_source_version_id = NULL '
+            'WHERE override_source_version_id NOT IN (SELECT asset_version_id FROM asset_versions)'
+        )
+        expected_hashes = {row[0] for row in source.execute('SELECT artifact_hash FROM snapshot_objects')}
+        objects = target.execute('SELECT artifact_hash, size_bytes FROM objects').fetchall()
+        if {row[0] for row in objects} != expected_hashes:
+            raise ProjectValidationError('Snapshot references objects missing from the object registry.')
+        for artifact_hash, size_bytes in objects:
+            relative = Path(artifact_hash[:2]) / artifact_hash[2:]
+            source_object = source_paths.object_store_dir / relative
+            if not source_object.is_file():
+                source_object = source_paths.object_quarantine_dir / relative
+            destination = paths.object_store_dir / relative
+            if not source_object.is_file():
+                raise ProjectValidationError(f'Snapshot object is missing: {artifact_hash}')
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source_object, destination)
+            with destination.open('rb') as handle:
+                digest = hashlib.file_digest(handle, 'sha256').hexdigest()
+            if destination.stat().st_size != size_bytes or digest != artifact_hash:
+                raise ProjectValidationError(f'Snapshot object is corrupt: {artifact_hash}')
+        if target.execute('PRAGMA foreign_key_check').fetchall():
+            raise ProjectValidationError('Snapshot state contains invalid foreign-key references.')
+        target.commit()
+        _checkpoint_sqlite_database(target)
+    captured_db.unlink()
 
 
 def _copy_directory(source: Path, destination: Path) -> None:
