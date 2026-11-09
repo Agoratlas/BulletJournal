@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Request
-from fastapi.responses import Response
+from fastapi.responses import FileResponse, Response
+from starlette.background import BackgroundTask
 
 from bulletjournal.api.schemas import AssetAnnotationPatchRequest, AssetPrepareRequest
 
@@ -21,6 +22,33 @@ def get_node_asset(node_id: str, asset_name: str, request: Request):
 @router.get('/assets/{node_id}/{asset_name}')
 def get_asset(node_id: str, asset_name: str, request: Request):
     return request.app.state.container.asset_service.get_asset(node_id, asset_name)
+
+
+@router.get('/assets/{node_id}/{asset_name}/content')
+def asset_content(
+    node_id: str,
+    asset_name: str,
+    asset_version_id: int,
+    request: Request,
+    collection_child_name: str | None = None,
+):
+    container = request.app.state.container
+    file_info = container.asset_service.image_file(
+        node_id, asset_name, asset_version_id=asset_version_id, collection_child_name=collection_child_name
+    )
+    project = container.project_service.require_project()
+    return FileResponse(
+        file_info['path'],
+        media_type=file_info['mime_type'],
+        filename=file_info['filename'],
+        content_disposition_type='inline',
+        headers={
+            'Cache-Control': 'no-store',
+            'Content-Security-Policy': "sandbox; default-src 'none'",
+            'X-Content-Type-Options': 'nosniff',
+        },
+        background=BackgroundTask(project.state_db.release_object_lease, file_info['lease_id']),
+    )
 
 
 @router.post('/assets/{node_id}/{asset_name}/prepare')

@@ -268,6 +268,33 @@ assets.push(
 
 This embeds the public map in BulletJournal. If the page blocks iframe use, the browser will not display it; use a link or another asset type instead.
 
+## Image
+
+`Image` displays a PNG, JPEG (`.jpg` or `.jpeg`), or SVG file. It accepts a string
+path, `Path`, or a `files.FileSnapshot` created with `files.capture(...)`.
+
+```python
+image = assets.Image('render.png', alt='Graph overview')
+assets.push(image, name='graph_preview', title='Graph preview', asset_type=assets.Image)
+```
+
+Construction captures the contents immediately: the source can be changed or
+deleted before publishing. An existing snapshot is shared without another copy.
+The extension is preserved; extensionless images get a suffix from their format.
+Images work in collections, dashboards, and favorites like other assets.
+
+The encoded file size is limited to **10 MB (10,000,000 bytes)** by default. Override
+it for an individual image with a positive integer number of bytes:
+
+```python
+image = assets.Image(snapshot, max_size_bytes=50_000_000)
+```
+
+Oversized files fail during construction; files equal to the limit are allowed.
+The limit applies separately to each image in a collection, not to the collection
+total or ordinary file artifacts. Images are not resized or recompressed. The
+panel fits the image to its available space and offers a download of the original.
+
 ## Collection
 
 `Collection` puts several assets in one panel. Use it when a set of tables, charts, or notes belongs together. A collection cannot contain another collection.

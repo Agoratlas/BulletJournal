@@ -23,6 +23,31 @@ with artifacts.push_file(name='plot', extension='.png') as path:
     plt.savefig(path)
 ```
 
+## Capturing files
+
+Use `files.capture(...)` to preserve a file before its temporary directory closes,
+then publish the captured value at the top level of the cell:
+
+```python
+from bulletjournal.runtime import artifacts, files
+
+with tempfile.TemporaryDirectory() as _tmp:
+    _path = Path(_tmp) / 'plot.png'
+    figure.savefig(_path)
+    plot = files.capture(_path)
+
+artifacts.push_file(plot, name='plot')
+```
+
+Capture does not declare or publish an output, so it can be used inside helpers,
+loops, and contexts. It returns a `files.FileSnapshot` with a read-only `path`,
+`extension`, and `size_bytes`. The snapshot owns its temporary copy and keeps it
+alive while referenced, independently of the original file. Capturing an existing
+snapshot reuses it. Supply `extension='.svg'` when the source has no useful suffix.
+
+`artifacts.push_file(path, name='plot')` also accepts an existing path directly.
+Both forms preserve the extension for downstream `artifacts.pull_file(...)` calls.
+
 ## Runtime helpers
 
 Notebook code can also access the active node and project ids through

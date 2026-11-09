@@ -8,6 +8,7 @@ import { CollectionAssetPanel } from './panels/CollectionAssetPanel'
 import { DataFrameAssetPanel } from './panels/DataFrameAssetPanel'
 import { HistogramAssetPanel } from './panels/HistogramAssetPanel'
 import { IframeAssetPanel } from './panels/IframeAssetPanel'
+import { ImageAssetPanel } from './panels/ImageAssetPanel'
 import { MarkdownAssetPanel } from './panels/MarkdownAssetPanel'
 import { PieChartAssetPanel } from './panels/PieChartAssetPanel'
 import { ScatterPlotAssetPanel } from './panels/ScatterPlotAssetPanel'
@@ -56,6 +57,7 @@ export function AssetPanel({
   const isUnsupportedAssetType = asset.current_asset_version_id !== null
     && asset.asset_type !== 'markdown'
     && asset.asset_type !== 'iframe'
+    && asset.asset_type !== 'image'
     && asset.asset_type !== 'collection'
     && asset.asset_type !== 'dataframe'
     && asset.asset_type !== 'bar_chart'
@@ -85,6 +87,10 @@ export function AssetPanel({
 
   if (asset.asset_type === 'iframe') {
     return <IframeAssetPanel asset={asset} panelInfo={panelInfo} viewerMode={viewerMode} onReadyStateChange={onReadyStateChange} sectionId={sectionId} frameVariant={frameVariant} />
+  }
+
+  if (asset.asset_type === 'image') {
+    return <ImageAssetPanel asset={asset} target={resolvedPrepareTarget} panelInfo={panelInfo} viewerMode={viewerMode} onReadyStateChange={onReadyStateChange} sectionId={sectionId} frameVariant={frameVariant} />
   }
 
   if (asset.asset_type === 'collection') {

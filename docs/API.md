@@ -17,6 +17,7 @@ BulletJournal serves one project per process. Runtime routes are single-project 
 - `POST /runs/{run_id}/cancel`
 - `GET /artifacts`
 - `GET /artifacts/{node_id}/{artifact_name}`
+- `GET /assets/{node_id}/{asset_name}/content?asset_version_id={version}`
 - `POST /file-inputs/{node_id}/upload`
 - `GET /checkpoints`
 - `POST /checkpoints`
@@ -25,6 +26,18 @@ BulletJournal serves one project per process. Runtime routes are single-project 
 - `GET /events`
 - `GET /controller/status`
 - `POST /controller/mark-environment-changed`
+
+The asset content endpoint streams the original file of an image asset belonging
+to the specified current asset version. For a collection, add
+`collection_child_name={name}` to select an image child by name, as in `/prepare`
+requests. The version is the parent's `current_asset_version_id`; storage indexes
+are resolved internally. The response preserves the image MIME type and download
+extension; requests for a superseded version must refresh the asset.
+
+Examples:
+
+- Standalone: `/assets/analysis/preview/content?asset_version_id=123`
+- Collection child: `/assets/analysis/gallery/content?asset_version_id=124&collection_child_name=overview`
 
 ## Removed endpoints
 

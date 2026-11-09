@@ -4,6 +4,7 @@ from bulletjournal.assets.types.collection import Collection
 from bulletjournal.assets.types.dataframe import DataFrame
 from bulletjournal.assets.types.histogram import Histogram
 from bulletjournal.assets.types.iframe import Iframe
+from bulletjournal.assets.types.image import Image
 from bulletjournal.assets.types.markdown import Markdown
 from bulletjournal.assets.types.pie_chart import PieChart
 from bulletjournal.assets.types.scatter_plot import ScatterPlot
@@ -15,6 +16,7 @@ __all__ = [
     'DataFrame',
     'Histogram',
     'Iframe',
+    'Image',
     'Markdown',
     'PieChart',
     'ScatterPlot',

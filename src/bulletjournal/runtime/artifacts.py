@@ -1,10 +1,12 @@
 from __future__ import annotations
 
-from typing import Any
+from pathlib import Path
+from typing import Any, overload
 
 from bulletjournal.domain.enums import ArtifactRole
 from bulletjournal.runtime.context import current_runtime_context
 from bulletjournal.runtime.file_artifacts import FilePushHandle
+from bulletjournal.runtime.files import FileSnapshot, capture
 from bulletjournal.runtime.serializers import validate_runtime_value_type
 
 
@@ -81,16 +83,40 @@ def push(
     )
 
 
+@overload
+def push_file(
+    source: str | Path | FileSnapshot,
+    *,
+    name: str,
+    extension: str | None = None,
+    description: str | None = None,
+    **kwargs: Any,
+) -> None: ...
+
+
+@overload
 def push_file(
     *,
     name: str,
     extension: str | None = None,
     description: str | None = None,
     **kwargs: Any,
-) -> FilePushHandle:
-    """Create a context manager that provides a temporary path for writing an output file.
-    The file is published as a named artifact when the ``with`` block completes successfully.
+) -> FilePushHandle: ...
 
+
+def push_file(
+    source: str | Path | FileSnapshot | None = None,
+    *,
+    name: str,
+    extension: str | None = None,
+    description: str | None = None,
+    **kwargs: Any,
+) -> FilePushHandle | None:
+    """Publish an existing path or FileSnapshot as a file artifact.
+    Without a source, return a context manager for writing a file and publishing it
+    when the ``with`` block completes successfully.
+
+    - ``source``: Optional existing file path or captured file; its suffix is preserved.
     - ``name``: Artifact identifier, written in snake_case.
     - ``extension``: Optional literal filename suffix, such as ``.csv`` or ``.png``.
     - ``description``: Documentation string for this output.
@@ -99,6 +125,15 @@ def push_file(
     if kwargs:
         unexpected = ', '.join(sorted(kwargs))
         raise TypeError(f'Unexpected artifact push_file kwargs: {unexpected}')
+    if source is not None:
+        snapshot = capture(source, extension=extension)
+        current_runtime_context().finalize_file_push(
+            name=name,
+            temp_path=snapshot.path,
+            role=ArtifactRole.OUTPUT,
+            extension=snapshot.extension,
+        )
+        return None
     return FilePushHandle(name=name, role=ArtifactRole.OUTPUT, extension=extension)
 
 

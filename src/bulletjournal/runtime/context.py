@@ -241,12 +241,14 @@ class RuntimeContext:
         )
         return self._create_version(name=name, persisted=persisted, role=role)
 
-    def finalize_file_push(self, *, name: str, temp_path: Path, role: ArtifactRole) -> dict[str, Any]:
+    def finalize_file_push(
+        self, *, name: str, temp_path: Path, role: ArtifactRole, extension: str | None = None
+    ) -> dict[str, Any]:
         self._refresh_interactive_contracts()
         if self.interactive_contract_error is not None:
             raise self.interactive_contract_error
         self._validate_output_contract(name=name, data_type='file', role=role, kind='file')
-        persisted = self.object_store.persist_file(temp_path)
+        persisted = self.object_store.persist_file(temp_path, extension=extension)
         self.db.upsert_artifact_object(
             persisted['artifact_hash'],
             persisted['storage_kind'],

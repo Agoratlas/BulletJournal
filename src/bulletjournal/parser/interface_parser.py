@@ -540,6 +540,10 @@ def _parse_statement(
             port, port_issues = _parse_push(call, node_id=node_id)
             issues.extend(port_issues)
             return ([port] if port else []), [], issues
+        if call_name == 'push_file' and (call.args or any(item.arg == 'source' for item in call.keywords)):
+            port, port_issues = _parse_push_file(call, node_id=node_id)
+            issues.extend(port_issues)
+            return ([port] if port else []), [], issues
         issues.append(
             build_issue(
                 node_id=node_id,
