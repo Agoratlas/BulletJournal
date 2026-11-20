@@ -2376,7 +2376,6 @@ def test_pipeline_template_constant_value_is_ready_immediately(tmp_path, monkeyp
                 },
                 {
                     'id': 'consumer',
-                    'title': 'Consumer',
                     'kind': 'notebook',
                     'template_ref': 'builtin/test_starter_notebook',
                 },

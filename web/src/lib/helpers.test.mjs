@@ -1,7 +1,18 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
-import { artifactFor, artifactsForRenamedNodes, dependencyNodeIds, inputSourcePath, inputsForNode, outputsForNode } from './helpers.ts'
+import { artifactFor, artifactsForRenamedNodes, dependencyNodeIds, inputSourcePath, inputsForNode, outputsForNode, pipelineTemplateNodeTitle } from './helpers.ts'
+
+test('pipeline notebook labels use exact catalog titles, including hidden templates', () => {
+  const snapshot = { templates: [
+    { ref: 'agoratlas/llm_summary', kind: 'notebook', title: 'LLM summary', hidden: true },
+    { ref: 'agoratlas/tiktok_comments', kind: 'notebook', title: '[TikTok] Comments' },
+  ] }
+  assert.equal(pipelineTemplateNodeTitle(snapshot, { id: 'different_id', kind: 'notebook', template_ref: 'agoratlas/llm_summary' }), 'LLM summary')
+  assert.equal(pipelineTemplateNodeTitle(snapshot, { id: 'comments', kind: 'notebook', template_ref: 'agoratlas/tiktok_comments' }), '[TikTok] Comments')
+  assert.equal(pipelineTemplateNodeTitle(snapshot, { id: 'source', kind: 'constant', title: 'Input data' }), 'Input data')
+  assert.equal(pipelineTemplateNodeTitle(snapshot, { id: 'missing', kind: 'notebook', template_ref: 'unknown' }), 'missing')
+})
 
 test('a committed node rename keeps its constant artifact and preview under the new ID', () => {
   const original = {

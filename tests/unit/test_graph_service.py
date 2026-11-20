@@ -884,11 +884,12 @@ def _():
             + '\n'
         ),
         source_hash='hash',
+        title='Analysis',
     )
     project_service.template_service.resolve_pipeline_template = lambda ref, allow_inactive=False: SimpleNamespace(
         definition={
             'nodes': [
-                {'id': 'analysis', 'title': 'Analysis', 'kind': 'notebook', 'template_ref': 'builtin/example'},
+                {'id': 'analysis', 'kind': 'notebook', 'template_ref': 'builtin/example'},
                 {
                     'id': 'dashboard_view',
                     'title': 'Dashboard View',
@@ -988,6 +989,7 @@ def _():
                 + '\n'
             ),
             source_hash=f'{asset_name}-hash',
+            title=asset_name.removesuffix('_asset').capitalize(),
         )
 
     template_sources = {
@@ -997,8 +999,8 @@ def _():
     project_service.template_service.resolve_pipeline_template = lambda ref, allow_inactive=False: SimpleNamespace(
         definition={
             'nodes': [
-                {'id': 'alpha', 'title': 'Alpha', 'kind': 'notebook', 'template_ref': 'builtin/alpha'},
-                {'id': 'beta', 'title': 'Beta', 'kind': 'notebook', 'template_ref': 'builtin/beta'},
+                {'id': 'alpha', 'kind': 'notebook', 'template_ref': 'builtin/alpha'},
+                {'id': 'beta', 'kind': 'notebook', 'template_ref': 'builtin/beta'},
                 {
                     'id': 'dashboard_view',
                     'title': 'Dashboard View',
@@ -1098,11 +1100,12 @@ def _():
             + '\n'
         ),
         source_hash='hash',
+        title='Analysis',
     )
     project_service.template_service.resolve_pipeline_template = lambda ref, allow_inactive=False: SimpleNamespace(
         definition={
             'nodes': [
-                {'id': 'analysis', 'title': 'Analysis', 'kind': 'notebook', 'template_ref': 'builtin/example'},
+                {'id': 'analysis', 'kind': 'notebook', 'template_ref': 'builtin/example'},
                 {
                     'id': 'dashboard_view',
                     'title': 'Dashboard View',

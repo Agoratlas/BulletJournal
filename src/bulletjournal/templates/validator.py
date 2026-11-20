@@ -132,6 +132,21 @@ def validate_pipeline_template_definition(
         template_node_id = str(raw_node.get('id') or '').strip()
         title = str(raw_node.get('title') or '').strip()
         kind_value = str(raw_node.get('kind') or '').strip()
+        if kind_value == NodeKind.NOTEBOOK.value:
+            if 'title' in raw_node:
+                issues.append(
+                    build_issue(
+                        node_id=node_id,
+                        severity=ValidationSeverity.ERROR,
+                        code='pipeline_notebook_title_override',
+                        message=(
+                            f'Notebook node `{template_node_id}` must not define `title`; '
+                            'its title comes from its template.'
+                        ),
+                    ).to_dict()
+                )
+            # Graph validation needs a label, but notebook titles are resolved from templates at instantiation.
+            title = template_node_id
         if (
             not template_node_id
             or not title
@@ -150,7 +165,8 @@ def validate_pipeline_template_definition(
                     severity=ValidationSeverity.ERROR,
                     code='invalid_pipeline_node',
                     message=(
-                        f'Node `{template_node_id or index + 1}` must define `id`, `title`, and a supported `kind`.'
+                        f'Node `{template_node_id or index + 1}` must define `id` and a supported `kind`; '
+                        'non-notebook nodes must also define `title`.'
                     ),
                 ).to_dict()
             )

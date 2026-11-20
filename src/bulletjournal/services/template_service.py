@@ -38,6 +38,7 @@ class TemplateSource:
     ref: str
     provider: str
     name: str
+    title: str
     documentation: str | None
     source_text: str
     source_hash: str
@@ -198,6 +199,7 @@ class TemplateService:
             source_text=metadata.source_text,
             source_hash=metadata.source_hash,
             origin_revision=asset.origin_revision,
+            title=self._notebook_title(asset, metadata),
         )
 
     def resolve_pipeline_template(self, ref: str, *, allow_inactive: bool = True) -> PipelineTemplateSource:
@@ -335,7 +337,7 @@ class TemplateService:
                     'ref': asset.ref,
                     'origin_revision': asset.origin_revision,
                     'hidden': asset.hidden,
-                    'title': asset.title or Path(asset.name).stem.replace('_', ' ').title(),
+                    'title': self._notebook_title(asset, metadata),
                     'documentation': metadata.documentation,
                     'source': asset.provider,
                     'source_text': metadata.source_text,
@@ -343,6 +345,12 @@ class TemplateService:
                 }
             )
         return templates
+
+    @staticmethod
+    def _notebook_title(asset: TemplateAsset, metadata: _NotebookTemplateMetadata) -> str:
+        return (
+            asset.title or metadata.app_definition.title or Path(asset.name).stem.lstrip('_').replace('_', ' ').title()
+        )
 
     def _list_pipeline_templates(self) -> list[dict[str, Any]]:
         templates = []

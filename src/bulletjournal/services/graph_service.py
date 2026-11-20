@@ -742,9 +742,12 @@ class GraphService:
                 )
             resolved_title = str(raw_node.get('title') or template_node_id)
             if kind == NodeKind.NOTEBOOK.value:
+                notebook_template = self.project_service.template_service.resolve_template_source(
+                    str(raw_node.get('template_ref') or ''), allow_inactive=False
+                )
                 add_operation = {
                     'node_id': resolved_node_id,
-                    'title': resolved_title,
+                    'title': notebook_template.title,
                     'template_ref': raw_node.get('template_ref'),
                     'ui': raw_node.get('ui'),
                     'x': int(layout.get('x', 80)) + offset_x,

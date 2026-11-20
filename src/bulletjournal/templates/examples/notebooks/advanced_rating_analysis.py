@@ -1,7 +1,7 @@
 import marimo
 
 __generated_with = '0.23.8'
-app = marimo.App(width='medium', app_title='advanced_rating_analysis')
+app = marimo.App(width='medium', app_title='Advanced rating analysis')
 
 with app.setup:
     import marimo as mo

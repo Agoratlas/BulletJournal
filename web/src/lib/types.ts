@@ -460,11 +460,16 @@ export type TemplateRecord = {
   definition?: {
       title?: string
       documentation?: string
-      nodes?: Array<{
-        id: string
-        kind: 'notebook' | 'constant' | 'organizer' | 'area' | 'dashboard'
+      nodes?: Array<({
+        kind: 'notebook'
+        template_ref: string
+        title?: never
+      } | {
+        kind: 'constant' | 'organizer' | 'area' | 'dashboard'
         title: string
-        template_ref?: string
+        template_ref?: never
+      }) & {
+        id: string
         data_type?: string
         value?: unknown
         artifact_name?: string

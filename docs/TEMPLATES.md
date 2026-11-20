@@ -62,6 +62,11 @@ Template metadata exposed by the API includes `provider`, `kind`, `name`, `ref`,
 
 Template metadata also includes optional `title` and `documentation` fields.
 
+Notebook display titles use the provider's explicit `TemplateAsset.title`, then a nonempty string literal `app_title`
+from the template's `app = marimo.App(...)` definition, then the filename-derived title. The app definition is parsed
+without executing the notebook. For example, `app_title="LLM summary"` preserves capitalization in the Blocks panel
+and in the suggested name for new notebooks. Pipeline notebook nodes use the same resolved title.
+
 Template providers can set `hidden=True` on notebook assets returned from
 `list_notebook_templates()`.
 
@@ -98,8 +103,9 @@ Minimal shape:
 Every node entry must define:
 
 - `id`: unique template-local node key used by `layout` and `edges`
-- `title`: non-empty display title
-- `kind`: one of `notebook`, `constant`, `organizer`, or `area`
+- `kind`: one of `notebook`, `constant`, `organizer`, `area`, or `dashboard`
+
+Non-notebook nodes must also define `title`: a non-empty display title.
 
 Additional fields depend on `kind`.
 
@@ -111,10 +117,13 @@ Notebook nodes reference a notebook template:
 {
   "id": "clean",
   "kind": "notebook",
-  "title": "Clean data",
   "template_ref": "builtin/clean_dataframe"
 }
 ```
+
+Notebook nodes must not define `title`. Their display title comes from the referenced template, independently of their
+node ID or instantiation suffix. Starting with editor 2.5.0, legacy pipeline notebook `title` fields are rejected rather
+than ignored. Remove them when updating pipeline definitions. Existing instantiated project titles are unchanged.
 
 #### Constant node
 
@@ -243,7 +252,7 @@ Supported `area_color` values:
 
 `area_filled` is a boolean. When omitted, it defaults to `true`.
 
-Note: the interactive UI lets users clear an area title later, but pipeline templates currently still require a non-empty `title` field for every node, including `area` nodes.
+Note: the interactive UI lets users clear an area title later, but pipeline templates require a non-empty `title` field for every non-notebook node, including `area` nodes.
 
 ### Layout
 

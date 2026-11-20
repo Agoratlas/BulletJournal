@@ -14,6 +14,13 @@ class MarimoAppDefinition:
     newline: str
     positional_args: list[str]
     keyword_args: list[tuple[str, str]]
+    title: str | None = None
+
+
+def extract_notebook_title(source_text: str) -> str | None:
+    """Read a literal template app title without executing the notebook."""
+    definition, _ = inspect_marimo_app_definition(source_text)
+    return definition.title if definition is not None else None
 
 
 def validate_rewritable_marimo_app_definition(source_text: str) -> str | None:
@@ -98,6 +105,7 @@ def inspect_marimo_app_definition(source_text: str) -> tuple[MarimoAppDefinition
         positional_args.append(segment.strip())
 
     keyword_args: list[tuple[str, str]] = []
+    title = None
     for keyword in call.keywords:
         if keyword.arg is None:
             return None, 'Notebook template app definition must not use `**kwargs`.'
@@ -105,6 +113,10 @@ def inspect_marimo_app_definition(source_text: str) -> tuple[MarimoAppDefinition
         if segment is None:
             return None, 'Notebook template app definition must use inline keyword values that can be rewritten.'
         keyword_args.append((keyword.arg, segment.strip()))
+        if keyword.arg == 'app_title' and isinstance(keyword.value, ast.Constant):
+            value = keyword.value.value
+            if isinstance(value, str):
+                title = value.strip() or None
 
     return (
         MarimoAppDefinition(
@@ -115,6 +127,7 @@ def inspect_marimo_app_definition(source_text: str) -> tuple[MarimoAppDefinition
             newline=newline,
             positional_args=positional_args,
             keyword_args=keyword_args,
+            title=title,
         ),
         None,
     )

@@ -1,5 +1,5 @@
 import { appUrl } from './api'
-import { GRID_SIZE, artifactsForRenamedNodes, dependencyNodeIds, inputBindingSource } from './helpers'
+import { GRID_SIZE, artifactsForRenamedNodes, dependencyNodeIds, inputBindingSource, pipelineTemplateNodeTitle } from './helpers'
 import type { ArtifactRecord, DashboardRecord, GraphPatchOperation, GraphPatchResponse, LayoutRecord, NodeRecord, ProjectSnapshot, TemplateRecord } from './types'
 import type { AppNotice, ConstantValueType, GraphMutationPlan, OptimisticGraphState, PaletteEntry, PortActionMenuState, SnapshotLike } from '../appTypes'
 
@@ -456,6 +456,8 @@ export function clampContextMenuPosition(position: { x: number; y: number }, est
   }
 }
 
+export { pipelineTemplateNodeTitle } from './helpers'
+
 export function pipelineTemplateNodeRecords(
   snapshot: ProjectSnapshot,
   templateRef: string,
@@ -466,7 +468,7 @@ export function pipelineTemplateNodeRecords(
     const nodeId = suffixedNodeId(nodeIdSuffix, node.id)
     return {
       nodeId,
-      title: node.title,
+      title: pipelineTemplateNodeTitle(snapshot, node),
     }
   })
 }

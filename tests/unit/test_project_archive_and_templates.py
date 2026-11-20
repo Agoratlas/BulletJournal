@@ -507,7 +507,7 @@ def test_template_service_marks_hidden_notebooks_but_keeps_pipelines_visible(mon
         encoding='utf-8',
     )
     (pipeline_root / 'hidden_pipeline.json').write_text(
-        '{"title": "Hidden Pipeline", "nodes": [{"id": "hidden_node", "title": "Hidden Node", "kind": "notebook", "template_ref": "external/hidden_notebook"}], "edges": [], "layout": [{"node_id": "hidden_node", "x": 0, "y": 0, "w": 320, "h": 200}]}',
+        '{"title": "Hidden Pipeline", "nodes": [{"id": "hidden_node", "kind": "notebook", "template_ref": "external/hidden_notebook"}], "edges": [], "layout": [{"node_id": "hidden_node", "x": 0, "y": 0, "w": 320, "h": 200}]}',
         encoding='utf-8',
     )
 

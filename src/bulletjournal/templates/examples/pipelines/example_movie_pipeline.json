@@ -32,31 +32,26 @@
     {
       "id": "movie_dataset_download",
       "kind": "notebook",
-      "title": "Movie dataset download",
       "template_ref": "examples/movie_dataset_download"
     },
     {
       "id": "duration_and_date_analysis",
       "kind": "notebook",
-      "title": "Duration and date analysis",
       "template_ref": "examples/duration_and_date_analysis"
     },
     {
       "id": "advanced_rating_analysis",
       "kind": "notebook",
-      "title": "Advanced rating analysis",
       "template_ref": "examples/advanced_rating_analysis"
     },
     {
       "id": "movie_genre_analysis",
       "kind": "notebook",
-      "title": "Movie genre analysis",
       "template_ref": "examples/movie_genre_analysis"
     },
     {
       "id": "movie_recommendation",
       "kind": "notebook",
-      "title": "Movie recommendation",
       "template_ref": "examples/movie_recommendation"
     },
     {

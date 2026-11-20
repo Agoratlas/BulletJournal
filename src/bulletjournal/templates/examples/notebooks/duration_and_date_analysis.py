@@ -1,7 +1,7 @@
 import marimo
 
 __generated_with = '0.23.8'
-app = marimo.App(width='medium', app_title='duration_and_date_analysis')
+app = marimo.App(width='medium', app_title='Duration and date analysis')
 
 with app.setup:
     import marimo as mo

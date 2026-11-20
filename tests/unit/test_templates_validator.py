@@ -111,7 +111,7 @@ def test_validate_pipeline_template_reports_missing_refs_and_layout_mismatches(t
         template,
         {
             'nodes': [
-                {'id': 'consumer', 'title': 'Consumer', 'kind': 'notebook', 'template_ref': 'missing.py'},
+                {'id': 'consumer', 'kind': 'notebook', 'template_ref': 'missing.py'},
             ],
             'edges': [],
             'layout': [{'node_id': 'ghost', 'x': 0, 'y': 0, 'w': 1, 'h': 1}],
@@ -144,8 +144,8 @@ def test_validate_pipeline_template_reports_edge_port_and_type_errors(
         template,
         {
             'nodes': [
-                {'id': 'source', 'title': 'Source', 'kind': 'notebook', 'template_ref': 'source.py'},
-                {'id': 'target', 'title': 'Target', 'kind': 'notebook', 'template_ref': 'target.py'},
+                {'id': 'source', 'kind': 'notebook', 'template_ref': 'source.py'},
+                {'id': 'target', 'kind': 'notebook', 'template_ref': 'target.py'},
             ],
             'edges': [
                 {'source_node': 'source', 'source_port': 'missing', 'target_node': 'target', 'target_port': 'in'},
@@ -196,7 +196,7 @@ def test_validate_pipeline_template_accepts_valid_constant_pipeline(
                     'artifact_name': 'dataset',
                     'data_type': 'file',
                 },
-                {'id': 'consumer', 'title': 'Consumer', 'kind': 'notebook', 'template_ref': 'consumer.py'},
+                {'id': 'consumer', 'kind': 'notebook', 'template_ref': 'consumer.py'},
             ],
             'edges': [
                 {
@@ -245,7 +245,7 @@ def test_validate_pipeline_template_accepts_prepopulated_json_constant(
                     'data_type': 'int',
                     'value': 7,
                 },
-                {'id': 'consumer', 'title': 'Consumer', 'kind': 'notebook', 'template_ref': 'consumer.py'},
+                {'id': 'consumer', 'kind': 'notebook', 'template_ref': 'consumer.py'},
             ],
             'edges': [
                 {
@@ -333,14 +333,14 @@ def test_validate_pipeline_template_accepts_organizer_node(
         template,
         {
             'nodes': [
-                {'id': 'source', 'title': 'Source', 'kind': 'notebook', 'template_ref': 'source.py'},
+                {'id': 'source', 'kind': 'notebook', 'template_ref': 'source.py'},
                 {
                     'id': 'organizer',
                     'title': 'Organizer',
                     'kind': 'organizer',
                     'ui': {'organizer_ports': [{'key': 'value', 'name': 'value', 'data_type': 'int'}]},
                 },
-                {'id': 'consumer', 'title': 'Consumer', 'kind': 'notebook', 'template_ref': 'consumer.py'},
+                {'id': 'consumer', 'kind': 'notebook', 'template_ref': 'consumer.py'},
             ],
             'edges': [
                 {'source_node': 'source', 'source_port': 'value', 'target_node': 'organizer', 'target_port': 'value'},
@@ -391,8 +391,8 @@ def test_validate_pipeline_template_reports_graph_validation_errors(
         template,
         {
             'nodes': [
-                {'id': 'a', 'title': 'A', 'kind': 'notebook', 'template_ref': 'a.py'},
-                {'id': 'b', 'title': 'B', 'kind': 'notebook', 'template_ref': 'b.py'},
+                {'id': 'a', 'kind': 'notebook', 'template_ref': 'a.py'},
+                {'id': 'b', 'kind': 'notebook', 'template_ref': 'b.py'},
             ],
             'edges': [
                 {'source_node': 'a', 'source_port': 'out', 'target_node': 'b', 'target_port': 'in'},
@@ -425,7 +425,7 @@ def test_validate_pipeline_template_accepts_dashboard_node(tmp_path: Path) -> No
         template,
         {
             'nodes': [
-                {'id': 'analysis', 'title': 'Analysis', 'kind': 'notebook', 'template_ref': 'analysis.py'},
+                {'id': 'analysis', 'kind': 'notebook', 'template_ref': 'analysis.py'},
                 {
                     'id': 'dashboard_view',
                     'title': 'Dashboard View',
@@ -482,8 +482,8 @@ def test_validate_pipeline_template_rejects_dashboard_panel_outside_sources(
         template,
         {
             'nodes': [
-                {'id': 'analysis', 'title': 'Analysis', 'kind': 'notebook', 'template_ref': 'analysis.py'},
-                {'id': 'other', 'title': 'Other', 'kind': 'notebook', 'template_ref': 'other.py'},
+                {'id': 'analysis', 'kind': 'notebook', 'template_ref': 'analysis.py'},
+                {'id': 'other', 'kind': 'notebook', 'template_ref': 'other.py'},
                 {
                     'id': 'dashboard_view',
                     'title': 'Dashboard View',

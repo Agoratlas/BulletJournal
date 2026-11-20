@@ -9,6 +9,16 @@ export const CONSTANT_NODE_WIDTH = GRID_SIZE * 5
 export const CONSTANT_NODE_HEIGHT = GRID_SIZE * 2
 export const CONSTANT_NODE_PORT_CENTER_OFFSET = GRID_SIZE
 
+export function pipelineTemplateNodeTitle(
+  snapshot: Pick<ProjectSnapshot, 'templates'> | null,
+  node: NonNullable<NonNullable<TemplateRecord['definition']>['nodes']>[number],
+): string {
+  if (node.kind !== 'notebook') {
+    return node.title
+  }
+  return snapshot?.templates.find((entry) => entry.kind === 'notebook' && entry.ref === node.template_ref)?.title ?? node.id
+}
+
 export function slugify(value: string): string {
   return value
     .trim()
