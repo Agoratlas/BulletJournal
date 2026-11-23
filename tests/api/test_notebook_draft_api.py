@@ -55,7 +55,7 @@ def test_create_notebook_with_ordered_inputs_and_connections_in_one_patch(tmp_pa
         source = (root / 'notebooks' / 'custom.py').read_text()
         ast.parse(source)
         assert source.count('@app.cell') == 5
-        assert "app_title='custom'" in source
+        assert "app_title='Custom BulletJournal notebook'" in source
         assert 'renamed = artifacts.pull(\n        name=' in source
         assert 'document = artifacts.pull_file(\n' in source
 

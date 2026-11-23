@@ -2331,7 +2331,7 @@ def test_template_backed_node_renders_node_id_in_notebook_source(tmp_path) -> No
 
     assert patch.status_code == 200
     notebook_source = (project_root / 'notebooks' / 'starter_node.py').read_text(encoding='utf-8')
-    assert "app_title='starter_node'" in notebook_source
+    assert "app_title='Starter BulletJournal notebook'" in notebook_source
     assert '{{NODE_ID}}' not in notebook_source
 
 

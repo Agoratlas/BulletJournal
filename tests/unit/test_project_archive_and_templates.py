@@ -712,16 +712,16 @@ def test_template_service_caches_notebook_metadata_and_template_list(monkeypatch
     assert first == second
     assert first is not second
     assert resolved.source_text == notebook_source
-    assert "app_title='node'" in rendered
+    assert rendered == notebook_source
 
 
-def test_template_service_rewrites_notebook_app_title_from_node_id() -> None:
+def test_template_service_preserves_notebook_app_title() -> None:
     rendered = TemplateService.render_notebook_template_source(
         "app = marimo.App(width='medium', app_title='Visible Title')\n",
         node_id='sample_node',
     )
 
-    assert rendered == "app = marimo.App(width='medium', app_title='sample_node')\n"
+    assert rendered == "app = marimo.App(width='medium', app_title='Visible Title')\n"
 
 
 def test_template_service_preserves_double_quotes_for_notebook_app_title() -> None:
@@ -730,7 +730,7 @@ def test_template_service_preserves_double_quotes_for_notebook_app_title() -> No
         node_id='sample_node',
     )
 
-    assert rendered == 'app = marimo.App(app_title="sample_node")\n'
+    assert rendered == 'app = marimo.App(app_title="Visible Title")\n'
 
 
 def test_template_service_preserves_other_marimo_app_arguments() -> None:
@@ -739,10 +739,12 @@ def test_template_service_preserves_other_marimo_app_arguments() -> None:
         node_id='sample_node',
     )
 
-    assert rendered == "app = marimo.App(width='medium', layout_file='layout.json', app_title='sample_node')  # keep\n"
+    assert (
+        rendered == "app = marimo.App(width='medium', layout_file='layout.json', app_title='Visible Title')  # keep\n"
+    )
 
 
-def test_template_service_rewrites_multiline_provider_notebook_app_definition(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_template_service_preserves_multiline_provider_notebook_app_definition(monkeypatch: pytest.MonkeyPatch) -> None:
     provider = SimpleNamespace(
         provider_name='acme',
         provider_revision='0.1.0',
@@ -770,7 +772,23 @@ def test_template_service_rewrites_multiline_provider_notebook_app_definition(mo
 
     rendered = service.render_resolved_notebook_template_source('acme/broken_notebook', node_id='renamed_notebook')
 
-    assert rendered == "import marimo\n\napp = marimo.App(width='medium', app_title='renamed_notebook')\n"
+    assert rendered == "import marimo\n\napp = marimo.App(\n    width='medium',\n    app_title='Broken Notebook',\n)\n"
+
+
+@pytest.mark.parametrize('app_title', ["''", 'None', 'get_title()'])
+def test_template_service_preserves_explicit_app_title_values(app_title: str) -> None:
+    source = f'app = marimo.App(app_title={app_title})\n'
+
+    assert TemplateService.render_notebook_template_source(source, node_id='sample_node') == source
+
+
+def test_template_service_uses_node_id_when_app_title_is_missing() -> None:
+    rendered = TemplateService.render_notebook_template_source(
+        "app = marimo.App(width='medium')\n",
+        node_id='sample_node',
+    )
+
+    assert rendered == 'app = marimo.App(width=\'medium\', app_title="sample_node")\n'
 
 
 def test_template_service_rejects_invalid_provider_notebook_artifact_names(monkeypatch: pytest.MonkeyPatch) -> None:

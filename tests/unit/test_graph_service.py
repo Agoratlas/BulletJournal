@@ -488,7 +488,7 @@ def test_graph_service_restores_deleted_notebook_and_edges_in_same_request(tmp_p
     assert [port['name'] for port in consumer['interface']['inputs']] == ['sample_count']
 
 
-def test_graph_service_renames_notebook_app_title_with_new_node_id(tmp_path) -> None:
+def test_graph_service_preserves_notebook_app_title_when_renaming_node(tmp_path) -> None:
     project_root = init_project_root(tmp_path / 'project').root
     project_service = ProjectService(_FakeEventService(), TemplateService())
     project_service.open_project(project_root)
@@ -519,7 +519,7 @@ def test_graph_service_renames_notebook_app_title_with_new_node_id(tmp_path) -> 
     )
 
     source = (project_root / 'notebooks' / 'renamed_node.py').read_text(encoding='utf-8')
-    assert "app_title='renamed_node'" in source
+    assert "app_title='Starter BulletJournal notebook'" in source
     assert not (project_root / 'notebooks' / 'sample_node.py').exists()
     assert any(node['id'] == 'renamed_node' for node in renamed['graph']['nodes'])
 

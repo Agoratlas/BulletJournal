@@ -36,16 +36,14 @@ def rewrite_marimo_app_title(source_text: str, *, node_id: str) -> str:
 
 
 def rewrite_marimo_app_title_from_definition(source_text: str, *, definition: MarimoAppDefinition, node_id: str) -> str:
-    """Rewrite a source using an app definition already parsed during template discovery."""
+    """Add a fallback title only when the notebook has no explicit app title."""
+
+    if any(name == 'app_title' for name, _ in definition.keyword_args):
+        return source_text
 
     arguments = [*definition.positional_args]
-    existing_app_title = next((value for name, value in definition.keyword_args if name == 'app_title'), None)
-    quote = "'" if existing_app_title is not None and existing_app_title.lstrip().startswith("'") else '"'
     app_title = json.dumps(node_id)
-    if quote == "'":
-        escaped_app_title = app_title[1:-1].replace("'", "\\'")
-        app_title = f"'{escaped_app_title}'"
-    arguments.extend(f'{name}={value}' for name, value in definition.keyword_args if name != 'app_title')
+    arguments.extend(f'{name}={value}' for name, value in definition.keyword_args)
     arguments.append(f'app_title={app_title}')
     replacement = f'{definition.prefix}app = marimo.App({", ".join(arguments)}){definition.suffix}{definition.newline}'
 
